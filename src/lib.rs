@@ -10,6 +10,8 @@ use thiserror::Error;
 const NONCE_SIZE: usize = 12;
 const DELTA_EXP: u64 = 1000;
 
+// PR for in-progress MC-OSAM
+
 #[derive(Error, Debug)]
 enum McOsamError {
     #[error("AES error")]
