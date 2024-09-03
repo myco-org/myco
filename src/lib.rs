@@ -18,6 +18,8 @@ enum McOsamError {
     InvalidKeyLength,
     #[error("Invalid nonce size")]
     InvalidNonceSize,
+    #[error("Invalid metadata")]
+    InvalidMetadata,
 }
 
 impl From<aes_gcm::Error> for McOsamError {
@@ -26,7 +28,7 @@ impl From<aes_gcm::Error> for McOsamError {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct EncryptedData {
     nonce: Vec<u8>,
     ciphertext: Vec<u8>,
@@ -42,17 +44,35 @@ struct Server1 {
     k_s1: Vec<u8>,
     counter: u64,
     t: u64,
+    depth: usize,
+}
+
+struct ORAMNode {
+    bucket: HashMap<String, EncryptedData>,
+    left: Option<Box<ORAMNode>>,
+    right: Option<Box<ORAMNode>>,
+}
+
+impl ORAMNode {
+    fn new() -> Self {
+        Self {
+            bucket: HashMap::new(),
+            left: None,
+            right: None,
+        }
+    }
 }
 
 struct Server2 {
-    tree: HashMap<String, EncryptedData>,
+    root: ORAMNode,
+    depth: usize,
 }
 
 impl MultiClientObliviousMessaging {
-    fn new(num_writes_per_epoch: usize) -> Self {
+    fn new(num_writes_per_epoch: usize, depth: usize) -> Self {
         Self {
-            s1: Server1::new(),
-            s2: Server2::new(),
+            s1: Server1::new(depth),
+            s2: Server2::new(depth),
             num_writes_per_epoch,
         }
     }
@@ -108,11 +128,12 @@ impl MultiClientObliviousMessaging {
 }
 
 impl Server1 {
-    fn new() -> Self {
+    fn new(depth: usize) -> Self {
         Self {
             k_s1: random_bytes(32),
             counter: 0,
             t: 0,
+            depth,
         }
     }
 
@@ -137,8 +158,61 @@ impl Server1 {
         Ok(())
     }
 
-    fn evict(&mut self, _v: usize, _s2: &mut Server2) {
-        // Implementation of RS-OSAM evict operation
+    fn evict(&mut self, nu: usize, s2: &mut Server2) {
+        for d in 0..s2.depth {
+            let buckets_at_depth = 1 << d;
+            let eviction_count = nu.min(buckets_at_depth);
+            let mut rng = rand::thread_rng();
+
+            for _ in 0..eviction_count {
+                let bucket_index = rng.gen_range(0..buckets_at_depth);
+                self.evict_bucket(d, bucket_index, s2);
+            }
+        }
+    }
+
+    fn evict_bucket(&self, depth: usize, bucket_index: usize, s2: &mut Server2) {
+        let path = self.get_path_to_bucket(depth, bucket_index);
+        let mut blocks_to_evict = Vec::new();
+
+        for block in s2.read(&path) {
+            if let Ok((t_exp, k_oram_t)) = self.decrypt_metadata(&block) {
+                if self.t < t_exp {
+                    blocks_to_evict.push((block, t_exp, k_oram_t));
+                }
+            }
+        }
+
+        for (block, _, _) in blocks_to_evict {
+            let new_path = self.get_random_path();
+            s2.write(&hex::encode(&new_path), block);
+        }
+    }
+
+    fn get_path_to_bucket(&self, depth: usize, bucket_index: usize) -> Vec<u8> {
+        let mut path = Vec::with_capacity(depth);
+        for d in 0..depth {
+            path.push(((bucket_index >> (depth - d - 1)) & 1) as u8);
+        }
+        path
+    }
+
+    fn get_random_path(&self) -> Vec<u8> {
+        (0..self.depth).map(|_| rand::random::<u8>() & 1).collect()
+    }
+
+    fn decrypt_metadata(&self, data: &EncryptedData) -> Result<(u64, Vec<u8>), McOsamError> {
+        let plaintext = decrypt(&self.k_s1, data)?;
+        let parts: Vec<&str> = std::str::from_utf8(&plaintext)
+            .map_err(|_| McOsamError::InvalidMetadata)?
+            .split(',')
+            .collect();
+        if parts.len() != 2 {
+            return Err(McOsamError::InvalidMetadata);
+        }
+        let t_exp = parts[0].parse().map_err(|_| McOsamError::InvalidMetadata)?;
+        let k_oram_t = hex::decode(parts[1]).map_err(|_| McOsamError::InvalidMetadata)?;
+        Ok((t_exp, k_oram_t))
     }
 
     fn rs_osam_alloc(&mut self, l: &[u8]) -> String {
@@ -154,34 +228,73 @@ impl Server1 {
         bid: &str,
         s2: &mut Server2,
     ) {
-        // Combine c_msg and c_metadata
         let mut combined = c_msg.nonce.clone();
         combined.extend_from_slice(&c_msg.ciphertext);
         combined.extend_from_slice(&c_metadata.nonce);
         combined.extend_from_slice(&c_metadata.ciphertext);
 
-        // Write to S2's tree
-        s2.tree.insert(
-            bid.to_string(),
+        s2.write(
+            bid,
             EncryptedData {
                 nonce: vec![],
                 ciphertext: combined,
             },
         );
     }
+
+    fn extra_evict_cond(&self, data: &EncryptedData) -> bool {
+        if let Ok((t_exp, _)) = self.decrypt_metadata(data) {
+            self.t >= t_exp
+        } else {
+            false
+        }
+    }
 }
 
 impl Server2 {
-    fn new() -> Self {
+    fn new(depth: usize) -> Self {
         Self {
-            tree: HashMap::new(),
+            root: ORAMNode::new(),
+            depth,
         }
     }
 
-    fn read(&self, _l: &[u8]) -> Vec<EncryptedData> {
-        // This is a simplified read operation
-        // In a real implementation, this would traverse the ORAM tree
-        self.tree.values().cloned().collect()
+    fn write(&mut self, bid: &str, data: EncryptedData) {
+        let mut current = &mut self.root;
+        for _ in 0..self.depth {
+            current.bucket.insert(bid.to_string(), data.clone());
+            let bit = rand::random::<bool>();
+            current = if bit {
+                current
+                    .right
+                    .get_or_insert_with(|| Box::new(ORAMNode::new()))
+            } else {
+                current
+                    .left
+                    .get_or_insert_with(|| Box::new(ORAMNode::new()))
+            };
+        }
+    }
+
+    fn read(&self, l: &[u8]) -> Vec<EncryptedData> {
+        let mut path = Vec::new();
+        let mut current = &self.root;
+        for &bit in l.iter().take(self.depth) {
+            path.extend(current.bucket.values().cloned());
+            current = if bit & 1 == 1 {
+                current
+                    .right
+                    .as_ref()
+                    .unwrap_or(&current.left.as_ref().unwrap())
+            } else {
+                current
+                    .left
+                    .as_ref()
+                    .unwrap_or(&current.right.as_ref().unwrap())
+            };
+        }
+        path.extend(current.bucket.values().cloned());
+        path
     }
 }
 
@@ -237,39 +350,34 @@ mod tests {
 
     #[test]
     fn test_write_and_read() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
+        let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let message = b"Hello, World!";
         let w = "alice";
         let r = "bob";
         let t = 1;
 
-        // Write a message
         mcosam.write(w, r, message, t).unwrap();
 
-        // Read the message
         let read_result = mcosam.read(w, r, t, true).unwrap();
         assert_eq!(read_result, Some(message.to_vec()));
 
-        // Try to read with wrong parameters
         let wrong_read = mcosam.read("mallory", r, t, true).unwrap();
         assert_eq!(wrong_read, None);
     }
 
     #[test]
     fn test_multiple_writes_and_reads() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
+        let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let messages = vec![
             (b"Message 1".to_vec(), "alice", "bob", 1),
             (b"Message 2".to_vec(), "bob", "charlie", 2),
             (b"Message 3".to_vec(), "charlie", "alice", 3),
         ];
 
-        // Write messages
         for (m, w, r, t) in &messages {
             mcosam.write(w, r, m, *t).unwrap();
         }
 
-        // Read messages
         for (m, w, r, t) in &messages {
             let read_result = mcosam.read(w, r, *t, true).unwrap();
             assert_eq!(read_result, Some(m.clone()));
@@ -278,19 +386,16 @@ mod tests {
 
     #[test]
     fn test_eviction() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
+        let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let message = b"Eviction test";
         let w = "alice";
         let r = "bob";
         let t = 1;
 
-        // Write a message
         mcosam.write(w, r, message, t).unwrap();
 
-        // Perform eviction
         mcosam.evict(5);
 
-        // The message should still be readable after eviction
         let read_result = mcosam.read(w, r, t, true).unwrap();
         assert_eq!(read_result, Some(message.to_vec()));
     }
@@ -317,5 +422,35 @@ mod tests {
 
         let kdf_result = kdf(t, &key);
         assert_eq!(kdf_result.len(), 32);
+    }
+
+    #[test]
+    fn test_oram_tree() {
+        let mut s2 = Server2::new(4);
+        let data = EncryptedData {
+            nonce: vec![1, 2, 3],
+            ciphertext: vec![4, 5, 6],
+        };
+
+        s2.write("test_bid", data.clone());
+
+        let path = vec![0, 1, 0, 1];
+        let read_result = s2.read(&path);
+
+        assert!(read_result.contains(&data));
+    }
+
+    #[test]
+    fn test_extra_evict_cond() {
+        let mut s1 = Server1::new(4);
+        let t_exp = s1.t + DELTA_EXP - 1;
+        let k_oram_t = random_bytes(32);
+        let metadata = format!("{},{}", t_exp, hex::encode(&k_oram_t));
+        let encrypted_metadata = encrypt(&s1.k_s1, metadata.as_bytes()).unwrap();
+
+        assert!(!s1.extra_evict_cond(&encrypted_metadata));
+
+        s1.t = t_exp + 1;
+        assert!(s1.extra_evict_cond(&encrypted_metadata));
     }
 }
