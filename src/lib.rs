@@ -108,8 +108,14 @@ impl MultiClientObliviousMessaging {
         let k_prf = derive_key(&format!("{}-{}-prf", w, r));
         let l = prf(&k_prf, &t.to_string());
 
-        // 3: Client queries S2 at index ℓ and downloads the entire path's worth of cmsg values by calling RS-OSAMRead(bid)
-        let path = self.s2.read(&l);
+        // Construct the bid (block identifier)
+        let counter = t * self.num_writes_per_epoch as u64 + self.get_client_index(w, r);
+        let bid = format!("{}||{}", counter, hex::encode(&l));
+
+        // 3: Client queries S2 at index ℓ and downloads the
+        // entire path's worth of cmsg values by calling
+        // RS-OSAMRead(bid)
+        let path = self.s2.rs_osam_read(&bid);
 
         // 4: if isReal then
         if is_real {
@@ -130,8 +136,18 @@ impl MultiClientObliviousMessaging {
                 }
             }
         }
-        // 7: end if (implicit in Rust)
+        // 7: end if
         Ok(None)
+    }
+
+    fn get_client_index(&self, w: &str, r: &str) -> u64 {
+        // This function should return a unique index for each (w, r) pair
+        // For simplicity, we'll use a hash of the pair modulo num_writes_per_epoch
+        let mut hasher = Sha256::new();
+        hasher.update(format!("{}-{}", w, r).as_bytes());
+        let result = hasher.finalize();
+        let index = u64::from_be_bytes(result[0..8].try_into().unwrap());
+        index % self.num_writes_per_epoch as u64
     }
 
     fn evict(&mut self, v: usize) {
@@ -206,8 +222,9 @@ impl Server1 {
     fn evict_bucket(&self, depth: usize, bucket_index: usize, s2: &mut Server2) {
         let path = self.get_path_to_bucket(depth, bucket_index);
         let mut blocks_to_evict = Vec::new();
+        let dummy_bid = format!("{}||{}", self.counter, hex::encode(&path));
 
-        for block in s2.read(&path) {
+        for block in s2.rs_osam_read(&dummy_bid) {
             // (bid, data||ℓ) ← bucket.Pop()
             if let Ok((t_exp, k_oram_t)) = self.decrypt_metadata(&block) {
                 // 6: b ← (d + 1)-st bit of ℓ
@@ -333,69 +350,24 @@ impl Server2 {
         }
     }
 
-    // fn read(&mut self, bid: &str) -> Option<EncryptedData> {
-    //     // 1: ℓ* ← UniformRandom({0, 1}^D)
-    //     let l_star: Vec<u8> = (0..self.depth).map(|_| rand::random::<u8>() & 1).collect();
+    fn rs_osam_read(&self, bid: &str) -> Vec<EncryptedData> {
+        let parts: Vec<&str> = bid.split("||").collect();
+        if parts.len() != 2 {
+            return Vec::new();
+        }
+        let l = hex::decode(parts[1]).unwrap_or_default();
 
-    //     // 2: counter||ℓ ← bid
-    //     let l = self.get_leaf_from_bid(bid);
+        // 1: data ←⊥
+        let mut data = None;
 
-    //     // Update the index (this would require maintaining an index structure)
-    //     // self.update_index(bid, &l_star);
-
-    //     // 3: state ← ℓ* (This step is for future Add operations, not implemented here)
-
-    //     // 4: data ←⊥
-    //     let mut data = None;
-
-    //     // 5: for each bucket on P(ℓ) do
-    //     let mut current = &mut self.root;
-    //     for &bit in l.iter().take(self.depth) {
-    //         // 6-8: if (data0||ℓ0) ← bucket.ReadAndRemove(bid) ̸=⊥ then data ← data0
-    //         if let Some(found_data) = current.bucket.remove(bid) {
-    //             data = Some(found_data);
-    //             break;  // We've found the data, no need to continue searching
-    //         }
-
-    //         current = if bit & 1 == 1 {
-    //             current.right.as_mut().unwrap_or(current.left.as_mut().unwrap())
-    //         } else {
-    //             current.left.as_mut().unwrap_or(current.right.as_mut().unwrap())
-    //         };
-    //     }
-
-    //     // Check the last bucket if we haven't found the data yet
-    //     if data.is_none() {
-    //         data = current.bucket.remove(bid);
-    //     }
-
-    //     // 10: return data
-    //     data
-    // }
-
-    // fn get_leaf_from_bid(&self, bid: &str) -> Vec<u8> {
-    //     // This is a placeholder. In a real implementation, you'd derive the leaf from the bid.
-    //     let mut hasher = Sha256::new();
-    //     hasher.update(bid.as_bytes());
-    //     let result = hasher.finalize();
-    //     result.iter().take(self.depth).map(|&byte| byte & 1).collect()
-    // }
-
-    // Should be RS-OSAMRead(bid)
-    fn read(&self, l: &[u8]) -> Vec<EncryptedData> {
-        // Note: This implementation differs from Algorithm 5 RS-OSAMReadAndRemove(bid)
-        // as it doesn't remove items and uses a pre-computed leaf path
-
-        // 4: data ←⊥ (In our case, we're collecting all data along the path)
+        // 2: // Path from leaf ℓ to root
         let mut path = Vec::new();
         let mut current = &self.root;
 
-        // 5: for each bucket on P(ℓ) do
-        for &bit in l.iter().take(self.depth) {
-            // Collect all data in the current bucket
-            path.extend(current.bucket.values().cloned());
+        // 3: for each bucket on P(ℓ) do
+        path.extend(current.bucket.values().cloned());
 
-            // Move to the next node in the path
+        for &bit in l.iter().take(self.depth) {
             current = if bit & 1 == 1 {
                 current
                     .right
@@ -407,12 +379,19 @@ impl Server2 {
                     .as_ref()
                     .unwrap_or(&current.right.as_ref().unwrap())
             };
+
+            // 4: if (data0||ℓ0) ← bucket.Read(bid)̸ =⊥ then
+            if let Some(found_data) = current.bucket.get(bid) {
+                // 5: data ← data0 // Notice that ℓ = ℓ0
+                data = Some(found_data.clone());
+            }
+            // 6: end if
+
+            path.extend(current.bucket.values().cloned());
         }
+        // 7: end for
 
-        // Collect data from the leaf bucket
-        path.extend(current.bucket.values().cloned());
-
-        // 10: return data (In our case, all collected data along the path)
+        // 8: return data (Note: We're returning the path instead of just the data)
         path
     }
 }
@@ -551,12 +530,12 @@ mod tests {
             ciphertext: vec![4, 5, 6],
         };
 
-        s2.write("test_bid", data.clone());
+        let bid = "test_bid||01010101"; // Example bid
+        s2.write(bid, data.clone());
 
-        let path = vec![0, 1, 0, 1];
-        let read_result = s2.read(&path);
+        let read_result = s2.rs_osam_read(bid);
 
-        assert!(read_result.contains(&data));
+        assert!(read_result.iter().any(|d| d == &data));
     }
 
     #[test]
