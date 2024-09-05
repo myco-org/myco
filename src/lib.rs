@@ -78,14 +78,18 @@ impl MultiClientObliviousMessaging {
     }
 
     fn write(&mut self, w: &str, r: &str, m: &[u8], t: u64) -> Result<(), McOsamError> {
-        let k_msg = derive_key(&format!("{}-{}-msg", w, r));
+        // 1: Client derives {koram, kprf} from k (can be preprocessed).
         let k_prf = derive_key(&format!("{}-{}-prf", w, r));
         let k_oram = derive_key(&format!("{}-{}-oram", w, r));
 
-        let ct = encrypt(&k_msg, m)?;
+        // 2: Client computes ℓ = PRFkprf(t)
         let l = prf(&k_prf, &t.to_string());
+
+        // 3: Client computes koram,t = KDF(t, koram)
         let k_oram_t = kdf(t, &k_oram);
 
+        // 4: Client sends {data, ℓ, koram,t} to S1
+        let ct = encrypt(&k_oram, m)?;
         self.s1.receive_write(ct, l, k_oram_t, t, &mut self.s2)
     }
 
@@ -96,14 +100,20 @@ impl MultiClientObliviousMessaging {
         t: u64,
         is_real: bool,
     ) -> Result<Option<Vec<u8>>, McOsamError> {
+        // 1: Client computes koram,t = KDF(t, koram)
         let k_oram = derive_key(&format!("{}-{}-oram", w, r));
-        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
-
         let k_oram_t = kdf(t, &k_oram);
+
+        // 2: Client computes ℓ = PRFkprf (t)
+        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
         let l = prf(&k_prf, &t.to_string());
 
+        // 3: Client queries S2 at index ℓ and downloads the entire path's worth of cmsg values by calling RS-OSAMRead(bid)
         let path = self.s2.read(&l);
+
+        // 4: if isReal then
         if is_real {
+            // 5: Client trial decrypts the path with koram,t
             for c_msg in path {
                 if let Ok(ct) = decrypt(&k_oram_t, &c_msg) {
                     let k_msg = derive_key(&format!("{}-{}-msg", w, r));
@@ -114,15 +124,19 @@ impl MultiClientObliviousMessaging {
                             ciphertext: ct[NONCE_SIZE..].to_vec(),
                         },
                     ) {
+                        // 6: return data
                         return Ok(Some(m));
                     }
                 }
             }
         }
+        // 7: end if (implicit in Rust)
         Ok(None)
     }
 
     fn evict(&mut self, v: usize) {
+        // Algorithm 3 Evict(ν, t)
+        // 1: return RS-OSAMEvict(ν, ExtraEvictCond)
         self.s1.evict(v, &mut self.s2);
     }
 }
@@ -145,27 +159,45 @@ impl Server1 {
         t: u64,
         s2: &mut Server2,
     ) -> Result<(), McOsamError> {
+        // Client sends {data, ℓ, koram,t} to S1
+        // 5: S1 computes the expiration epoch of this message as
+        // texp = t + ∆exp
         let t_exp = t + DELTA_EXP;
+
+        // 6: S1 computes cmsg = Enckoram,t (ct)
         let mut c_msg = ct.nonce.clone();
         c_msg.extend_from_slice(&ct.ciphertext);
         let c_msg = encrypt(&k_oram_t, &c_msg)?;
+
+        // 7: S1 computes cmetadata = EnckS1 (texp, koram,t)
         let c_metadata = encrypt(
             &self.k_s1,
             &format!("{},{}", t_exp, hex::encode(&k_oram_t)).as_bytes(),
         )?;
+
+        // 8: bid ← RS-OSAMAlloc(ℓ, numWritesPerEpoch)
         let bid = self.rs_osam_alloc(&l);
+
+        // 9: At the end of the epoch, S1 writes (cmsg, cmetadata) to
+        // S2 by calling RS-OSAMWrite(cmsg||cmetadata, bid)
         self.rs_osam_write(&c_msg, &c_metadata, &bid, s2);
         Ok(())
     }
 
     fn evict(&mut self, nu: usize, s2: &mut Server2) {
+        // Algorithm 8 RS-OSAMEvict(ν, ExtraEvictCond)
+        // 1: for d = 0 to D − 1 do
         for d in 0..s2.depth {
+            // 2: Let S denote the set of all buckets at depth d
             let buckets_at_depth = 1 << d;
+            // 3: A ← UniformRandomν (S)
             let eviction_count = nu.min(buckets_at_depth);
             let mut rng = rand::thread_rng();
 
+            // 4: for each bucket ∈ A do
             for _ in 0..eviction_count {
                 let bucket_index = rng.gen_range(0..buckets_at_depth);
+                // 5-13: Implemented in evict_bucket function
                 self.evict_bucket(d, bucket_index, s2);
             }
         }
@@ -176,13 +208,21 @@ impl Server1 {
         let mut blocks_to_evict = Vec::new();
 
         for block in s2.read(&path) {
+            // (bid, data||ℓ) ← bucket.Pop()
             if let Ok((t_exp, k_oram_t)) = self.decrypt_metadata(&block) {
+                // 6: b ← (d + 1)-st bit of ℓ
+
+                // 7: if ExtraEvictCond(data) == true then
                 if self.t < t_exp {
+                    // 8: blockb ←⊥, block1−b ←⊥
+                    // 9: else
+                    // 10: blockb ← (bid, data||ℓ), block1−b ←⊥
                     blocks_to_evict.push((block, t_exp, k_oram_t));
                 }
             }
         }
 
+        // 12: ∀b ∈ {0, 1} : Childb(bucket).Write(blockb)
         for (block, _, _) in blocks_to_evict {
             let new_path = self.get_random_path();
             s2.write(&hex::encode(&new_path), block);
@@ -216,8 +256,23 @@ impl Server1 {
     }
 
     fn rs_osam_alloc(&mut self, l: &[u8]) -> String {
-        let bid = format!("{}||{}", self.counter, hex::encode(l));
+        // 1: if ℓ ==⊥ then
+        let leaf = if l.is_empty() {
+            // 2: ℓ $←− [N ] // Uniformly sample a leaf
+            (0..self.depth).map(|_| rand::random::<u8>()).collect()
+        } else {
+            l.to_vec()
+        };
+        // 3: end if
+
+        // 4: bid ← counter||ℓ
+        let bid = format!("{}||{}", self.counter, hex::encode(&leaf));
+
+        // 5: counter ← counter + increment
+        // By default, we only write one message per bid, so increment is 1
         self.counter += 1;
+
+        // 6: return bid
         bid
     }
 
@@ -243,7 +298,9 @@ impl Server1 {
     }
 
     fn extra_evict_cond(&self, data: &EncryptedData) -> bool {
-        if let Ok((t_exp, _)) = self.decrypt_metadata(data) {
+        // 2: S1 computes texp, koram,t = DeckS1 (cmetadata)
+        if let Ok((t_exp, _k_oram_t)) = self.decrypt_metadata(data) {
+            // 3: return t ≥ texp
             self.t >= t_exp
         } else {
             false
@@ -276,11 +333,69 @@ impl Server2 {
         }
     }
 
+    // fn read(&mut self, bid: &str) -> Option<EncryptedData> {
+    //     // 1: ℓ* ← UniformRandom({0, 1}^D)
+    //     let l_star: Vec<u8> = (0..self.depth).map(|_| rand::random::<u8>() & 1).collect();
+
+    //     // 2: counter||ℓ ← bid
+    //     let l = self.get_leaf_from_bid(bid);
+
+    //     // Update the index (this would require maintaining an index structure)
+    //     // self.update_index(bid, &l_star);
+
+    //     // 3: state ← ℓ* (This step is for future Add operations, not implemented here)
+
+    //     // 4: data ←⊥
+    //     let mut data = None;
+
+    //     // 5: for each bucket on P(ℓ) do
+    //     let mut current = &mut self.root;
+    //     for &bit in l.iter().take(self.depth) {
+    //         // 6-8: if (data0||ℓ0) ← bucket.ReadAndRemove(bid) ̸=⊥ then data ← data0
+    //         if let Some(found_data) = current.bucket.remove(bid) {
+    //             data = Some(found_data);
+    //             break;  // We've found the data, no need to continue searching
+    //         }
+
+    //         current = if bit & 1 == 1 {
+    //             current.right.as_mut().unwrap_or(current.left.as_mut().unwrap())
+    //         } else {
+    //             current.left.as_mut().unwrap_or(current.right.as_mut().unwrap())
+    //         };
+    //     }
+
+    //     // Check the last bucket if we haven't found the data yet
+    //     if data.is_none() {
+    //         data = current.bucket.remove(bid);
+    //     }
+
+    //     // 10: return data
+    //     data
+    // }
+
+    // fn get_leaf_from_bid(&self, bid: &str) -> Vec<u8> {
+    //     // This is a placeholder. In a real implementation, you'd derive the leaf from the bid.
+    //     let mut hasher = Sha256::new();
+    //     hasher.update(bid.as_bytes());
+    //     let result = hasher.finalize();
+    //     result.iter().take(self.depth).map(|&byte| byte & 1).collect()
+    // }
+
+    // Should be RS-OSAMRead(bid)
     fn read(&self, l: &[u8]) -> Vec<EncryptedData> {
+        // Note: This implementation differs from Algorithm 5 RS-OSAMReadAndRemove(bid)
+        // as it doesn't remove items and uses a pre-computed leaf path
+
+        // 4: data ←⊥ (In our case, we're collecting all data along the path)
         let mut path = Vec::new();
         let mut current = &self.root;
+
+        // 5: for each bucket on P(ℓ) do
         for &bit in l.iter().take(self.depth) {
+            // Collect all data in the current bucket
             path.extend(current.bucket.values().cloned());
+
+            // Move to the next node in the path
             current = if bit & 1 == 1 {
                 current
                     .right
@@ -293,7 +408,11 @@ impl Server2 {
                     .unwrap_or(&current.right.as_ref().unwrap())
             };
         }
+
+        // Collect data from the leaf bucket
         path.extend(current.bucket.values().cloned());
+
+        // 10: return data (In our case, all collected data along the path)
         path
     }
 }
