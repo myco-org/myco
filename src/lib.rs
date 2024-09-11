@@ -293,8 +293,17 @@ impl Server1 {
 
         // 12: ∀b ∈ {0, 1} : Childb(bucket).Write(blockb)
         for (block, _, _) in blocks_to_evict {
-            let new_path = self.get_random_path();
-            s2.write(&hex::encode(&new_path), block);
+            let path = self.get_random_path();
+            let bucket = s2.get_bucket(&path).unwrap();
+            let block = bucket.get(&hex::encode(&path)).unwrap();
+            // Replace all of the existing data in the bucket
+            let mut new_bucket = HashMap::new();
+            for (key, value) in bucket.iter() {
+                let new_key = format!("{}-{}", key, rand::random::<u64>());
+                new_bucket.insert(new_key, value.clone());
+            }
+            new_bucket.insert(hex::encode(&path), block.clone());
+            s2.set_bucket(&path, new_bucket);
         }
     }
 
@@ -400,6 +409,38 @@ impl Server2 {
                     .get_or_insert_with(|| Box::new(ORAMNode::new()))
             };
         }
+    }
+
+    fn get_bucket(&self, path: &[u8]) -> Option<&HashMap<String, EncryptedData>> {
+        let mut current = &self.root;
+        for &bit in path.iter().take(self.depth) {
+            current = if bit & 1 == 1 {
+                current.right.as_ref().unwrap()
+            } else {
+                current.left.as_ref().unwrap()
+            }
+        }
+        Some(&current.bucket)
+    }
+
+    fn set_bucket(&mut self, path: &[u8], bucket: HashMap<String, EncryptedData>) {
+        let mut current = &mut self.root;
+        for &bit in path.iter().take(self.depth) {
+            current = if bit & 1 == 1 {
+                current
+                    .right
+                    .get_or_insert_with(|| Box::new(ORAMNode::new()))
+            } else {
+                current
+                    .left
+                    .get_or_insert_with(|| Box::new(ORAMNode::new()))
+            }
+        }
+        current.bucket = bucket;
+    }
+
+    fn get_random_path(&self) -> Vec<u8> {
+        (0..self.depth).map(|_| rand::random::<u8>() & 1).collect()
     }
 
     fn rs_osam_read(&self, bid: &str) -> Vec<EncryptedData> {
