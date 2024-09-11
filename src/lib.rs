@@ -4,12 +4,12 @@ use aes_gcm::{
 };
 use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
 
 const NONCE_SIZE: usize = 12;
 const DELTA_EXP: u64 = 1000;
+const BUCKET_SIZE: usize = 4; // Fixed size for each ORAM node bucket
 
 #[derive(Error, Debug)]
 enum McOsamError {
@@ -80,7 +80,7 @@ impl fmt::Display for Server1 {
 
 #[derive(Debug)]
 struct ORAMNode {
-    bucket: HashMap<String, EncryptedData>,
+    bucket: [Option<(String, EncryptedData)>; BUCKET_SIZE],
     left: Option<Box<ORAMNode>>,
     right: Option<Box<ORAMNode>>,
 }
@@ -88,7 +88,7 @@ struct ORAMNode {
 impl ORAMNode {
     fn new() -> Self {
         Self {
-            bucket: HashMap::new(),
+            bucket: Default::default(),
             left: None,
             right: None,
         }
@@ -295,14 +295,21 @@ impl Server1 {
         for (block, _, _) in blocks_to_evict {
             let path = self.get_random_path();
             let bucket = s2.get_bucket(&path).unwrap();
-            let block = bucket.get(&hex::encode(&path)).unwrap();
+            let block = bucket
+                .iter()
+                .find(|b| b.is_some())
+                .unwrap()
+                .as_ref()
+                .unwrap();
             // Replace all of the existing data in the bucket
-            let mut new_bucket = HashMap::new();
-            for (key, value) in bucket.iter() {
-                let new_key = format!("{}-{}", key, rand::random::<u64>());
-                new_bucket.insert(new_key, value.clone());
+            let mut new_bucket: [Option<(String, EncryptedData)>; BUCKET_SIZE] = Default::default();
+            for (i, entry) in bucket.iter().enumerate() {
+                if let Some((key, value)) = entry {
+                    let new_key = format!("{}-{}", key, rand::random::<u64>());
+                    new_bucket[i] = Some((new_key, value.clone()));
+                }
             }
-            new_bucket.insert(hex::encode(&path), block.clone());
+            new_bucket[0] = Some((hex::encode(&path), block.1.clone()));
             s2.set_bucket(&path, new_bucket);
         }
     }
@@ -397,7 +404,9 @@ impl Server2 {
     fn write(&mut self, bid: &str, data: EncryptedData) {
         let mut current = &mut self.root;
         for _ in 0..self.depth {
-            current.bucket.insert(bid.to_string(), data.clone());
+            if let Some(slot) = current.bucket.iter_mut().find(|slot| slot.is_none()) {
+                *slot = Some((bid.to_string(), data.clone()));
+            }
             let bit = rand::random::<bool>();
             current = if bit {
                 current
@@ -411,7 +420,7 @@ impl Server2 {
         }
     }
 
-    fn get_bucket(&self, path: &[u8]) -> Option<&HashMap<String, EncryptedData>> {
+    fn get_bucket(&self, path: &[u8]) -> Option<&[Option<(String, EncryptedData)>; BUCKET_SIZE]> {
         let mut current = &self.root;
         for &bit in path.iter().take(self.depth) {
             current = if bit & 1 == 1 {
@@ -423,7 +432,7 @@ impl Server2 {
         Some(&current.bucket)
     }
 
-    fn set_bucket(&mut self, path: &[u8], bucket: HashMap<String, EncryptedData>) {
+    fn set_bucket(&mut self, path: &[u8], bucket: [Option<(String, EncryptedData)>; BUCKET_SIZE]) {
         let mut current = &mut self.root;
         for &bit in path.iter().take(self.depth) {
             current = if bit & 1 == 1 {
@@ -458,7 +467,12 @@ impl Server2 {
         let mut current = &self.root;
 
         // 3: for each bucket on P(ℓ) do
-        path.extend(current.bucket.values().cloned());
+        path.extend(
+            current
+                .bucket
+                .iter()
+                .filter_map(|entry| entry.clone().map(|(_, data)| data)),
+        );
 
         for &bit in l.iter().take(self.depth) {
             current = if bit & 1 == 1 {
@@ -474,13 +488,25 @@ impl Server2 {
             };
 
             // 4: if (data0||ℓ0) ← bucket.Read(bid)̸ =⊥ then
-            if let Some(found_data) = current.bucket.get(bid) {
+            if let Some(found_data) = current.bucket.iter().find_map(|entry| {
+                if let Some((entry_bid, data)) = entry {
+                    if entry_bid == bid {
+                        return Some(data.clone());
+                    }
+                }
+                None
+            }) {
                 // 5: data ← data0 // Notice that ℓ = ℓ0
-                data = Some(found_data.clone());
+                data = Some(found_data);
             }
             // 6: end if
 
-            path.extend(current.bucket.values().cloned());
+            path.extend(
+                current
+                    .bucket
+                    .iter()
+                    .filter_map(|entry| entry.clone().map(|(_, data)| data)),
+            );
         }
         // 7: end for
 
