@@ -5,6 +5,7 @@ use aes_gcm::{
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fmt;
 use thiserror::Error;
 
 const NONCE_SIZE: usize = 12;
@@ -34,10 +35,30 @@ struct EncryptedData {
     ciphertext: Vec<u8>,
 }
 
+impl fmt::Display for EncryptedData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "EncryptedData {{ nonce: {:?}, ciphertext: {:?} }}",
+            self.nonce, self.ciphertext
+        )
+    }
+}
+
 struct MultiClientObliviousMessaging {
     s1: Server1,
     s2: Server2,
     num_writes_per_epoch: usize,
+}
+
+impl fmt::Display for MultiClientObliviousMessaging {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "MultiClientObliviousMessaging {{ s1: {}, s2: {}, num_writes_per_epoch: {} }}",
+            self.s1, self.s2, self.num_writes_per_epoch
+        )
+    }
 }
 
 struct Server1 {
@@ -47,6 +68,17 @@ struct Server1 {
     depth: usize,
 }
 
+impl fmt::Display for Server1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Server1 {{ k_s1: {:?}, counter: {}, t: {}, depth: {} }}",
+            self.k_s1, self.counter, self.t, self.depth
+        )
+    }
+}
+
+#[derive(Debug)]
 struct ORAMNode {
     bucket: HashMap<String, EncryptedData>,
     left: Option<Box<ORAMNode>>,
@@ -63,9 +95,29 @@ impl ORAMNode {
     }
 }
 
+impl fmt::Display for ORAMNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "ORAMNode {{ bucket: {:?}, left: {:?}, right: {:?} }}",
+            self.bucket, self.left, self.right
+        )
+    }
+}
+
 struct Server2 {
     root: ORAMNode,
     depth: usize,
+}
+
+impl fmt::Display for Server2 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Server2 {{ root: {}, depth: {} }}",
+            self.root, self.depth
+        )
+    }
 }
 
 impl MultiClientObliviousMessaging {
