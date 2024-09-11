@@ -272,46 +272,101 @@ impl Server1 {
     }
 
     fn evict_bucket(&self, depth: usize, bucket_index: usize, s2: &mut Server2) {
+        // 1: Get the current bucket at this depth
         let path = self.get_path_to_bucket(depth, bucket_index);
-        let mut blocks_to_evict = Vec::new();
-        let dummy_bid = format!("{}||{}", self.counter, hex::encode(&path));
+        let current_bucket = s2.get_bucket(&path).cloned().unwrap_or_default();
 
-        for block in s2.rs_osam_read(&dummy_bid) {
-            // (bid, data||ℓ) ← bucket.Pop()
-            if let Ok((t_exp, k_oram_t)) = self.decrypt_metadata(&block) {
-                // 6: b ← (d + 1)-st bit of ℓ
+        // 2: This bucket has a left child and a right child bucket in the binary tree
+        let mut left_child_path = path.clone();
+        left_child_path.push(0);
+        let mut right_child_path = path.clone();
+        right_child_path.push(1);
 
-                // 7: if ExtraEvictCond(data) == true then
-                if self.t < t_exp {
-                    // 8: blockb ←⊥, block1−b ←⊥
-                    // 9: else
-                    // 10: blockb ← (bid, data||ℓ), block1−b ←⊥
-                    blocks_to_evict.push((block, t_exp, k_oram_t));
-                }
+        let mut left_child_bucket = s2.get_bucket(&left_child_path).cloned().unwrap_or_default();
+        let mut right_child_bucket = s2
+            .get_bucket(&right_child_path)
+            .cloned()
+            .unwrap_or_default();
+
+        // 3: Get the data block within this bucket that we just popped
+        for entry in current_bucket.iter().filter_map(|e| e.clone()) {
+            let (bid, data) = entry;
+            let l = hex::decode(&bid).unwrap_or_default();
+
+            // 6: b ← (d + 1)-st bit of ℓ
+            let b = (l[depth] & 1) as usize;
+
+            // 7: if ExtraEvictCond(data) == true then
+            let (block_b, block_1_minus_b) = if self.extra_evict_cond(&data) {
+                // 8: blockb ←⊥, block1−b ←⊥
+                (
+                    Some((
+                        bid.clone(),
+                        EncryptedData {
+                            nonce: random_bytes(NONCE_SIZE),
+                            ciphertext: random_bytes(32),
+                        },
+                    )),
+                    Some((
+                        bid.clone(),
+                        EncryptedData {
+                            nonce: random_bytes(NONCE_SIZE),
+                            ciphertext: random_bytes(32),
+                        },
+                    )),
+                )
+            } else {
+                // 10: blockb ← (bid, data||ℓ), block1−b ←⊥
+                (
+                    Some((bid.clone(), data.clone())),
+                    Some((
+                        bid.clone(),
+                        EncryptedData {
+                            nonce: random_bytes(NONCE_SIZE),
+                            ciphertext: random_bytes(32),
+                        },
+                    )),
+                )
+            };
+
+            // 12: ∀b ∈ {0, 1} : Childb(bucket).Write(blockb)
+            if b == 0 {
+                left_child_bucket[bucket_index] = block_b;
+                right_child_bucket[bucket_index] = block_1_minus_b;
+            } else {
+                left_child_bucket[bucket_index] = block_1_minus_b;
+                right_child_bucket[bucket_index] = block_b;
             }
         }
 
-        // 12: ∀b ∈ {0, 1} : Childb(bucket).Write(blockb)
-        for (block, _, _) in blocks_to_evict {
-            let path = self.get_random_path();
-            let bucket = s2.get_bucket(&path).unwrap();
-            let block = bucket
-                .iter()
-                .find(|b| b.is_some())
-                .unwrap()
-                .as_ref()
-                .unwrap();
-            // Replace all of the existing data in the bucket
-            let mut new_bucket: [Option<(String, EncryptedData)>; BUCKET_SIZE] = Default::default();
-            for (i, entry) in bucket.iter().enumerate() {
-                if let Some((key, value)) = entry {
-                    let new_key = format!("{}-{}", key, rand::random::<u64>());
-                    new_bucket[i] = Some((new_key, value.clone()));
+        // 6: All edited buckets need to be re-randomized entirely, including the current bucket and both of its children.
+        s2.set_bucket(&path, self.randomize_bucket(current_bucket));
+        s2.set_bucket(&left_child_path, self.randomize_bucket(left_child_bucket));
+        s2.set_bucket(&right_child_path, self.randomize_bucket(right_child_bucket));
+    }
+
+    fn randomize_bucket(
+        &self,
+        bucket: [Option<(String, EncryptedData)>; BUCKET_SIZE],
+    ) -> [Option<(String, EncryptedData)>; BUCKET_SIZE] {
+        bucket
+            .iter()
+            .map(|entry| {
+                if let Some((bid, data)) = entry {
+                    Some((
+                        bid.clone(),
+                        EncryptedData {
+                            nonce: random_bytes(NONCE_SIZE),
+                            ciphertext: random_bytes(32),
+                        },
+                    ))
+                } else {
+                    None
                 }
-            }
-            new_bucket[0] = Some((hex::encode(&path), block.1.clone()));
-            s2.set_bucket(&path, new_bucket);
-        }
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap()
     }
 
     fn get_path_to_bucket(&self, depth: usize, bucket_index: usize) -> Vec<u8> {
