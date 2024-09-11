@@ -10,6 +10,9 @@ use thiserror::Error;
 const NONCE_SIZE: usize = 12;
 const DELTA_EXP: u64 = 1000;
 const BUCKET_SIZE: usize = 4; // Fixed size for each ORAM node bucket
+const NU: usize = 1; // ν Frequency parameter for background eviction algorithm
+
+type Key = [u8; 32];
 
 #[derive(Error, Debug)]
 enum McOsamError {
@@ -202,10 +205,10 @@ impl MultiClientObliviousMessaging {
         index % self.num_writes_per_epoch as u64
     }
 
-    fn evict(&mut self, v: usize) {
+    fn evict(&mut self) {
         // Algorithm 3 Evict(ν, t)
         // 1: return RS-OSAMEvict(ν, ExtraEvictCond)
-        self.s1.evict(v, &mut self.s2);
+        self.s1.evict(&mut self.s2);
     }
 }
 
@@ -230,36 +233,29 @@ impl Server1 {
         // Client sends {data, ℓ, koram,t} to S1
         // 5: S1 computes the expiration epoch of this message as
         // texp = t + ∆exp
-        let t_exp = t + DELTA_EXP;
 
         // 6: S1 computes cmsg = Enckoram,t (ct)
         let mut c_msg = ct.nonce.clone();
         c_msg.extend_from_slice(&ct.ciphertext);
         let c_msg = encrypt(&k_oram_t, &c_msg)?;
 
-        // 7: S1 computes cmetadata = EnckS1 (texp, koram,t)
-        let c_metadata = encrypt(
-            &self.k_s1,
-            &format!("{},{}", t_exp, hex::encode(&k_oram_t)).as_bytes(),
-        )?;
-
         // 8: bid ← RS-OSAMAlloc(ℓ, numWritesPerEpoch)
         let bid = self.rs_osam_alloc(&l);
 
         // 9: At the end of the epoch, S1 writes (cmsg, cmetadata) to
         // S2 by calling RS-OSAMWrite(cmsg||cmetadata, bid)
-        self.rs_osam_write(&c_msg, &c_metadata, &bid, s2);
+        self.rs_osam_write(&c_msg, &bid, s2);
         Ok(())
     }
 
-    fn evict(&mut self, nu: usize, s2: &mut Server2) {
+    fn evict(&mut self, s2: &mut Server2) {
         // Algorithm 8 RS-OSAMEvict(ν, ExtraEvictCond)
         // 1: for d = 0 to D − 1 do
         for d in 0..s2.depth {
             // 2: Let S denote the set of all buckets at depth d
             let buckets_at_depth = 1 << d;
             // 3: A ← UniformRandomν (S)
-            let eviction_count = nu.min(buckets_at_depth);
+            let eviction_count = NU.min(buckets_at_depth);
             let mut rng = rand::thread_rng();
 
             // 4: for each bucket ∈ A do
@@ -416,25 +412,24 @@ impl Server1 {
         bid
     }
 
-    fn rs_osam_write(
-        &self,
-        c_msg: &EncryptedData,
-        c_metadata: &EncryptedData,
-        bid: &str,
-        s2: &mut Server2,
-    ) {
-        let mut combined = c_msg.nonce.clone();
-        combined.extend_from_slice(&c_msg.ciphertext);
-        combined.extend_from_slice(&c_metadata.nonce);
-        combined.extend_from_slice(&c_metadata.ciphertext);
+    fn rs_osam_write(&mut self, c_msg: &EncryptedData, bid: &str, s2: &mut Server2) {
+        let (counter, l) = bid.split_once("||").expect("Invalid bid format");
+        self.counter = counter.parse().expect("Invalid counter");
+        let l = hex::decode(l).expect("Invalid l");
 
         s2.write(
             bid,
             EncryptedData {
-                nonce: vec![],
-                ciphertext: combined,
+                nonce: c_msg.nonce.clone(),
+                ciphertext: c_msg
+                    .ciphertext
+                    .clone()
+                    .into_iter()
+                    .chain(l.clone())
+                    .collect(),
             },
         );
+        self.evict(s2)
     }
 
     fn extra_evict_cond(&self, data: &EncryptedData) -> bool {
@@ -666,7 +661,7 @@ mod tests {
 
         mcosam.write(w, r, message, t).unwrap();
 
-        mcosam.evict(5);
+        mcosam.evict();
 
         let read_result = mcosam.read(w, r, t, true).unwrap();
         assert_eq!(read_result, Some(message.to_vec()));
