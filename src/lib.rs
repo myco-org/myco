@@ -2,6 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
+use concat_kdf::derive_key_into;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::fmt;
@@ -132,16 +133,15 @@ impl MultiClientObliviousMessaging {
         }
     }
 
-    fn write(&mut self, w: &str, r: &str, m: &[u8], t: u64) -> Result<(), McOsamError> {
+    fn write(&mut self, w: &str, k: Key, t: u64) -> Result<(), McOsamError> {
         // 1: Client derives {koram, kprf} from k (can be preprocessed).
-        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
-        let k_oram = derive_key(&format!("{}-{}-oram", w, r));
+        let (k_oram, k_prf) = kdf(t, &k).unwrap();
 
         // 2: Client computes ℓ = PRFkprf(t)
         let l = prf(&k_prf, &t.to_string());
 
-        // 3: Client computes koram,t = KDF(t, koram)
-        let k_oram_t = kdf(t, &k_oram);
+        // Client computes koram,t = KDF(t, koram)
+        let k_oram_t = derive_key(t, &k_oram);
 
         // 4: Client sends {data, ℓ, koram,t} to S1
         let ct = encrypt(&k_oram, m)?;
@@ -156,8 +156,7 @@ impl MultiClientObliviousMessaging {
         is_real: bool,
     ) -> Result<Option<Vec<u8>>, McOsamError> {
         // 1: Client computes koram,t = KDF(t, koram)
-        let k_oram = derive_key(&format!("{}-{}-oram", w, r));
-        let k_oram_t = kdf(t, &k_oram);
+        let k_oram_t = derive_key(t, &k_oram);
 
         // 2: Client computes ℓ = PRFkprf (t)
         let k_prf = derive_key(&format!("{}-{}-prf", w, r));
@@ -593,17 +592,36 @@ fn prf(key: &[u8], data: &str) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-fn kdf(t: u64, key: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(t.to_be_bytes());
-    hasher.update(key);
-    hasher.finalize().to_vec()
+fn kdf(t: u64, key: &Key) -> Result<(Key, Key), concat_kdf::Error> {
+    let mut k_oram: Key = [0u8; 32];
+    let mut k_prf: Key = [0u8; 32];
+
+    let t_bytes = t.to_be_bytes();
+
+    // Derive k_oram
+    let other_info_oram: Vec<u8> = t_bytes.iter().chain(b"oram".iter()).copied().collect();
+    derive_key_into::<Sha256>(key, &other_info_oram, &mut k_oram)?;
+
+    // Derive k_prf
+    let other_info_prf: Vec<u8> = t_bytes.iter().chain(b"prf".iter()).copied().collect();
+    derive_key_into::<Sha256>(key, &other_info_prf, &mut k_prf)?;
+
+    Ok((k_oram, k_prf))
 }
 
-fn derive_key(info: &str) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(info.as_bytes());
-    hasher.finalize().to_vec()
+fn derive_key(t: u64, info: &[u8; 32]) -> Vec<u8> {
+    let mut derived_key = vec![0u8; 32];
+
+    // Convert t to big-endian bytes
+    let t_bytes = t.to_be_bytes();
+
+    // Combine t_bytes and info into a single Vec<u8>
+    let other_info: Vec<u8> = t_bytes.iter().chain(info.iter()).copied().collect();
+
+    // Perform the KDF operation
+    derive_key_into::<Sha256>(&[], &other_info, &mut derived_key).expect("KDF derivation failed");
+
+    derived_key
 }
 
 fn random_bytes(n: usize) -> Vec<u8> {
