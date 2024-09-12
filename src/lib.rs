@@ -133,7 +133,7 @@ impl MultiClientObliviousMessaging {
         }
     }
 
-    fn write(&mut self, w: &str, k: Key, t: u64) -> Result<(), McOsamError> {
+    fn write(&mut self, data: &str, k: Key, t: u64) -> Result<(), McOsamError> {
         // 1: Client derives {koram, kprf} from k (can be preprocessed).
         let (k_oram, k_prf) = kdf(t, &k).unwrap();
 
@@ -144,53 +144,52 @@ impl MultiClientObliviousMessaging {
         let k_oram_t = derive_key(t, &k_oram);
 
         // 4: Client sends {data, ℓ, koram,t} to S1
-        let ct = encrypt(&k_oram, m)?;
+        let ct = encrypt(&k_oram, data.as_bytes())?;
         self.s1.receive_write(ct, l, k_oram_t, t, &mut self.s2)
     }
 
-    fn read(
-        &self,
-        w: &str,
-        r: &str,
-        t: u64,
-        is_real: bool,
-    ) -> Result<Option<Vec<u8>>, McOsamError> {
+    fn read(&mut self, k: Key, t: u64, is_real: bool) -> Result<Option<Vec<u8>>, McOsamError> {
+        let (k_oram, k_prf) = kdf(t, &k).unwrap();
         // 1: Client computes koram,t = KDF(t, koram)
         let k_oram_t = derive_key(t, &k_oram);
 
         // 2: Client computes ℓ = PRFkprf (t)
-        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
         let l = prf(&k_prf, &t.to_string());
 
-        // Construct the bid (block identifier)
-        let counter = t * self.num_writes_per_epoch as u64 + self.get_client_index(w, r);
-        let bid = format!("{}||{}", counter, hex::encode(&l));
+        let bid = self.s1.rs_osam_alloc(&l);
 
         // 3: Client queries S2 at index ℓ and downloads the
         // entire path's worth of cmsg values by calling
         // RS-OSAMRead(bid)
         let path = self.s2.rs_osam_read(&bid);
 
-        // 4: if isReal then
+        // 5: if isReal then
         if is_real {
-            // 5: Client trial decrypts the path with koram,t
+            // 6: Client trial decrypts the path with koram,t
             for c_msg in path {
-                if let Ok(ct) = decrypt(&k_oram_t, &c_msg) {
-                    let k_msg = derive_key(&format!("{}-{}-msg", w, r));
-                    if let Ok(m) = decrypt(
-                        &k_msg,
-                        &EncryptedData {
-                            nonce: ct[..NONCE_SIZE].to_vec(),
-                            ciphertext: ct[NONCE_SIZE..].to_vec(),
-                        },
-                    ) {
-                        // 6: return data
-                        return Ok(Some(m));
+                match decrypt(&k_oram_t, &c_msg) {
+                    Ok(ct) => {
+                        // Attempt to decrypt the inner layer
+                        match decrypt(
+                            &k,
+                            &EncryptedData {
+                                nonce: ct[..NONCE_SIZE].to_vec(),
+                                ciphertext: ct[NONCE_SIZE..].to_vec(),
+                            },
+                        ) {
+                            Ok(m) => {
+                                // 7: return data
+                                return Ok(Some(m));
+                            }
+                            Err(_) => continue, // Try next block if decryption fails
+                        }
                     }
+                    Err(_) => continue, // Try next block if decryption fails
                 }
             }
         }
-        // 7: end if
+
+        // If no valid message found or not a real read
         Ok(None)
     }
 
@@ -633,20 +632,26 @@ fn random_bytes(n: usize) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn generate_key() -> Key {
+        random_bytes(32).try_into().expect("Failed to generate key")
+    }
+
     #[test]
     fn test_write_and_read() {
         let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let message = b"Hello, World!";
-        let w = "alice";
-        let r = "bob";
+        let key = generate_key();
         let t = 1;
 
-        mcosam.write(w, r, message, t).unwrap();
+        mcosam
+            .write(&String::from_utf8_lossy(message), key, t)
+            .unwrap();
 
-        let read_result = mcosam.read(w, r, t, true).unwrap();
+        let read_result = mcosam.read(key, t, true).unwrap();
         assert_eq!(read_result, Some(message.to_vec()));
 
-        let wrong_read = mcosam.read("mallory", r, t, true).unwrap();
+        let wrong_key = generate_key();
+        let wrong_read = mcosam.read(wrong_key, t, true).unwrap();
         assert_eq!(wrong_read, None);
     }
 
@@ -654,17 +659,17 @@ mod tests {
     fn test_multiple_writes_and_reads() {
         let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let messages = vec![
-            (b"Message 1".to_vec(), "alice", "bob", 1),
-            (b"Message 2".to_vec(), "bob", "charlie", 2),
-            (b"Message 3".to_vec(), "charlie", "alice", 3),
+            (b"Message 1".to_vec(), generate_key(), 1),
+            (b"Message 2".to_vec(), generate_key(), 2),
+            (b"Message 3".to_vec(), generate_key(), 3),
         ];
 
-        for (m, w, r, t) in &messages {
-            mcosam.write(w, r, m, *t).unwrap();
+        for (m, k, t) in &messages {
+            mcosam.write(&String::from_utf8_lossy(m), *k, *t).unwrap();
         }
 
-        for (m, w, r, t) in &messages {
-            let read_result = mcosam.read(w, r, *t, true).unwrap();
+        for (m, k, t) in &messages {
+            let read_result = mcosam.read(*k, *t, true).unwrap();
             assert_eq!(read_result, Some(m.clone()));
         }
     }
@@ -673,15 +678,16 @@ mod tests {
     fn test_eviction() {
         let mut mcosam = MultiClientObliviousMessaging::new(10, 4);
         let message = b"Eviction test";
-        let w = "alice";
-        let r = "bob";
+        let key = generate_key();
         let t = 1;
 
-        mcosam.write(w, r, message, t).unwrap();
+        mcosam
+            .write(&String::from_utf8_lossy(message), key, t)
+            .unwrap();
 
         mcosam.evict();
 
-        let read_result = mcosam.read(w, r, t, true).unwrap();
+        let read_result = mcosam.read(key, t, true).unwrap();
         assert_eq!(read_result, Some(message.to_vec()));
     }
 
@@ -698,15 +704,16 @@ mod tests {
 
     #[test]
     fn test_prf_and_kdf() {
-        let key = random_bytes(32);
+        let key: Key = random_bytes(32).try_into().expect("Failed to generate key");
         let data = "test_data";
         let t = 1234;
 
         let prf_result = prf(&key, data);
         assert_eq!(prf_result.len(), 32);
 
-        let kdf_result = kdf(t, &key);
-        assert_eq!(kdf_result.len(), 32);
+        let kdf_result = kdf(t, &key).unwrap();
+        assert_eq!(kdf_result.0.len(), 32);
+        assert_eq!(kdf_result.1.len(), 32);
     }
 
     #[test]
