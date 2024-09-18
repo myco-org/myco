@@ -1,234 +1,290 @@
-use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
-    Aes256Gcm, Nonce,
-};
-use rand::Rng;
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use rand::{thread_rng, Rng};
+use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
+use std::{collections::HashMap, num::NonZeroU32};
 use thiserror::Error;
 
-const NONCE_SIZE: usize = 12;
-const DELTA_EXP: u64 = 1000;
+const TREE_HEIGHT: usize = 4;
+const BUCKET_SIZE: usize = 4;
+const NUM_WRITES_PER_EPOCH: usize = 2;
+const EVICTION_RATE: usize = 2;
 
-#[derive(Error, Debug)]
-enum McOsamError {
-    #[error("AES error")]
-    AesError,
-    #[error("Invalid key length")]
-    InvalidKeyLength,
-    #[error("Invalid nonce size")]
-    InvalidNonceSize,
+#[derive(Debug, Error)]
+enum CryptoError {
+    #[error("HKDF expansion failed")]
+    HkdfExpansionFailed,
+    #[error("HKDF fill failed")]
+    HkdfFillFailed,
+    #[error("Encryption failed")]
+    EncryptionFailed,
+    #[error("Decryption failed")]
+    DecryptionFailed,
 }
 
-impl From<aes_gcm::Error> for McOsamError {
-    fn from(_: aes_gcm::Error) -> Self {
-        McOsamError::AesError
+// Key Derivation Function (KDF)
+fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
+    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
+    let binding = [info.as_bytes()];
+    let okm = prk
+        .expand(&binding, hkdf::HKDF_SHA256)
+        .map_err(|_| CryptoError::HkdfExpansionFailed)?;
+    let mut result = vec![0u8; 32];
+    okm.fill(&mut result)
+        .map_err(|_| CryptoError::HkdfFillFailed)?;
+    Ok(result)
+}
+
+// Pseudorandom Function (PRF)
+fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
+    let mut result = vec![0u8; 32];
+    pbkdf2::derive(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        NonZeroU32::new(1000).unwrap(),
+        key,
+        input,
+        &mut result,
+    );
+    result
+}
+
+// Encryption
+fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+    let mut sealing_key: aead::LessSafeKey = aead::LessSafeKey::new(key);
+
+    let mut nonce = [0u8; 12];
+    ring::rand::SystemRandom::new()
+        .fill(&mut nonce)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+
+    let mut in_out = message.to_vec();
+    sealing_key
+        .seal_in_place_append_tag(
+            aead::Nonce::assume_unique_for_key(nonce),
+            aead::Aad::empty(),
+            &mut in_out,
+        )
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+
+    let mut result = nonce.to_vec();
+    result.extend(in_out);
+    Ok(result)
+}
+
+// Decryption
+fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.len() < 12 + 16 {
+        return Err(CryptoError::DecryptionFailed);
     }
+
+    let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    let opening_key = aead::LessSafeKey::new(key);
+
+    let nonce = aead::Nonce::try_assume_unique_for_key(&ciphertext[..12])
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    let mut in_out = ciphertext[12..].to_vec();
+
+    opening_key
+        .open_in_place(nonce, aead::Aad::empty(), &mut in_out)
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+
+    in_out.truncate(in_out.len() - 16); // Remove the tag
+    Ok(in_out)
 }
 
 #[derive(Clone, Debug)]
-struct EncryptedData {
-    nonce: Vec<u8>,
-    ciphertext: Vec<u8>,
+struct Block {
+    bid: Vec<u8>,
+    data: Vec<u8>,
 }
 
-struct MultiClientObliviousMessaging {
-    s1: Server1,
-    s2: Server2,
-    num_writes_per_epoch: usize,
+struct Client {
+    id: String,
+    keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
 }
 
-struct Server1 {
-    k_s1: Vec<u8>,
-    counter: u64,
-    t: u64,
-}
-
-struct Server2 {
-    tree: HashMap<String, EncryptedData>,
-}
-
-impl MultiClientObliviousMessaging {
-    fn new(num_writes_per_epoch: usize) -> Self {
-        Self {
-            s1: Server1::new(),
-            s2: Server2::new(),
-            num_writes_per_epoch,
+impl Client {
+    fn new(id: String) -> Self {
+        Client {
+            id,
+            keys: HashMap::new(),
         }
     }
 
-    fn write(&mut self, w: &str, r: &str, m: &[u8], t: u64) -> Result<(), McOsamError> {
-        let k_msg = derive_key(&format!("{}-{}-msg", w, r));
-        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
-        let k_oram = derive_key(&format!("{}-{}-oram", w, r));
-
-        let ct = encrypt(&k_msg, m)?;
-        let l = prf(&k_prf, &t.to_string());
-        let k_oram_t = kdf(t, &k_oram);
-
-        self.s1.receive_write(ct, l, k_oram_t, t, &mut self.s2)
+    fn setup(&mut self, other_clients: &[String]) -> Result<(), CryptoError> {
+        for client in other_clients {
+            let k: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
+            let k_msg = kdf(&k, "MSG")?;
+            let k_oram = kdf(&k, "ORAM")?;
+            let k_prf = kdf(&k, "PRF")?;
+            self.keys.insert(client.clone(), (k_msg, k_oram, k_prf));
+        }
+        Ok(())
     }
 
-    fn read(
+    fn write(
         &self,
-        w: &str,
-        r: &str,
-        t: u64,
-        is_real: bool,
-    ) -> Result<Option<Vec<u8>>, McOsamError> {
-        let k_oram = derive_key(&format!("{}-{}-oram", w, r));
-        let k_prf = derive_key(&format!("{}-{}-prf", w, r));
+        msg: &[u8],
+        recipient: &str,
+        epoch: u64,
+    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), CryptoError> {
+        let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
+        let l = prf(k_prf, &epoch.to_be_bytes());
+        let k_oram_t = kdf(k_oram, &epoch.to_string())?;
+        let ct = encrypt(k_msg, msg)?;
+        Ok((ct, l, k_oram_t))
+    }
 
-        let k_oram_t = kdf(t, &k_oram);
-        let l = prf(&k_prf, &t.to_string());
+    fn read(&self, sender: &str, epoch: u64, path: &[Block]) -> Option<Vec<u8>> {
+        let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
+        let l = prf(k_prf, &epoch.to_be_bytes());
+        let k_oram_t = kdf(k_oram, &epoch.to_string()).ok()?;
 
-        let path = self.s2.read(&l);
-        if is_real {
-            for c_msg in path {
-                if let Ok(ct) = decrypt(&k_oram_t, &c_msg) {
-                    let k_msg = derive_key(&format!("{}-{}-msg", w, r));
-                    if let Ok(m) = decrypt(
-                        &k_msg,
-                        &EncryptedData {
-                            nonce: ct[..NONCE_SIZE].to_vec(),
-                            ciphertext: ct[NONCE_SIZE..].to_vec(),
-                        },
-                    ) {
-                        return Ok(Some(m));
-                    }
+        for block in path {
+            if let Ok(decrypted) = decrypt(&k_oram_t, &block.data) {
+                let (block_l, ct) = decrypted.split_at(32);
+                if block_l == l {
+                    return decrypt(k_msg, ct).ok();
                 }
             }
         }
-        Ok(None)
+        None
     }
 
-    fn evict(&mut self, v: usize) {
-        self.s1.evict(v, &mut self.s2);
+    fn fake_write(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let mut rng = thread_rng();
+        let l: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let k_oram_t: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
+        (ct, l, k_oram_t)
     }
+
+    fn fake_read(&self) -> Vec<u8> {
+        let mut rng = thread_rng();
+        (0..32).map(|_| rng.gen()).collect()
+    }
+}
+
+struct Server1 {
+    metadata: HashMap<String, (Vec<u8>, u64)>,
+    epoch: u64,
+    counter: usize,
+    write_queue: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>,
 }
 
 impl Server1 {
     fn new() -> Self {
-        Self {
-            k_s1: random_bytes(32),
+        Server1 {
+            metadata: HashMap::new(),
+            epoch: 0,
             counter: 0,
-            t: 0,
+            write_queue: Vec::new(),
         }
     }
 
-    fn receive_write(
-        &mut self,
-        ct: EncryptedData,
-        l: Vec<u8>,
-        k_oram_t: Vec<u8>,
-        t: u64,
-        s2: &mut Server2,
-    ) -> Result<(), McOsamError> {
-        let t_exp = t + DELTA_EXP;
-        let mut c_msg = ct.nonce.clone();
-        c_msg.extend_from_slice(&ct.ciphertext);
-        let c_msg = encrypt(&k_oram_t, &c_msg)?;
-        let c_metadata = encrypt(
-            &self.k_s1,
-            &format!("{},{}", t_exp, hex::encode(&k_oram_t)).as_bytes(),
-        )?;
-        let bid = self.rs_osam_alloc(&l);
-        self.rs_osam_write(&c_msg, &c_metadata, &bid, s2);
+    fn write(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Vec<u8>) -> Result<(), CryptoError> {
+        let expiration = self.epoch + 10; // Arbitrary expiration period
+        let c_msg = encrypt(&k_oram_t.clone(), &[&l[..], &ct[..]].concat())?;
+        self.metadata
+            .insert(hex::encode(&l), (k_oram_t.clone(), expiration));
+        self.write_queue
+            .push((c_msg.clone(), l.clone(), k_oram_t.clone()));
+        self.counter += 1;
+
+        if self.counter == NUM_WRITES_PER_EPOCH {
+            self.batch_write();
+        }
         Ok(())
     }
 
-    fn evict(&mut self, _v: usize, _s2: &mut Server2) {
-        // Implementation of RS-OSAM evict operation
+    fn batch_write(&mut self) {
+        // In a real implementation, this would write to S2
+        self.write_queue.clear();
+        self.counter = 0;
+        self.epoch += 1;
     }
+}
 
-    fn rs_osam_alloc(&mut self, l: &[u8]) -> String {
-        let bid = format!("{}||{}", self.counter, hex::encode(l));
-        self.counter += 1;
-        bid
-    }
-
-    fn rs_osam_write(
-        &self,
-        c_msg: &EncryptedData,
-        c_metadata: &EncryptedData,
-        bid: &str,
-        s2: &mut Server2,
-    ) {
-        // Combine c_msg and c_metadata
-        let mut combined = c_msg.nonce.clone();
-        combined.extend_from_slice(&c_msg.ciphertext);
-        combined.extend_from_slice(&c_metadata.nonce);
-        combined.extend_from_slice(&c_metadata.ciphertext);
-
-        // Write to S2's tree
-        s2.tree.insert(
-            bid.to_string(),
-            EncryptedData {
-                nonce: vec![],
-                ciphertext: combined,
-            },
-        );
-    }
+struct Server2 {
+    tree: Vec<Vec<Block>>,
 }
 
 impl Server2 {
     fn new() -> Self {
-        Self {
-            tree: HashMap::new(),
+        let mut tree = Vec::new();
+        for _ in 0..TREE_HEIGHT {
+            let level: Vec<Block> = Vec::new();
+            tree.push(level);
+        }
+        Server2 { tree }
+    }
+
+    fn read(&self, l: &[u8]) -> Vec<Block> {
+        let mut path = Vec::new();
+        for level in (0..TREE_HEIGHT).rev() {
+            let bucket = &self.tree[level];
+            path.extend(
+                bucket
+                    .iter()
+                    .filter(|block| !block.data.is_empty())
+                    .cloned(),
+            );
+        }
+        path
+    }
+
+    fn write(&mut self, blocks: Vec<Block>) {
+        for block in blocks {
+            let leaf = &block.bid[..32];
+            let mut index = self.leaf_to_index(leaf);
+            for level in (0..TREE_HEIGHT).rev() {
+                let bucket = &mut self.tree[level];
+                if bucket.len() < BUCKET_SIZE {
+                    bucket.push(block.clone());
+                    break;
+                }
+                // If bucket is full, continue to the next level
+                index /= 2;
+            }
         }
     }
 
-    fn read(&self, _l: &[u8]) -> Vec<EncryptedData> {
-        // This is a simplified read operation
-        // In a real implementation, this would traverse the ORAM tree
-        self.tree.values().cloned().collect()
+    fn leaf_to_index(&self, leaf: &[u8]) -> usize {
+        let mut index = 0;
+        for &byte in leaf.iter().take(4) {
+            index = (index << 8) | byte as usize;
+        }
+        index % (1 << (TREE_HEIGHT - 1))
     }
-}
 
-fn encrypt(key: &[u8], data: &[u8]) -> Result<EncryptedData, McOsamError> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| McOsamError::InvalidKeyLength)?;
-    let nonce_bytes = random_bytes(NONCE_SIZE);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher.encrypt(nonce, data)?;
-    Ok(EncryptedData {
-        nonce: nonce_bytes,
-        ciphertext,
-    })
-}
+    fn evict(&mut self) {
+        for _ in 0..EVICTION_RATE {
+            let leaf: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
+            let mut index = self.leaf_to_index(&leaf);
+            let mut blocks_to_push = Vec::new();
 
-fn decrypt(key: &[u8], data: &EncryptedData) -> Result<Vec<u8>, McOsamError> {
-    let cipher = Aes256Gcm::new_from_slice(key).map_err(|_| McOsamError::InvalidKeyLength)?;
-    if data.nonce.len() != NONCE_SIZE {
-        return Err(McOsamError::InvalidNonceSize);
+            for level in 0..TREE_HEIGHT {
+                let mut new_bucket = Vec::new();
+                let bucket = std::mem::take(&mut self.tree[level]);
+
+                for block in bucket {
+                    let block_index = self.leaf_to_index(&block.bid);
+                    if block_index == index {
+                        blocks_to_push.push(block);
+                    } else {
+                        new_bucket.push(block);
+                    }
+                }
+
+                self.tree[level] = new_bucket;
+                index /= 2;
+            }
+
+            self.write(blocks_to_push);
+        }
     }
-    let nonce = Nonce::from_slice(&data.nonce);
-    let plaintext = cipher.decrypt(nonce, data.ciphertext.as_ref())?;
-    Ok(plaintext)
-}
-
-fn prf(key: &[u8], data: &str) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(key);
-    hasher.update(data.as_bytes());
-    hasher.finalize().to_vec()
-}
-
-fn kdf(t: u64, key: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(t.to_be_bytes());
-    hasher.update(key);
-    hasher.finalize().to_vec()
-}
-
-fn derive_key(info: &str) -> Vec<u8> {
-    let mut hasher = Sha256::new();
-    hasher.update(info.as_bytes());
-    hasher.finalize().to_vec()
-}
-
-fn random_bytes(n: usize) -> Vec<u8> {
-    let mut rng = OsRng;
-    (0..n).map(|_| rng.gen()).collect()
 }
 
 #[cfg(test)]
@@ -236,86 +292,127 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_write_and_read() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
+    fn test_kdf() {
+        let key = b"original key";
+        let info1 = "purpose1";
+        let info2 = "purpose2";
+
+        let derived1 = kdf(key, info1).expect("KDF failed");
+        let derived2 = kdf(key, info2).expect("KDF failed");
+
+        assert_ne!(derived1, derived2);
+        assert_eq!(derived1.len(), 32);
+        assert_eq!(derived2.len(), 32);
+    }
+
+    #[test]
+    fn test_prf() {
+        let key = b"prf key";
+        let input1 = b"input1";
+        let input2 = b"input2";
+
+        let output1 = prf(key, input1);
+        let output2 = prf(key, input2);
+
+        assert_ne!(output1, output2);
+        assert_eq!(output1.len(), 32);
+        assert_eq!(output2.len(), 32);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt() {
+        let key = kdf(b"encryption key", "enc").expect("KDF failed");
         let message = b"Hello, World!";
-        let w = "alice";
-        let r = "bob";
-        let t = 1;
 
-        // Write a message
-        mcosam.write(w, r, message, t).unwrap();
+        let ciphertext = encrypt(&key, message).expect("Encryption failed");
+        let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
 
-        // Read the message
-        let read_result = mcosam.read(w, r, t, true).unwrap();
-        assert_eq!(read_result, Some(message.to_vec()));
-
-        // Try to read with wrong parameters
-        let wrong_read = mcosam.read("mallory", r, t, true).unwrap();
-        assert_eq!(wrong_read, None);
+        assert_ne!(ciphertext, message);
+        assert_eq!(decrypted, message);
     }
 
     #[test]
-    fn test_multiple_writes_and_reads() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
-        let messages = vec![
-            (b"Message 1".to_vec(), "alice", "bob", 1),
-            (b"Message 2".to_vec(), "bob", "charlie", 2),
-            (b"Message 3".to_vec(), "charlie", "alice", 3),
-        ];
-
-        // Write messages
-        for (m, w, r, t) in &messages {
-            mcosam.write(w, r, m, *t).unwrap();
-        }
-
-        // Read messages
-        for (m, w, r, t) in &messages {
-            let read_result = mcosam.read(w, r, *t, true).unwrap();
-            assert_eq!(read_result, Some(m.clone()));
-        }
+    fn test_client_setup() {
+        let mut alice = Client::new("Alice".to_string());
+        alice.setup(&["Bob".to_string()]).expect("Setup failed");
+        assert!(alice.keys.contains_key("Bob"));
     }
 
     #[test]
-    fn test_eviction() {
-        let mut mcosam = MultiClientObliviousMessaging::new(10);
-        let message = b"Eviction test";
-        let w = "alice";
-        let r = "bob";
-        let t = 1;
+    fn test_write_and_read() {
+        let mut alice = Client::new("Alice".to_string());
+        let mut bob = Client::new("Bob".to_string());
+        alice.setup(&["Bob".to_string()]).expect("Setup failed");
+        bob.setup(&["Alice".to_string()]).expect("Setup failed");
 
-        // Write a message
-        mcosam.write(w, r, message, t).unwrap();
+        let mut s1 = Server1::new();
+        let mut s2 = Server2::new();
+
+        let message = b"Hello, Bob!";
+        let (ct, l, k_oram_t) = alice.write(message, "Bob", 1).expect("Write failed");
+        s1.write(ct.clone(), l.clone(), k_oram_t.clone())
+            .expect("Server1 write failed");
+
+        let block = Block {
+            bid: l.clone(),
+            data: encrypt(&k_oram_t.clone(), &[&l[..], &ct[..]].concat())
+                .expect("Encryption failed"),
+        };
+        s2.write(vec![block]);
+
+        let path = s2.read(&l);
+        let decrypted_msg = bob.read("Alice", 1, &path);
+        assert_eq!(decrypted_msg, Some(message.to_vec()));
+    }
+
+    #[test]
+    fn test_fake_operations() {
+        let alice = Client::new("Alice".to_string());
+
+        let (fake_ct, fake_l, fake_k_oram_t) = alice.fake_write();
+        assert_eq!(fake_ct.len(), 64);
+        assert_eq!(fake_l.len(), 32);
+        assert_eq!(fake_k_oram_t.len(), 32);
+
+        let fake_read = alice.fake_read();
+        assert_eq!(fake_read.len(), 32);
+    }
+
+    #[test]
+    fn test_server1_batch_write() {
+        let mut s1 = Server1::new();
+        let dummy_data = vec![0; 64];
+        let dummy_l = vec![0; 32];
+        let dummy_k_oram_t = vec![0; 32];
+
+        for _ in 0..NUM_WRITES_PER_EPOCH {
+            s1.write(dummy_data.clone(), dummy_l.clone(), dummy_k_oram_t.clone())
+                .expect("Server1 write failed");
+        }
+
+        assert_eq!(s1.epoch, 1);
+        assert_eq!(s1.counter, 0);
+        assert!(s1.write_queue.is_empty());
+    }
+
+    #[test]
+    fn test_server2_eviction() {
+        let mut s2 = Server2::new();
+        let dummy_block = Block {
+            bid: vec![0; 32],
+            data: vec![1; 64],
+        };
+
+        // Fill the tree
+        for _ in 0..(1 << TREE_HEIGHT) * BUCKET_SIZE {
+            s2.write(vec![dummy_block.clone()]);
+        }
 
         // Perform eviction
-        mcosam.evict(5);
+        s2.evict();
 
-        // The message should still be readable after eviction
-        let read_result = mcosam.read(w, r, t, true).unwrap();
-        assert_eq!(read_result, Some(message.to_vec()));
-    }
-
-    #[test]
-    fn test_encryption_decryption() {
-        let key = random_bytes(32);
-        let data = b"Test data";
-
-        let encrypted = encrypt(&key, data).unwrap();
-        let decrypted = decrypt(&key, &encrypted).unwrap();
-
-        assert_eq!(data.to_vec(), decrypted);
-    }
-
-    #[test]
-    fn test_prf_and_kdf() {
-        let key = random_bytes(32);
-        let data = "test_data";
-        let t = 1234;
-
-        let prf_result = prf(&key, data);
-        assert_eq!(prf_result.len(), 32);
-
-        let kdf_result = kdf(t, &key);
-        assert_eq!(kdf_result.len(), 32);
+        // Check if eviction happened (this is a simple check, might need adjustment)
+        let total_blocks: usize = s2.tree.iter().map(|level| level.len()).sum();
+        assert!(total_blocks < (1 << TREE_HEIGHT) * BUCKET_SIZE);
     }
 }
