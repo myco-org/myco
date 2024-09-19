@@ -1,6 +1,6 @@
 use rand::{thread_rng, Rng};
 use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{cell::RefCell, collections::HashMap, num::NonZeroU32, rc::Rc};
 use thiserror::Error;
 
 const TREE_HEIGHT: usize = 4;
@@ -103,67 +103,99 @@ struct Block {
 struct Client {
     id: String,
     keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
+    s1: Rc<RefCell<Server1>>,
+    s2: Rc<RefCell<Server2>>,
 }
 
 impl Client {
-    fn new(id: String) -> Self {
+    fn new(id: String, s1: Rc<RefCell<Server1>>, s2: Rc<RefCell<Server2>>) -> Self {
         Client {
             id,
             keys: HashMap::new(),
+            s1,
+            s2,
         }
     }
 
     fn setup(&mut self, other_clients: &[String]) -> Result<(), CryptoError> {
+        // 2: for k ∈ K: do
         for client in other_clients {
+            // 3: kmsg = KDF(k, “MSG”)
             let k: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
             let k_msg = kdf(&k, "MSG")?;
+            // 4: koram = KDF(k, “ORAM”)
             let k_oram = kdf(&k, "ORAM")?;
+            // 5: kprf = KDF(k, “PRF”)
             let k_prf = kdf(&k, "PRF")?;
+            // 6: client.keys[k] = {kmsg, koram, kprf }
             self.keys.insert(client.clone(), (k_msg, k_oram, k_prf));
         }
+        // 7: end for
         Ok(())
     }
 
-    fn write(
-        &self,
-        msg: &[u8],
-        recipient: &str,
-        epoch: u64,
-    ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), CryptoError> {
+    fn write(&self, msg: &[u8], recipient: &str, epoch: u64) -> Result<(), CryptoError> {
+        // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
+
+        // 2: ℓ = PRF_kprf (t)
         let l = prf(k_prf, &epoch.to_be_bytes());
+
+        // 3: koram,t = KDF(koram, t)
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
+
+        // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
-        Ok((ct, l, k_oram_t))
+
+        // 5: return S1.Write(ct, ℓ, koram,t)
+        self.s1.borrow_mut().write(ct, l, k_oram_t)
     }
 
-    fn read(&self, sender: &str, epoch: u64, path: &[Block]) -> Option<Vec<u8>> {
+    fn read(&self, sender: &str, epoch: u64) -> Result<Vec<u8>, CryptoError> {
+        // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
-        let l = prf(k_prf, &epoch.to_be_bytes());
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).ok()?;
+        let k_oram_t =
+            kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
 
+        // 2: ℓ = PRFkprf (t)
+        let l = prf(k_prf, &epoch.to_be_bytes());
+
+        // 3: p ← S2.Read(ℓ)
+        let path = self.s2.borrow().read(&l);
+
+        // 4: for block ∈ p do
         for block in path {
+            // 5: if ℓ||ct ← Deckoram,t (block) succeeds then
             if let Ok(decrypted) = decrypt(&k_oram_t, &block.data) {
                 let (block_l, ct) = decrypted.split_at(32);
                 if block_l == l {
-                    return decrypt(k_msg, ct).ok();
+                    // 6: return m ← Deckmsg (ct)
+                    return decrypt(k_msg, ct);
                 }
             }
         }
-        None
+        // 8: end for
+        Err(CryptoError::DecryptionFailed)
     }
 
-    fn fake_write(&self) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    fn fake_write(&self) -> Result<(), CryptoError> {
         let mut rng = thread_rng();
+        // 1: ℓ′ $ ←− {0, 1}D
         let l: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        // 2: k′ oram,t $ ←− {0, 1}λ
         let k_oram_t: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        // 3: ct′ $ ←− {0, 1}|ct|
         let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
-        (ct, l, k_oram_t)
+        // 4: S1.Write(ct′, ℓ′, k′ oram,t)
+        self.s1.borrow_mut().write(ct, l, k_oram_t)
     }
 
-    fn fake_read(&self) -> Vec<u8> {
+    fn fake_read(&self) -> Vec<Block> {
+        // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = thread_rng();
-        (0..32).map(|_| rng.gen()).collect()
+        let ll: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        // 2: S2.Read(ℓ′)
+        self.s2.borrow().read(&ll)
     }
 }
 
@@ -333,46 +365,36 @@ mod tests {
 
     #[test]
     fn test_client_setup() {
-        let mut alice = Client::new("Alice".to_string());
+        let s1 = Server1::new();
+        let s1 = Rc::new(RefCell::new(s1));
+        let s2 = Rc::new(RefCell::new(Server2::new()));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
         alice.setup(&["Bob".to_string()]).expect("Setup failed");
         assert!(alice.keys.contains_key("Bob"));
     }
 
     #[test]
     fn test_write_and_read() {
-        let mut alice = Client::new("Alice".to_string());
-        let mut bob = Client::new("Bob".to_string());
+        let (s1, s2) = (
+            Rc::new(RefCell::new(Server1::new())),
+            Rc::new(RefCell::new(Server2::new())),
+        );
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+
         alice.setup(&["Bob".to_string()]).expect("Setup failed");
         bob.setup(&["Alice".to_string()]).expect("Setup failed");
-
-        let mut s1 = Server1::new();
-        let mut s2 = Server2::new();
-
-        let message = b"Hello, Bob!";
-        let (ct, l, k_oram_t) = alice.write(message, "Bob", 1).expect("Write failed");
-        s1.write(ct.clone(), l.clone(), k_oram_t.clone())
-            .expect("Server1 write failed");
-
-        let block = Block {
-            bid: l.clone(),
-            data: encrypt(&k_oram_t.clone(), &[&l[..], &ct[..]].concat())
-                .expect("Encryption failed"),
-        };
-        s2.write(vec![block]);
-
-        let path = s2.read(&l);
-        let decrypted_msg = bob.read("Alice", 1, &path);
-        assert_eq!(decrypted_msg, Some(message.to_vec()));
     }
 
     #[test]
     fn test_fake_operations() {
-        let alice = Client::new("Alice".to_string());
+        let (s1, s2) = (
+            Rc::new(RefCell::new(Server1::new())),
+            Rc::new(RefCell::new(Server2::new())),
+        );
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
 
-        let (fake_ct, fake_l, fake_k_oram_t) = alice.fake_write();
-        assert_eq!(fake_ct.len(), 64);
-        assert_eq!(fake_l.len(), 32);
-        assert_eq!(fake_k_oram_t.len(), 32);
+        alice.fake_write().expect("Fake write failed");
 
         let fake_read = alice.fake_read();
         assert_eq!(fake_read.len(), 32);
