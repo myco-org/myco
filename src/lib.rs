@@ -1,12 +1,18 @@
 use rand::{thread_rng, Rng};
 use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use std::{cell::RefCell, collections::HashMap, num::NonZeroU32, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, rc::Rc};
 use thiserror::Error;
 
 const TREE_HEIGHT: usize = 4;
 const BUCKET_SIZE: usize = 4;
 const NUM_WRITES_PER_EPOCH: usize = 2;
 const EVICTION_RATE: usize = 2;
+const NU: usize = 4;
+const D: usize = 32;
+const LAMBDA: usize = 128;
+
+type Key = Vec<u8>;
+type Timestamp = u64;
 
 #[derive(Debug, Error)]
 enum CryptoError {
@@ -181,9 +187,9 @@ impl Client {
     fn fake_write(&self) -> Result<(), CryptoError> {
         let mut rng = thread_rng();
         // 1: ℓ′ $ ←− {0, 1}D
-        let l: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: k′ oram,t $ ←− {0, 1}λ
-        let k_oram_t: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let k_oram_t: Vec<u8> = (0..LAMBDA).map(|_| rng.gen()).collect();
         // 3: ct′ $ ←− {0, 1}|ct|
         let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
         // 4: S1.Write(ct′, ℓ′, k′ oram,t)
@@ -193,26 +199,116 @@ impl Client {
     fn fake_read(&self) -> Vec<Block> {
         // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = thread_rng();
-        let ll: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+        let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
         self.s2.borrow().read(&ll)
     }
 }
 
+struct Metadata {
+    root: Option<Box<Node>>,
+}
+
+struct Node {
+    key: String,
+    value: (Key, Timestamp),
+    left: Option<Box<Node>>,
+    right: Option<Box<Node>>,
+}
+
+impl Metadata {
+    fn new() -> Self {
+        Metadata { root: None }
+    }
+
+    fn insert(&mut self, key: String, value: (Key, Timestamp)) {
+        self.root = Self::insert_node(self.root.take(), key, value);
+    }
+
+    fn insert_node(
+        node: Option<Box<Node>>,
+        key: String,
+        value: (Key, Timestamp),
+    ) -> Option<Box<Node>> {
+        match node {
+            Some(mut current) => {
+                match key.cmp(&current.key) {
+                    Ordering::Less => {
+                        current.left = Self::insert_node(current.left.take(), key, value);
+                    }
+                    Ordering::Greater => {
+                        current.right = Self::insert_node(current.right.take(), key, value);
+                    }
+                    Ordering::Equal => {
+                        current.value = value; // Update existing key
+                    }
+                }
+                Some(current)
+            }
+            None => Some(Box::new(Node {
+                key,
+                value,
+                left: None,
+                right: None,
+            })),
+        }
+    }
+
+    // Optionally, you can implement a get method if needed
+    fn get(&self, key: &str) -> Option<&(Key, Timestamp)> {
+        Self::get_node(&self.root, key)
+    }
+
+    fn get_node<'a>(node: &'a Option<Box<Node>>, key: &str) -> Option<&'a (Key, Timestamp)> {
+        match node {
+            Some(current) => match key.cmp(&current.key) {
+                Ordering::Less => Self::get_node(&current.left, key),
+                Ordering::Greater => Self::get_node(&current.right, key),
+                Ordering::Equal => Some(&current.value),
+            },
+            None => None,
+        }
+    }
+}
+
 struct Server1 {
-    metadata: HashMap<String, (Vec<u8>, u64)>,
+    metadata: Metadata,
     epoch: u64,
     counter: usize,
     write_queue: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>,
+    num_clients: usize,
+    s2: Rc<RefCell<Server2>>,
 }
 
 impl Server1 {
-    fn new() -> Self {
+    fn new(num_clients: usize, s2: Rc<RefCell<Server2>>) -> Self {
         Server1 {
-            metadata: HashMap::new(),
+            metadata: Metadata::new(),
             epoch: 0,
             counter: 0,
             write_queue: Vec::new(),
+            num_clients,
+            s2,
+        }
+    }
+
+    fn batch_init(&mut self) {
+        let mut rng = thread_rng();
+        let p: Vec<(Vec<Block>, Vec<u8>)> = (0..(NU * self.num_clients))
+            .map(|_| {
+                let l: Vec<u8> = (0..D).map(|_| rng.gen_bool(0.5) as u8).collect();
+                (self.s2.borrow_mut().read(&l), l)
+            })
+            .collect();
+        for (path, l) in p {
+            let mut node = self.metadata.root.as_mut().expect("Root is None");
+            for (block, child) in path.iter().zip(l.iter()) {
+                if *child == 0 {
+                    node = node.left.as_mut().expect("Left child is None");
+                } else {
+                    node = node.right.as_mut().expect("Right child is None");
+                }
+            }
         }
     }
 
@@ -392,7 +488,7 @@ mod tests {
             Rc::new(RefCell::new(Server1::new())),
             Rc::new(RefCell::new(Server2::new())),
         );
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
 
         alice.fake_write().expect("Fake write failed");
 
