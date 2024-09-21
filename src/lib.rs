@@ -209,6 +209,7 @@ struct Metadata {
     root: Option<Box<Node>>,
 }
 
+#[derive(Debug, Clone)]
 struct Node {
     key: String,
     value: (Key, Timestamp),
@@ -301,12 +302,22 @@ impl Server1 {
             })
             .collect();
         for (path, l) in p {
-            let mut node = self.metadata.root.as_mut().expect("Root is None");
+            let mut node = self.metadata.root.as_mut();
             for (block, child) in path.iter().zip(l.iter()) {
-                if *child == 0 {
-                    node = node.left.as_mut().expect("Left child is None");
-                } else {
-                    node = node.right.as_mut().expect("Right child is None");
+                match node.take() {
+                    Some(current_node) => {
+                        if current_node.value.1 < self.epoch
+                            || decrypt(&current_node.value.0, &block.data).is_ok()
+                        {
+                            break;
+                        }
+                        node = if *child == 0 {
+                            current_node.left.as_mut()
+                        } else {
+                            current_node.right.as_mut()
+                        };
+                    }
+                    None => break,
                 }
             }
         }
