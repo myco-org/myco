@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::{Block, Key};
+use crate::{Block, Key, Path};
 
 pub struct Server2 {
-    pathset: HashMap<Block, Vec<Block>>,
+    pathset: HashMap<Path, Vec<Block>>,
     prf_keys: Vec<Key>,
 }
 
@@ -16,14 +16,14 @@ impl Server2 {
     }
 
     /// l is the leaf block
-    pub fn read(&self, l: &Block) -> Vec<Block> {
+    pub fn read(&self, l: &Path) -> Vec<Block> {
         self.pathset.get(l).cloned().unwrap_or_default()
     }
 
-    pub fn write(&mut self, blocks: Vec<Vec<Block>>) {
+    pub fn write(&mut self, blocks: Vec<(Path, Vec<Block>)>) {
         let mut pathset = HashMap::new();
-        for path in blocks {
-            pathset.insert(path.last().unwrap().clone(), path);
+        for (path, blocks) in blocks {
+            pathset.insert(path, blocks);
         }
         self.pathset = pathset;
     }

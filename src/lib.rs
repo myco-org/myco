@@ -16,6 +16,7 @@ use server2::Server2;
 pub(crate) type Key = Vec<u8>;
 pub(crate) type Timestamp = u64;
 pub(crate) type Path = Vec<bool>;
+pub(crate) type Metadata = Vec<(Path, Key, Timestamp)>;
 
 #[derive(Debug, Error)]
 enum CryptoError {
