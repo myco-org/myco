@@ -15,6 +15,7 @@ use server2::Server2;
 
 pub(crate) type Key = Vec<u8>;
 pub(crate) type Timestamp = u64;
+pub(crate) type Path = Vec<bool>;
 
 #[derive(Debug, Error)]
 enum CryptoError {
@@ -102,10 +103,24 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     Ok(in_out)
 }
 
-#[derive(Clone, Debug)]
-struct Block {
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Block {
     bid: Vec<u8>,
     data: Vec<u8>,
+}
+
+impl Block {
+    pub(crate) fn new(bid: Vec<u8>, data: Vec<u8>) -> Self {
+        Block { bid, data }
+    }
+
+    pub(crate) fn new_random() -> Self {
+        let mut rng = thread_rng();
+        Block {
+            bid: (0..D).map(|_| rng.gen()).collect(),
+            data: (0..64).map(|_| rng.gen()).collect(),
+        }
+    }
 }
 
 struct Client {
