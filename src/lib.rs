@@ -3,16 +3,18 @@ use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
 use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, rc::Rc};
 use thiserror::Error;
 
-const TREE_HEIGHT: usize = 4;
-const BUCKET_SIZE: usize = 4;
-const NUM_WRITES_PER_EPOCH: usize = 2;
-const EVICTION_RATE: usize = 2;
-const NU: usize = 4;
-const D: usize = 32;
-const LAMBDA: usize = 128;
+// Add module declarations
+mod constants;
+mod server1;
+mod server2;
 
-type Key = Vec<u8>;
-type Timestamp = u64;
+// Import constants and server modules
+use constants::*;
+use server1::Server1;
+use server2::Server2;
+
+pub(crate) type Key = Vec<u8>;
+pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Error)]
 enum CryptoError {
@@ -205,227 +207,6 @@ impl Client {
     }
 }
 
-struct Metadata {
-    root: Option<Box<Node>>,
-}
-
-#[derive(Debug, Clone)]
-struct Node {
-    key: String,
-    value: (Key, Timestamp),
-    left: Option<Box<Node>>,
-    right: Option<Box<Node>>,
-}
-
-impl Metadata {
-    fn new() -> Self {
-        Metadata { root: None }
-    }
-
-    fn insert(&mut self, key: String, value: (Key, Timestamp)) {
-        self.root = Self::insert_node(self.root.take(), key, value);
-    }
-
-    fn insert_node(
-        node: Option<Box<Node>>,
-        key: String,
-        value: (Key, Timestamp),
-    ) -> Option<Box<Node>> {
-        match node {
-            Some(mut current) => {
-                match key.cmp(&current.key) {
-                    Ordering::Less => {
-                        current.left = Self::insert_node(current.left.take(), key, value);
-                    }
-                    Ordering::Greater => {
-                        current.right = Self::insert_node(current.right.take(), key, value);
-                    }
-                    Ordering::Equal => {
-                        current.value = value; // Update existing key
-                    }
-                }
-                Some(current)
-            }
-            None => Some(Box::new(Node {
-                key,
-                value,
-                left: None,
-                right: None,
-            })),
-        }
-    }
-
-    // Optionally, you can implement a get method if needed
-    fn get(&self, key: &str) -> Option<&(Key, Timestamp)> {
-        Self::get_node(&self.root, key)
-    }
-
-    fn get_node<'a>(node: &'a Option<Box<Node>>, key: &str) -> Option<&'a (Key, Timestamp)> {
-        match node {
-            Some(current) => match key.cmp(&current.key) {
-                Ordering::Less => Self::get_node(&current.left, key),
-                Ordering::Greater => Self::get_node(&current.right, key),
-                Ordering::Equal => Some(&current.value),
-            },
-            None => None,
-        }
-    }
-}
-
-struct Server1 {
-    metadata: Metadata,
-    epoch: u64,
-    counter: usize,
-    write_queue: Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>,
-    num_clients: usize,
-    s2: Rc<RefCell<Server2>>,
-}
-
-impl Server1 {
-    fn new(num_clients: usize, s2: Rc<RefCell<Server2>>) -> Self {
-        Server1 {
-            metadata: Metadata::new(),
-            epoch: 0,
-            counter: 0,
-            write_queue: Vec::new(),
-            num_clients,
-            s2,
-        }
-    }
-
-    fn batch_init(&mut self) {
-        let mut rng = thread_rng();
-        let p: Vec<(Vec<Block>, Vec<u8>)> = (0..(NU * self.num_clients))
-            .map(|_| {
-                let l: Vec<u8> = (0..D).map(|_| rng.gen_bool(0.5) as u8).collect();
-                (self.s2.borrow_mut().read(&l), l)
-            })
-            .collect();
-        for (path, l) in p {
-            let mut node = self.metadata.root.as_mut();
-            for (block, child) in path.iter().zip(l.iter()) {
-                match node.take() {
-                    Some(current_node) => {
-                        if current_node.value.1 < self.epoch
-                            || decrypt(&current_node.value.0, &block.data).is_ok()
-                        {
-                            break;
-                        }
-                        node = if *child == 0 {
-                            current_node.left.as_mut()
-                        } else {
-                            current_node.right.as_mut()
-                        };
-                    }
-                    None => break,
-                }
-            }
-        }
-    }
-
-    fn write(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Vec<u8>) -> Result<(), CryptoError> {
-        let expiration = self.epoch + 10; // Arbitrary expiration period
-        let c_msg = encrypt(&k_oram_t.clone(), &[&l[..], &ct[..]].concat())?;
-        self.metadata
-            .insert(hex::encode(&l), (k_oram_t.clone(), expiration));
-        self.write_queue
-            .push((c_msg.clone(), l.clone(), k_oram_t.clone()));
-        self.counter += 1;
-
-        if self.counter == NUM_WRITES_PER_EPOCH {
-            self.batch_write();
-        }
-        Ok(())
-    }
-
-    fn batch_write(&mut self) {
-        // In a real implementation, this would write to S2
-        self.write_queue.clear();
-        self.counter = 0;
-        self.epoch += 1;
-    }
-}
-
-struct Server2 {
-    tree: Vec<Vec<Block>>,
-}
-
-impl Server2 {
-    fn new() -> Self {
-        let mut tree = Vec::new();
-        for _ in 0..TREE_HEIGHT {
-            let level: Vec<Block> = Vec::new();
-            tree.push(level);
-        }
-        Server2 { tree }
-    }
-
-    fn read(&self, l: &[u8]) -> Vec<Block> {
-        let mut path = Vec::new();
-        for level in (0..TREE_HEIGHT).rev() {
-            let bucket = &self.tree[level];
-            path.extend(
-                bucket
-                    .iter()
-                    .filter(|block| !block.data.is_empty())
-                    .cloned(),
-            );
-        }
-        path
-    }
-
-    fn write(&mut self, blocks: Vec<Block>) {
-        for block in blocks {
-            let leaf = &block.bid[..32];
-            let mut index = self.leaf_to_index(leaf);
-            for level in (0..TREE_HEIGHT).rev() {
-                let bucket = &mut self.tree[level];
-                if bucket.len() < BUCKET_SIZE {
-                    bucket.push(block.clone());
-                    break;
-                }
-                // If bucket is full, continue to the next level
-                index /= 2;
-            }
-        }
-    }
-
-    fn leaf_to_index(&self, leaf: &[u8]) -> usize {
-        let mut index = 0;
-        for &byte in leaf.iter().take(4) {
-            index = (index << 8) | byte as usize;
-        }
-        index % (1 << (TREE_HEIGHT - 1))
-    }
-
-    fn evict(&mut self) {
-        for _ in 0..EVICTION_RATE {
-            let leaf: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
-            let mut index = self.leaf_to_index(&leaf);
-            let mut blocks_to_push = Vec::new();
-
-            for level in 0..TREE_HEIGHT {
-                let mut new_bucket = Vec::new();
-                let bucket = std::mem::take(&mut self.tree[level]);
-
-                for block in bucket {
-                    let block_index = self.leaf_to_index(&block.bid);
-                    if block_index == index {
-                        blocks_to_push.push(block);
-                    } else {
-                        new_bucket.push(block);
-                    }
-                }
-
-                self.tree[level] = new_bucket;
-                index /= 2;
-            }
-
-            self.write(blocks_to_push);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_client_setup() {
-        let s1 = Server1::new();
+        let s1 = Server1::new(0, Rc::new(RefCell::new(Server2::new())));
         let s1 = Rc::new(RefCell::new(s1));
         let s2 = Rc::new(RefCell::new(Server2::new()));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
@@ -483,7 +264,7 @@ mod tests {
     #[test]
     fn test_write_and_read() {
         let (s1, s2) = (
-            Rc::new(RefCell::new(Server1::new())),
+            Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
             Rc::new(RefCell::new(Server2::new())),
         );
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
@@ -496,7 +277,7 @@ mod tests {
     #[test]
     fn test_fake_operations() {
         let (s1, s2) = (
-            Rc::new(RefCell::new(Server1::new())),
+            Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
             Rc::new(RefCell::new(Server2::new())),
         );
         let alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
@@ -509,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_server1_batch_write() {
-        let mut s1 = Server1::new();
+        let mut s1 = Server1::new(0, Rc::new(RefCell::new(Server2::new())));
         let dummy_data = vec![0; 64];
         let dummy_l = vec![0; 32];
         let dummy_k_oram_t = vec![0; 32];
