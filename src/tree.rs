@@ -28,24 +28,29 @@ impl From<u8> for Direction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BinaryTree<T> {
-    value: T,
+    value: Option<T>,
     left: Option<Box<BinaryTree<T>>>,
     right: Option<Box<BinaryTree<T>>>,
 }
 
 impl<T> BinaryTree<T> {
     pub(crate) fn new(value: T) -> Self {
-        BinaryTree { value, left: None, right: None }
+        BinaryTree { value: Some(value), left: None, right: None }
     }
+
+    pub fn new_empty() -> Self {
+        BinaryTree { value: None, left: None, right: None }
+    }
+
     pub fn from_vec_with_paths(items: Vec<(T, Path)>) -> Self
     where
         T: Clone + Default,
     {
         if items.is_empty() {
-            return BinaryTree::new(T::default());
+            return BinaryTree::new_empty();
         }
 
-        let mut root = BinaryTree::new(items[0].0.clone());
+        let mut root = BinaryTree::new_empty();
 
         for (value, path) in items {
             let mut current = &mut root;
@@ -54,20 +59,20 @@ impl<T> BinaryTree<T> {
                 match direction {
                     Direction::Left => {
                         if current.left.is_none() {
-                            current.left = Some(Box::new(BinaryTree::new(T::default())));
+                            current.left = Some(Box::new(BinaryTree::new_empty()));
                         }
                         current = current.left.as_mut().unwrap();
                     }
                     Direction::Right => {
                         if current.right.is_none() {
-                            current.right = Some(Box::new(BinaryTree::new(T::default())));
+                            current.right = Some(Box::new(BinaryTree::new_empty()));
                         }
                         current = current.right.as_mut().unwrap();
                     }
                 }
             }
 
-            current.value = value;
+            current.value = Some(value);
         }
 
         root
@@ -90,7 +95,7 @@ impl<T> BinaryTree<T> {
         left_height.max(right_height)
     }
 
-    pub fn get(&self, index: usize) -> Option<&T> {
+    pub fn get_leaf(&self, index: usize) -> Option<&T> {
         let height = self.height();
         if index >= (1 << height) {
             return None;
@@ -122,7 +127,23 @@ impl<T> BinaryTree<T> {
             }
         }
 
-        Some(&current.value)
+        current.value.as_ref()
+    }
+
+    pub fn get(&self, path: &Path) -> Option<&T> {
+        let mut current = self;
+        for direction in path {
+            match direction {
+                Direction::Left => {
+                    current = current.left.as_ref()?;
+                }
+                Direction::Right => {
+                    current = current.right.as_ref()?;
+                }
+            }
+        }
+
+        current.value.as_ref()
     }
 }
 
@@ -168,7 +189,7 @@ mod tests {
     fn test_small_binary_tree() {
         // Test creating a new tree
         let tree = BinaryTree::new(1);
-        assert_eq!(tree.value, 1);
+        assert_eq!(tree.value, Some(1));
         assert!(tree.left.is_none());
         assert!(tree.right.is_none());
 
@@ -183,11 +204,11 @@ mod tests {
         println!("Small tree:\n{}", small_tree);
 
         // Test get method for small tree
-        assert_eq!(small_tree.get(0), Some(&1));
-        assert_eq!(small_tree.get(1), Some(&2));
-        assert_eq!(small_tree.get(2), Some(&3));
-        assert_eq!(small_tree.get(3), Some(&4));
-        assert_eq!(small_tree.get(4), None);
+        assert_eq!(small_tree.get_leaf(0), Some(&1));
+        assert_eq!(small_tree.get_leaf(1), Some(&2));
+        assert_eq!(small_tree.get_leaf(2), Some(&3));
+        assert_eq!(small_tree.get_leaf(3), Some(&4));
+        assert_eq!(small_tree.get_leaf(4), None);
     }
 
     #[test]
@@ -207,23 +228,54 @@ mod tests {
         println!("Large tree:\n{}", large_tree);
 
         // Test get method for large tree
-        assert_eq!(large_tree.get(0), Some(&1));
-        assert_eq!(large_tree.get(3), Some(&2));
-        assert_eq!(large_tree.get(4), Some(&3));
-        assert_eq!(large_tree.get(8), Some(&4));
-        assert_eq!(large_tree.get(11), Some(&5));
-        assert_eq!(large_tree.get(12), Some(&6));
-        assert_eq!(large_tree.get(14), Some(&7));
-        assert_eq!(large_tree.get(15), Some(&8));
+        assert_eq!(large_tree.get_leaf(0), Some(&1));
+        assert_eq!(large_tree.get_leaf(3), Some(&2));
+        assert_eq!(large_tree.get_leaf(4), Some(&3));
+        assert_eq!(large_tree.get_leaf(8), Some(&4));
+        assert_eq!(large_tree.get_leaf(11), Some(&5));
+        assert_eq!(large_tree.get_leaf(12), Some(&6));
+        assert_eq!(large_tree.get_leaf(14), Some(&7));
+        assert_eq!(large_tree.get_leaf(15), Some(&8));
 
         // Test null values
-        assert_eq!(large_tree.get(1), None);
-        assert_eq!(large_tree.get(2), None);
-        assert_eq!(large_tree.get(5), None);
-        assert_eq!(large_tree.get(6), None);
-        assert_eq!(large_tree.get(7), None);
-        assert_eq!(large_tree.get(9), None);
-        assert_eq!(large_tree.get(10), None);
-        assert_eq!(large_tree.get(13), None);
+        assert_eq!(large_tree.get_leaf(1), None);
+        assert_eq!(large_tree.get_leaf(2), None);
+        assert_eq!(large_tree.get_leaf(5), None);
+        assert_eq!(large_tree.get_leaf(6), None);
+        assert_eq!(large_tree.get_leaf(7), None);
+        assert_eq!(large_tree.get_leaf(9), None);
+        assert_eq!(large_tree.get_leaf(10), None);
+        assert_eq!(large_tree.get_leaf(13), None);
+    }
+
+    #[test]
+    fn test_get() {
+        // Create a tree with some values, including non-leaf nodes
+        let items = vec![
+            (1, vec![Direction::Left, Direction::Left]),
+            (2, vec![Direction::Left, Direction::Right]),
+            (3, vec![Direction::Right, Direction::Left]),
+            (4, vec![Direction::Right, Direction::Right]),
+            (5, vec![Direction::Left]),  // Non-leaf node
+            (6, vec![Direction::Right]), // Non-leaf node
+            (7, vec![]),                 // Root node
+        ];
+        let tree = BinaryTree::from_vec_with_paths(items);
+        println!("Tree:\n{}", tree);
+
+        // Test get method for existing paths (including non-leaf nodes)
+        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left]), Some(&1));
+        assert_eq!(tree.get(&vec![Direction::Left, Direction::Right]), Some(&2));
+        assert_eq!(tree.get(&vec![Direction::Right, Direction::Left]), Some(&3));
+        assert_eq!(tree.get(&vec![Direction::Right, Direction::Right]), Some(&4));
+        assert_eq!(tree.get(&vec![Direction::Left]), Some(&5));
+        assert_eq!(tree.get(&vec![Direction::Right]), Some(&6));
+        assert_eq!(tree.get(&vec![]), Some(&7));
+
+        // Test get method for non-existing paths
+        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left, Direction::Left]), None);
+        assert_eq!(tree.get(&vec![Direction::Right, Direction::Right, Direction::Right]), None);
+        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left, Direction::Right]), None);
+        assert_eq!(tree.get(&vec![Direction::Right, Direction::Left, Direction::Right]), None);
     }
 }
