@@ -6,3 +6,4 @@ pub const LAMBDA: usize = 128;
 pub const NUM_WRITES_PER_EPOCH: usize = 2;
 pub const NU: usize = 4;
 pub const TREE_HEIGHT: usize = 4;
+pub const Z: usize = 2;
