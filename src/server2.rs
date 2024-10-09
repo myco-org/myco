@@ -17,8 +17,7 @@ impl Server2 {
 
     /// l is the leaf block
     pub fn read(&self, l: &Path) -> Vec<Block> {
-        // self.pathset.get(l).cloned().unwrap_or_default()
-        todo!()
+        self.pathset.get(l).cloned().unwrap_or_default()
     }
 
     pub fn write(&mut self, pathset: BinaryTree<Vec<Block>>) {
