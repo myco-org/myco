@@ -1,6 +1,5 @@
 use rand::{thread_rng, Rng};
 use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use tree::Direction;
 use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, rc::Rc};
 use thiserror::Error;
 
@@ -9,16 +8,13 @@ mod constants;
 mod server1;
 mod server2;
 mod tree;
+mod dtypes;
 
 // Import constants and server modules
 use constants::*;
 use server1::Server1;
 use server2::Server2;
-
-pub(crate) type Key = Vec<u8>;
-pub(crate) type Timestamp = u64;
-pub(crate) type Path = Vec<Direction>;
-pub(crate) type Metadata = Vec<(Path, Key, Timestamp)>;
+use dtypes::*;
 
 #[derive(Debug, Error)]
 enum CryptoError {
@@ -33,11 +29,11 @@ enum CryptoError {
 }
 
 pub(crate) fn u8_vec_to_path_vec(input: Vec<u8>) -> Path {
-    input
+    Path::new(input
         .into_iter()
         .flat_map(|byte| {
             (0..8).rev().map(move |i| ((byte >> i) & 1).into())
-        }).collect()
+        }).collect())
 }
 
 // Key Derivation Function (KDF)

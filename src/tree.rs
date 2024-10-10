@@ -1,30 +1,6 @@
 use crate::Path;
 use std::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Direction {
-    Left,
-    Right,
-}
-
-impl Into<u8> for Direction {
-    fn into(self) -> u8 {
-        match self {
-            Direction::Left => 0,
-            Direction::Right => 1,
-        }
-    }
-}
-
-impl From<u8> for Direction {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Direction::Left,
-            1 => Direction::Right,
-            _ => panic!("Invalid direction value"),
-        }
-    }
-}
+use crate::Direction;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BinaryTree<T> {
@@ -228,10 +204,10 @@ mod tests {
 
         // Test from_vec_with_paths for a small tree
         let small_items = vec![
-            (1, vec![Direction::Left, Direction::Left]),
-            (2, vec![Direction::Left, Direction::Right]),
-            (3, vec![Direction::Right, Direction::Left]),
-            (4, vec![Direction::Right, Direction::Right]),
+            (1, Path::new(vec![Direction::Left, Direction::Left])),
+            (2, Path::new(vec![Direction::Left, Direction::Right])),
+            (3, Path::new(vec![Direction::Right, Direction::Left])),
+            (4, Path::new(vec![Direction::Right, Direction::Right])),
         ];
         let small_tree = BinaryTree::from_vec_with_paths(small_items);
         println!("Small tree:\n{}", small_tree);
@@ -248,14 +224,14 @@ mod tests {
     fn test_large_binary_tree() {
         // Test from_vec_with_paths for a larger tree with height 4 and some null values
         let large_items = vec![
-            (1, vec![Direction::Left, Direction::Left, Direction::Left, Direction::Left]),
-            (2, vec![Direction::Left, Direction::Left, Direction::Right, Direction::Right]),
-            (3, vec![Direction::Left, Direction::Right, Direction::Left, Direction::Left]),
-            (4, vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left]),
-            (5, vec![Direction::Right, Direction::Left, Direction::Right, Direction::Right]),
-            (6, vec![Direction::Right, Direction::Right, Direction::Left, Direction::Left]),
-            (7, vec![Direction::Right, Direction::Right, Direction::Right, Direction::Left]),
-            (8, vec![Direction::Right, Direction::Right, Direction::Right, Direction::Right]),
+            (1, Path::new(vec![Direction::Left, Direction::Left, Direction::Left, Direction::Left])),
+            (2, Path::new(vec![Direction::Left, Direction::Left, Direction::Right, Direction::Right])),
+            (3, Path::new(vec![Direction::Left, Direction::Right, Direction::Left, Direction::Left])),
+            (4, Path::new(vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left])),
+            (5, Path::new(vec![Direction::Right, Direction::Left, Direction::Right, Direction::Right])),
+            (6, Path::new(vec![Direction::Right, Direction::Right, Direction::Left, Direction::Left])),
+            (7, Path::new(vec![Direction::Right, Direction::Right, Direction::Right, Direction::Left])),
+            (8, Path::new(vec![Direction::Right, Direction::Right, Direction::Right, Direction::Right])),
         ];
         let large_tree = BinaryTree::from_vec_with_paths(large_items);
         println!("Large tree:\n{}", large_tree);
@@ -285,31 +261,31 @@ mod tests {
     fn test_get() {
         // Create a tree with some values, including non-leaf nodes
         let items = vec![
-            (1, vec![Direction::Left, Direction::Left]),
-            (2, vec![Direction::Left, Direction::Right]),
-            (3, vec![Direction::Right, Direction::Left]),
-            (4, vec![Direction::Right, Direction::Right]),
-            (5, vec![Direction::Left]),  // Non-leaf node
-            (6, vec![Direction::Right]), // Non-leaf node
-            (7, vec![]),                 // Root node
+            (1, Path::new(vec![Direction::Left, Direction::Left])),
+            (2, Path::new(vec![Direction::Left, Direction::Right])),
+            (3, Path::new(vec![Direction::Right, Direction::Left])),
+            (4, Path::new(vec![Direction::Right, Direction::Right])),
+            (5, Path::new(vec![Direction::Left])),  // Non-leaf node
+            (6, Path::new(vec![Direction::Right])), // Non-leaf node
+            (7, Path::new(vec![])),                 // Root node
         ];
         let tree = BinaryTree::from_vec_with_paths(items);
         println!("Tree:\n{}", tree);
 
         // Test get method for existing paths (including non-leaf nodes)
-        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left]), Some(&1));
-        assert_eq!(tree.get(&vec![Direction::Left, Direction::Right]), Some(&2));
-        assert_eq!(tree.get(&vec![Direction::Right, Direction::Left]), Some(&3));
-        assert_eq!(tree.get(&vec![Direction::Right, Direction::Right]), Some(&4));
-        assert_eq!(tree.get(&vec![Direction::Left]), Some(&5));
-        assert_eq!(tree.get(&vec![Direction::Right]), Some(&6));
-        assert_eq!(tree.get(&vec![]), Some(&7));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left])), Some(&1));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Right])), Some(&2));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Left])), Some(&3));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Right])), Some(&4));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Left])), Some(&5));
+        assert_eq!(tree.get(&Path::new(vec![Direction::Right])), Some(&6));
+        assert_eq!(tree.get(&Path::new(vec![])), Some(&7));
 
         // Test get method for non-existing paths
-        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left, Direction::Left]), None);
-        assert_eq!(tree.get(&vec![Direction::Right, Direction::Right, Direction::Right]), None);
-        assert_eq!(tree.get(&vec![Direction::Left, Direction::Left, Direction::Right]), None);
-        assert_eq!(tree.get(&vec![Direction::Right, Direction::Left, Direction::Right]), None);
+        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left, Direction::Left])), None);
+        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Right, Direction::Right])), None);
+        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left, Direction::Right])), None);
+        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Left, Direction::Right])), None);
     }
 
     #[test]
@@ -322,43 +298,43 @@ mod tests {
         //     1  2 3 4
 
         let items = vec![
-            (7, vec![]), // Root node
-            (5, vec![Direction::Left]),
-            (6, vec![Direction::Right]),
-            (1, vec![Direction::Left, Direction::Left]),
-            (2, vec![Direction::Left, Direction::Right]),
-            (3, vec![Direction::Right, Direction::Left]),
-            (4, vec![Direction::Right, Direction::Right]),
+            (7, Path::new(vec![])), // Root node
+            (5, Path::new(vec![Direction::Left])),
+            (6, Path::new(vec![Direction::Right])),
+            (1, Path::new(vec![Direction::Left, Direction::Left])),
+            (2, Path::new(vec![Direction::Left, Direction::Right])),
+            (3, Path::new(vec![Direction::Right, Direction::Left])),
+            (4, Path::new(vec![Direction::Right, Direction::Right])),
         ];
         let tree = BinaryTree::from_vec_with_paths(items);
 
         // Test lca with various paths
         // Case 1: Path to a leaf node
-        let path1 = vec![Direction::Left, Direction::Left];
+        let path1 = Path::new(vec![Direction::Left, Direction::Left]);
         assert_eq!(tree.lca(&path1), Some(&1));
 
         // Case 2: Path partially exists (extended beyond existing nodes)
-        let path2 = vec![Direction::Left, Direction::Left, Direction::Left];
+        let path2 = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
         assert_eq!(tree.lca(&path2), Some(&1)); // Cannot go deeper, should return last valid node
 
         // Case 3: Path to another leaf node
-        let path3 = vec![Direction::Right, Direction::Right];
+        let path3 = Path::new(vec![Direction::Right, Direction::Right]);
         assert_eq!(tree.lca(&path3), Some(&4));
 
         // Case 4: Empty path should return the root
-        let path4: Path = vec![];
+        let path4 = Path::new(vec![]);
         assert_eq!(tree.lca(&path4), Some(&7));
 
         // Case 5: Non-leaf node
-        let path5 = vec![Direction::Left];
+        let path5 = Path::new(vec![Direction::Left]);
         assert_eq!(tree.lca(&path5), Some(&5));
 
         // Case 6: Path that does not exist at all
-        let path6 = vec![Direction::Left, Direction::Right, Direction::Left];
+        let path6 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
         assert_eq!(tree.lca(&path6), Some(&2)); // Stops at the last valid node
 
         // Case 7: Path to a non-existent right child
-        let path7 = vec![Direction::Right, Direction::Left, Direction::Left];
+        let path7 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
         assert_eq!(tree.lca(&path7), Some(&3)); // Stops at the last valid node
     }
 }

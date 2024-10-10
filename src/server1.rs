@@ -20,7 +20,7 @@ impl Server1 {
         let mut rng = thread_rng();
         let blocks_and_paths: Vec<(Vec<Block>, Path)> = (0..(NU * self.num_clients))
             .map(|_| {
-                let l: Path = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
+                let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
                 (self.s2.borrow_mut().read(&l), l)
             })
             .collect();
@@ -35,12 +35,13 @@ impl Server1 {
     pub fn write(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Vec<u8>, cw: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
         let l = prf(&l, &cw);
-        self.insert_message(ct, l, k_oram_t, t_exp);
+        self.insert_message(ct, Path::from(l), k_oram_t, t_exp);
         Ok(())
     }
 
-    pub fn insert_message(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Vec<u8>, t_exp: u64) {
-        let c_msg = crate::encrypt(&k_oram_t.clone(), &[&l[..], &ct[..]].concat()).expect("Failed to encrypt message");
+    pub fn insert_message(&mut self, ct: Vec<u8>, l: Path, k_oram_t: Vec<u8>, t_exp: u64) {
+        let c_msg = crate::encrypt(&k_oram_t.clone(), &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
+        let bucket = self.p.as_ref().map(|p| p.lca(&l)).expect("Failed to get bucket");
     }
 
     pub fn batch_write(&mut self) {
