@@ -116,6 +116,11 @@ pub(crate) struct Block {
     data: Vec<u8>,
 }
 
+pub(crate) fn new_bid() -> Vec<u8> {
+    let mut rng = thread_rng();
+    (0..D).map(|_| rng.gen()).collect()
+}
+
 impl Block {
     pub(crate) fn new(bid: Vec<u8>, data: Vec<u8>) -> Self {
         Block { bid, data }

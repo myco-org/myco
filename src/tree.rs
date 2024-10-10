@@ -122,37 +122,62 @@ impl<T> BinaryTree<T> {
         current.value.as_ref()
     }
 
-    pub fn lca(&self, path: &Path) -> Option<&T> {
+    pub fn lca(&self, path: &Path) -> Option<(&T, Path)> {
         let mut current = self;
+        let mut current_path = Path::new(Vec::new());
         
         for &direction in path {
             match direction {
                 Direction::Left => {
                     if let Some(left) = &current.left {
                         current = left;
+                        current_path.push(Direction::Left);
                     } else {
-                        // Cannot continue down path1, return current node
-                        return current.value.as_ref();
+                        // Cannot continue down path, return current node and path
+                        return current.value.as_ref().map(|v| (v, current_path));
                     }
                 }
                 Direction::Right => {
                     if let Some(right) = &current.right {
                         current = right;
+                        current_path.push(Direction::Right);
                     } else {
-                        // Cannot continue down path1, return current node
-                        return current.value.as_ref();
+                        // Cannot continue down path, return current node and path
+                        return current.value.as_ref().map(|v| (v, current_path));
                     }
                 }
             }
             
-            // If we've reached a leaf node, return it
+            // If we've reached a leaf node, return it and the path
             if current.left.is_none() && current.right.is_none() {
-                return current.value.as_ref();
+                return current.value.as_ref().map(|v| (v, current_path));
             }
         }
         
-        // If we've exhausted path1, return the last node
-        current.value.as_ref()
+        // If we've exhausted path, return the last node and the path
+        current.value.as_ref().map(|v| (v, current_path))
+    }
+
+    pub fn write(&mut self, value: T, path: Path) {
+        let mut current = self;
+        for direction in path {
+            match direction {
+                Direction::Left => {
+                    if current.left.is_none() {
+                        current.left = Some(Box::new(BinaryTree::new_empty()));
+                    }
+                    current = current.left.as_mut().unwrap();
+                }
+                Direction::Right => {
+                    if current.right.is_none() {
+                        current.right = Some(Box::new(BinaryTree::new_empty()));
+                    }
+                    current = current.right.as_mut().unwrap();
+                }
+            }
+        }
+    
+        current.value = Some(value);
     }
 }
 
@@ -311,30 +336,115 @@ mod tests {
         // Test lca with various paths
         // Case 1: Path to a leaf node
         let path1 = Path::new(vec![Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path1), Some(&1));
+        assert_eq!(tree.lca(&path1), Some((&1, path1.clone())));
 
         // Case 2: Path partially exists (extended beyond existing nodes)
         let path2 = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path2), Some(&1)); // Cannot go deeper, should return last valid node
+        assert_eq!(tree.lca(&path2), Some((&1, Path::new(vec![Direction::Left, Direction::Left]))));
 
         // Case 3: Path to another leaf node
         let path3 = Path::new(vec![Direction::Right, Direction::Right]);
-        assert_eq!(tree.lca(&path3), Some(&4));
+        assert_eq!(tree.lca(&path3), Some((&4, path3.clone())));
 
         // Case 4: Empty path should return the root
         let path4 = Path::new(vec![]);
-        assert_eq!(tree.lca(&path4), Some(&7));
+        assert_eq!(tree.lca(&path4), Some((&7, path4.clone())));
 
         // Case 5: Non-leaf node
         let path5 = Path::new(vec![Direction::Left]);
-        assert_eq!(tree.lca(&path5), Some(&5));
+        assert_eq!(tree.lca(&path5), Some((&5, path5.clone())));
 
         // Case 6: Path that does not exist at all
         let path6 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
-        assert_eq!(tree.lca(&path6), Some(&2)); // Stops at the last valid node
+        assert_eq!(tree.lca(&path6), Some((&2, Path::new(vec![Direction::Left, Direction::Right]))));
 
         // Case 7: Path to a non-existent right child
         let path7 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path7), Some(&3)); // Stops at the last valid node
+        assert_eq!(tree.lca(&path7), Some((&3, Path::new(vec![Direction::Right, Direction::Left]))));
+    }
+
+    #[test]
+    fn test_write_method() {
+        // Initialize a new BinaryTree with an initial root value
+        let mut tree = BinaryTree::new(0);
+
+        // Define paths for insertion
+        let path_left_left = Path::new(vec![Direction::Left, Direction::Left]);
+        let path_left_right = Path::new(vec![Direction::Left, Direction::Right]);
+        let path_right_left = Path::new(vec![Direction::Right, Direction::Left]);
+        let path_right_right = Path::new(vec![Direction::Right, Direction::Right]);
+
+        // Write values to the tree at specified paths
+        tree.write(1, path_left_left.clone());
+        tree.write(2, path_left_right.clone());
+        tree.write(3, path_right_left.clone());
+        tree.write(4, path_right_right.clone());
+
+        // Assert that the values are correctly written and retrievable
+        assert_eq!(
+            tree.get(&path_left_left),
+            Some(&1),
+            "Value at Left->Left should be 1"
+        );
+        assert_eq!(
+            tree.get(&path_left_right),
+            Some(&2),
+            "Value at Left->Right should be 2"
+        );
+        assert_eq!(
+            tree.get(&path_right_left),
+            Some(&3),
+            "Value at Right->Left should be 3"
+        );
+        assert_eq!(
+            tree.get(&path_right_right),
+            Some(&4),
+            "Value at Right->Right should be 4"
+        );
+
+        // Additionally, ensure that the root value remains unchanged
+        assert_eq!(
+            tree.get(&Path::new(vec![])),
+            Some(&0),
+            "Root value should remain 0"
+        );
+
+        // Test overwriting an existing value
+        tree.write(5, path_left_left.clone());
+        assert_eq!(
+            tree.get(&path_left_left),
+            Some(&5),
+            "Value at Left->Left should be updated to 5"
+        );
+
+        // Test writing to a deeper path
+        let path_left_left_left = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
+        tree.write(6, path_left_left_left.clone());
+        assert_eq!(
+            tree.get(&path_left_left_left),
+            Some(&6),
+            "Value at Left->Left->Left should be 6"
+        );
+
+        // Test writing to a new branch
+        let path_right_right_right = Path::new(vec![Direction::Right, Direction::Right, Direction::Right]);
+        tree.write(7, path_right_right_right.clone());
+        assert_eq!(
+            tree.get(&path_right_right_right),
+            Some(&7),
+            "Value at Right->Right->Right should be 7"
+        );
+
+        // Ensure other paths remain unaffected
+        assert_eq!(
+            tree.get(&Path::new(vec![Direction::Left])),
+            None,
+            "Intermediate path Left should have no value"
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![Direction::Right])),
+            None,
+            "Intermediate path Right should have no value"
+        );
     }
 }

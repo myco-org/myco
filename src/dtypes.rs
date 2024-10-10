@@ -38,6 +38,10 @@ impl Path {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn push(&mut self, direction: Direction) {
+        self.0.push(direction);
+    }
 }
 
 impl Iterator for Path {

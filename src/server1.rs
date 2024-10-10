@@ -1,7 +1,8 @@
 use crate::tree::BinaryTree;
-use crate::{constants::*, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
+use crate::{constants::*, new_bid, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
 use crate::server2::Server2;
 use rand::{thread_rng, Rng};
+use std::borrow::BorrowMut;
 use std::{cell::RefCell, rc::Rc};
 
 pub struct Server1 {
@@ -21,7 +22,7 @@ impl Server1 {
         let blocks_and_paths: Vec<(Vec<Block>, Path)> = (0..(NU * self.num_clients))
             .map(|_| {
                 let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
-                (self.s2.borrow_mut().read(&l), l)
+                (self.s2.borrow().read(&l), l)
             })
             .collect();
     
@@ -41,7 +42,12 @@ impl Server1 {
 
     pub fn insert_message(&mut self, ct: Vec<u8>, l: Path, k_oram_t: Vec<u8>, t_exp: u64) {
         let c_msg = crate::encrypt(&k_oram_t.clone(), &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
-        let bucket = self.p.as_ref().map(|p| p.lca(&l)).expect("Failed to get bucket");
+        let (bucket, path) = self.p.as_ref().map(|p| p.lca(&l).unwrap()).expect("Failed to get bucket");
+        let mut bucket = bucket.clone();
+        bucket.push(Block::new(new_bid(), c_msg));
+        self.p.as_mut().map(|p| p.borrow_mut().write(bucket, path));
+
+
     }
 
     pub fn batch_write(&mut self) {
