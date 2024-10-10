@@ -181,6 +181,42 @@ impl<T> BinaryTree<T> {
     }
 }
 
+impl<T> IntoIterator for BinaryTree<T> {
+    type Item = T;
+    type IntoIter = BinaryTreeIntoIterator<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        BinaryTreeIntoIterator {
+            stack: vec![self],
+        }
+    }
+}
+
+pub struct BinaryTreeIntoIterator<T> {
+    stack: Vec<BinaryTree<T>>,
+}
+
+impl<T> Iterator for BinaryTreeIntoIterator<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(mut node) = self.stack.pop() {
+            if let Some(right) = node.right.take() {
+                self.stack.push(*right);
+            }
+            if let Some(left) = node.left.take() {
+                self.stack.push(*left);
+            }
+            if let Some(value) = node.value.take() {
+                return Some(value);
+            }
+        }
+        None
+    }
+}
+
+
+
 impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn print_tree<T: fmt::Debug>(
@@ -446,5 +482,21 @@ mod tests {
             None,
             "Intermediate path Right should have no value"
         );
+    }
+
+
+    #[test]
+    fn test_binary_tree_into_iter() {
+        let mut tree = BinaryTree::new(1);
+        tree.left = Some(Box::new(BinaryTree::new(2)));
+        tree.right = Some(Box::new(BinaryTree::new(3)));
+        tree.left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(4)));
+        tree.left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(5)));
+        tree.right.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(6)));
+        tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(7)));
+
+        println!("Tree:\n{}", tree);
+        let flattened: Vec<i32> = tree.into_iter().collect();
+        assert_eq!(flattened, vec![1, 2, 4, 5, 3, 6, 7]);
     }
 }

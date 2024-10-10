@@ -46,11 +46,9 @@ impl Server1 {
         let mut bucket = bucket.clone();
         bucket.push(Block::new(new_bid(), c_msg));
         self.p.as_mut().map(|p| p.borrow_mut().write(bucket, path));
-
-
     }
 
     pub fn batch_write(&mut self) {
-
+            
     }
 }
