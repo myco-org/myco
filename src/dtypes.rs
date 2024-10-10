@@ -82,11 +82,8 @@ impl Into<Vec<u8>> for Path {
 impl From<Vec<u8>> for Path {
     fn from(bytes: Vec<u8>) -> Self {
         let mut directions = Vec::new();
-        for (byte_index, &byte) in bytes.iter().enumerate() {
+        for byte in bytes {
             for bit_position in 0..8 {
-                if byte_index * 8 + bit_position >= bytes.len() * 8 {
-                    break;
-                }
                 let bit = (byte >> bit_position) & 1;
                 directions.push(Direction::from(bit));
             }
@@ -134,7 +131,7 @@ mod tests {
             Direction::Left,  // bit 8 (spill into second byte)
         ]);
         let encoded: Vec<u8> = path.into();
-        assert_eq!(encoded, vec![0b01001101, 0b00000001], "Multiple Directions should encode correctly with spillover");
+        assert_eq!(encoded, vec![0b10110010, 0b00000000], "Multiple Directions should encode correctly with spillover");
     }
 
     #[test]
@@ -148,12 +145,12 @@ mod tests {
     fn test_from_vecu8_single_byte() {
         let bytes = vec![0b00000001];
         let path = Path::from(bytes);
-        assert_eq!(path.0, vec![Direction::Right], "Decoding Vec<u8> with single bit set should result in one Right direction");
+        assert_eq!(path.0, vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left], "Decoding Vec<u8> with single bit set should result in one Right direction");
     }
 
     #[test]
     fn test_from_vecu8_multiple_bytes() {
-        let bytes = vec![0b01001101, 0b00000001];
+        let bytes = vec![0b10110010, 0b00000000];
         let path = Path::from(bytes);
         assert_eq!(
             path.0,
@@ -167,6 +164,13 @@ mod tests {
                 Direction::Left,  // bit 6
                 Direction::Right, // bit 7
                 Direction::Left,  // bit 8
+                Direction::Left,  // bit 9
+                Direction::Left,  // bit 10
+                Direction::Left,  // bit 11
+                Direction::Left,  // bit 12
+                Direction::Left,  // bit 13
+                Direction::Left,  // bit 14
+                Direction::Left,  // bit 15
             ],
             "Decoding multiple bytes should result in the correct sequence of Directions"
         );
@@ -213,12 +217,12 @@ mod tests {
             Direction::Right, // 7
         ]);
         let encoded: Vec<u8> = path.into();
-        assert_eq!(encoded, vec![0b01010101], "Path with 8 Directions should encode to exactly one byte");
+        assert_eq!(encoded, vec![0b10101010], "Path with 8 Directions should encode to exactly one byte");
     }
 
     #[test]
     fn test_from_vecu8_exact_byte_length() {
-        let bytes = vec![0b01010101];
+        let bytes = vec![0b10101010];
         let path = Path::from(bytes);
         assert_eq!(
             path.0,
