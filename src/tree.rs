@@ -145,6 +145,39 @@ impl<T> BinaryTree<T> {
 
         current.value.as_ref()
     }
+
+    pub fn lca(&self, path: &Path) -> Option<&T> {
+        let mut current = self;
+        
+        for &direction in path {
+            match direction {
+                Direction::Left => {
+                    if let Some(left) = &current.left {
+                        current = left;
+                    } else {
+                        // Cannot continue down path1, return current node
+                        return current.value.as_ref();
+                    }
+                }
+                Direction::Right => {
+                    if let Some(right) = &current.right {
+                        current = right;
+                    } else {
+                        // Cannot continue down path1, return current node
+                        return current.value.as_ref();
+                    }
+                }
+            }
+            
+            // If we've reached a leaf node, return it
+            if current.left.is_none() && current.right.is_none() {
+                return current.value.as_ref();
+            }
+        }
+        
+        // If we've exhausted path1, return the last node
+        current.value.as_ref()
+    }
 }
 
 impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
@@ -277,5 +310,55 @@ mod tests {
         assert_eq!(tree.get(&vec![Direction::Right, Direction::Right, Direction::Right]), None);
         assert_eq!(tree.get(&vec![Direction::Left, Direction::Left, Direction::Right]), None);
         assert_eq!(tree.get(&vec![Direction::Right, Direction::Left, Direction::Right]), None);
+    }
+
+    #[test]
+    fn test_lca() {
+        // Create a binary tree:
+        //         7
+        //        / \
+        //       5   6
+        //      / \ / \
+        //     1  2 3 4
+
+        let items = vec![
+            (7, vec![]), // Root node
+            (5, vec![Direction::Left]),
+            (6, vec![Direction::Right]),
+            (1, vec![Direction::Left, Direction::Left]),
+            (2, vec![Direction::Left, Direction::Right]),
+            (3, vec![Direction::Right, Direction::Left]),
+            (4, vec![Direction::Right, Direction::Right]),
+        ];
+        let tree = BinaryTree::from_vec_with_paths(items);
+
+        // Test lca with various paths
+        // Case 1: Path to a leaf node
+        let path1 = vec![Direction::Left, Direction::Left];
+        assert_eq!(tree.lca(&path1), Some(&1));
+
+        // Case 2: Path partially exists (extended beyond existing nodes)
+        let path2 = vec![Direction::Left, Direction::Left, Direction::Left];
+        assert_eq!(tree.lca(&path2), Some(&1)); // Cannot go deeper, should return last valid node
+
+        // Case 3: Path to another leaf node
+        let path3 = vec![Direction::Right, Direction::Right];
+        assert_eq!(tree.lca(&path3), Some(&4));
+
+        // Case 4: Empty path should return the root
+        let path4: Path = vec![];
+        assert_eq!(tree.lca(&path4), Some(&7));
+
+        // Case 5: Non-leaf node
+        let path5 = vec![Direction::Left];
+        assert_eq!(tree.lca(&path5), Some(&5));
+
+        // Case 6: Path that does not exist at all
+        let path6 = vec![Direction::Left, Direction::Right, Direction::Left];
+        assert_eq!(tree.lca(&path6), Some(&2)); // Stops at the last valid node
+
+        // Case 7: Path to a non-existent right child
+        let path7 = vec![Direction::Right, Direction::Left, Direction::Left];
+        assert_eq!(tree.lca(&path7), Some(&3)); // Stops at the last valid node
     }
 }
