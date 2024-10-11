@@ -187,6 +187,23 @@ impl<T: Clone> BinaryTree<T> {
         current.value = Some(value);
     }
 
+    pub fn overwrite_tree(&mut self, other: &BinaryTree<T>) {
+        if let Some(value) = &other.value {
+            self.value = Some(value.clone());
+        }
+        if let Some(left) = &other.left {
+            if self.left.is_none() {
+                self.left = Some(Box::new(BinaryTree::new_empty()));
+            }
+            self.left.as_mut().unwrap().overwrite_tree(left);
+        }
+        if let Some(right) = &other.right {
+            if self.right.is_none() {
+                self.right = Some(Box::new(BinaryTree::new_empty()));
+            }
+            self.right.as_mut().unwrap().overwrite_tree(right);
+        }
+    }
 
     fn flatten_tree(&self) -> Vec<(T, Path)> {
         let mut flattened = Vec::new();
@@ -736,5 +753,193 @@ mod zip_flatten_tree_tests {
         ];
 
         assert_eq!(flattened, expected, "The zipped flattened trees with different structures do not match the expected output");
+    }
+}
+
+#[cfg(test)]
+mod overwrite_tree_tests {
+    use super::*;
+
+    #[test]
+    fn test_overwrite_tree_basic() {
+        // Create the original tree
+        // Structure:
+        //      1
+        //     / \
+        //    2   3
+        let mut original = BinaryTree::from_vec_with_paths(vec![
+            (1, Path::new(vec![])), // Root
+            (2, Path::new(vec![Direction::Left])),
+            (3, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Create the other tree to overwrite with
+        // Structure:
+        //      4
+        //     / \
+        //    5   6
+        let other = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root
+            (5, Path::new(vec![Direction::Left])),
+            (6, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Perform the overwrite
+        original.overwrite_tree(&other);
+
+        // Define the expected tree after overwrite
+        let expected = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root overwritten
+            (5, Path::new(vec![Direction::Left])), // Left child overwritten
+            (6, Path::new(vec![Direction::Right])), // Right child overwritten
+        ]);
+
+        // Assert that the original tree now matches the expected tree
+        assert_eq!(original, expected, "The tree was not correctly overwritten with the other tree");
+    }
+
+    #[test]
+    fn test_overwrite_tree_with_empty_other() {
+        // Create the original tree
+        // Structure:
+        //      1
+        //     / \
+        //    2   3
+        let mut original = BinaryTree::from_vec_with_paths(vec![
+            (1, Path::new(vec![])), // Root
+            (2, Path::new(vec![Direction::Left])),
+            (3, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Create the other tree (empty)
+        let other: BinaryTree<i32> = BinaryTree::new_empty();
+
+        // Perform the overwrite
+        original.overwrite_tree(&other);
+
+        // Define the expected tree after overwrite (only nodes in 'other' overwrite)
+        // Since 'other' is empty, original tree should remain unchanged
+        let expected = BinaryTree::from_vec_with_paths(vec![
+            (1, Path::new(vec![])), // Root
+            (2, Path::new(vec![Direction::Left])),
+            (3, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Assert that the original tree remains unchanged
+        assert_eq!(original, expected, "Overwriting with an empty tree should not alter the original tree");
+    }
+
+    #[test]
+    fn test_overwrite_tree_into_empty() {
+        // Create the original tree (empty)
+        let mut original: BinaryTree<i32> = BinaryTree::new_empty();
+
+        // Create the other tree to overwrite with
+        // Structure:
+        //      4
+        //     / \
+        //    5   6
+        let other = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root
+            (5, Path::new(vec![Direction::Left])),
+            (6, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Perform the overwrite
+        original.overwrite_tree(&other);
+
+        // Define the expected tree after overwrite
+        let expected = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root
+            (5, Path::new(vec![Direction::Left])),
+            (6, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Assert that the original tree now matches the expected tree
+        assert_eq!(original, expected, "Overwriting an empty tree with another tree should result in the other tree");
+    }
+
+    #[test]
+    fn test_overwrite_tree_different_structures() {
+        // Create the original tree
+        // Structure:
+        //      1
+        //     /
+        //    2
+        //   /
+        //  3
+        let mut original = BinaryTree::from_vec_with_paths(vec![
+            (1, Path::new(vec![])), // Root
+            (2, Path::new(vec![Direction::Left])),
+            (3, Path::new(vec![Direction::Left, Direction::Left])),
+        ]);
+
+        // Create the other tree to overwrite with
+        // Structure:
+        //      4
+        //       \
+        //        5
+        //         \
+        //          6
+        let other = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root
+            (5, Path::new(vec![Direction::Right])),
+            (6, Path::new(vec![Direction::Right, Direction::Right])),
+        ]);
+
+        // Perform the overwrite
+        original.overwrite_tree(&other);
+
+        // Define the expected tree after overwrite
+        let expected = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root overwritten
+            (5, Path::new(vec![Direction::Right])), // Right child added
+            (6, Path::new(vec![Direction::Right, Direction::Right])), // Right-Right child added
+            (2, Path::new(vec![Direction::Left])), // Existing left child remains as 'other' has no left
+            (3, Path::new(vec![Direction::Left, Direction::Left])), // Existing left-left child remains
+        ]);
+
+        // Since 'overwrite_tree' only overwrites existing paths and adds new ones from 'other',
+        // the left subtree should remain unchanged and the right subtree should be added from 'other'
+
+        // Assert that the original tree now matches the expected tree
+        assert_eq!(original, expected, "Overwriting with a tree of a different structure did not result in the expected tree");
+    }
+
+    #[test]
+    fn test_overwrite_tree_partial_overlap() {
+        // Create the original tree
+        // Structure:
+        //      1
+        //     / \
+        //    2   3
+        let mut original = BinaryTree::from_vec_with_paths(vec![
+            (1, Path::new(vec![])), // Root
+            (2, Path::new(vec![Direction::Left])),
+            (3, Path::new(vec![Direction::Right])),
+        ]);
+
+        // Create the other tree to overwrite with
+        // Structure:
+        //      4
+        //     / 
+        //    5   
+        let other = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root
+            (5, Path::new(vec![Direction::Left])), // Overwrites left child
+        ]);
+
+        // Perform the overwrite
+        original.overwrite_tree(&other);
+
+        // Define the expected tree after overwrite
+        let expected = BinaryTree::from_vec_with_paths(vec![
+            (4, Path::new(vec![])), // Root overwritten
+            (5, Path::new(vec![Direction::Left])), // Left child overwritten
+            (3, Path::new(vec![Direction::Right])), // Right child remains unchanged
+        ]);
+
+        // Assert that the original tree now matches the expected tree
+        assert_eq!(original, expected, "Overwriting with a tree that partially overlaps did not result in the expected tree");
     }
 }
