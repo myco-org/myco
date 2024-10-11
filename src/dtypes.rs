@@ -2,11 +2,11 @@ pub(crate) type Key = Vec<u8>;
 pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Path(Vec<Direction>);
-pub(crate) type Metadata = Vec<(Path, Key, Timestamp)>;
+pub struct Path(Vec<Direction>);
+pub type Metadata = Vec<(Path, Key, Timestamp)>;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum Direction {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Direction {
     Left,
     Right,
 }

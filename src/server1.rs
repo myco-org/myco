@@ -12,7 +12,7 @@ pub struct Server1 {
     pub s2: Rc<RefCell<Server2>>,
     pub p: Option<BinaryTree<Vec<Block>>>,
     pub pt: Option<BinaryTree<Path>>,
-    pub metadata_pt: Option<BinaryTree<Metadata>>, 
+    pub metadata_pt: Option<BinaryTree<Metadata>>,  
 }
 
 impl Server1 {
@@ -49,6 +49,12 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) {
-            
+        if self.p.is_none() {
+            return;
+        }
+
+        let mut p = self.p.clone().expect("Failed to get p");
+        let mut pt = self.pt.clone().expect("Failed to get pt");
+
     }
 }

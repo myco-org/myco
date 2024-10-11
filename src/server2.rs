@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::{tree::BinaryTree, Block, Key, Path};
 
 pub struct Server2 {

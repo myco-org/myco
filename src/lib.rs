@@ -51,6 +51,7 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
 }
 
 // Pseudorandom Function (PRF)
+// Make this an arbitrary-length PRF
 fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     let mut result = vec![0u8; 32];
     pbkdf2::derive(
