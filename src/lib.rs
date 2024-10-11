@@ -147,7 +147,7 @@ impl Client {
         Ok(())
     }
 
-    fn write(&self, msg: &[u8], recipient: &str, epoch: u64) -> Result<(), CryptoError> {
+    fn write(&self, msg: &[u8], recipient: &str, epoch: u64, cw: Vec<u8>) -> Result<(), CryptoError> {
         // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
 
@@ -161,8 +161,7 @@ impl Client {
         let ct = encrypt(k_msg, msg)?;
 
         // 5: return S1.Write(ct, ℓ, koram,t)
-        // self.s1.borrow_mut().write(ct, l, k_oram_t)
-        todo!()
+        self.s1.borrow_mut().write(ct, l, Key::new(k_oram_t), cw)
     }
 
     fn read(&self, sender: &str, epoch: u64) -> Result<Vec<u8>, CryptoError> {
@@ -177,17 +176,17 @@ impl Client {
         let l = prf(k_prf, &[&f[..], &sender.as_bytes()[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
-        let path = self.s2.borrow().read(&u8_vec_to_path_vec(l));
+        let path = self.s2.borrow().read(&Path::from(l.clone()));
 
         // 4: for block ∈ p do
         for block in path {
             // 5: if ℓ||ct ← Deckoram,t (block) succeeds then
             if let Ok(decrypted) = decrypt(&k_oram_t, &block.0) {
                 let (block_l, ct) = decrypted.split_at(32);
-                // if block_l == l {
-                //     // 6: return m ← Deckmsg (ct)
-                //     return decrypt(k_msg, ct);
-                // }
+                if block_l == l.as_slice() {
+                    // 6: return m ← Deckmsg (ct)
+                    return decrypt(k_msg, ct);
+                }
             }
         }
         // 8: end for
