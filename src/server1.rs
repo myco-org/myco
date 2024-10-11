@@ -13,9 +13,13 @@ pub struct Server1 {
     pub p: Option<BinaryTree<Vec<Block>>>,
     pub pt: Option<BinaryTree<Path>>,
     pub metadata_pt: Option<BinaryTree<Metadata>>,  
+    pub metadata: BinaryTree<Metadata>,
 }
 
 impl Server1 {
+    pub fn new(s2: Rc<RefCell<Server2>>) -> Self {
+        Self { epoch: 0, counter: 0, num_clients: 0, s2, p: None, pt: None, metadata_pt: None, metadata: BinaryTree::new_with_depth(D) }
+    }
 
     pub fn batch_init(&mut self, num_clients: usize, s2: Rc<RefCell<Server2>>) {
         let mut rng = thread_rng();
@@ -55,6 +59,21 @@ impl Server1 {
 
         let mut p = self.p.clone().expect("Failed to get p");
         let mut pt = self.pt.clone().expect("Failed to get pt");
+
+        p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
+            (0..Z).for_each(|b| {
+                metadata_bucket.as_ref().map(|bucket| {
+                    if let Some((l, k_oram_t, t_exp)) = bucket.get(b) {
+                        if self.epoch < *t_exp {
+                            if let Some(block) = bucket.get(b) {
+                                let c_msg = &block.1;
+                                // Use c_msg here as needed
+                            }
+                        }
+                    }
+                });
+            });
+        });
 
     }
 }

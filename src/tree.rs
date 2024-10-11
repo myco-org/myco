@@ -18,6 +18,13 @@ impl<T: Clone> BinaryTree<T> {
         BinaryTree { value: None, left: None, right: None }
     }
 
+    pub fn new_with_depth(depth: usize) -> Self {
+        if depth == 0 {
+            return BinaryTree::new_empty();
+        }
+        BinaryTree { value: None, left: Some(Box::new(BinaryTree::new_with_depth(depth - 1))), right: Some(Box::new(BinaryTree::new_with_depth(depth - 1))) }
+    }
+
     pub fn from_vec_with_paths(items: Vec<(T, Path)>) -> Self
     where
         T: Clone + Default,
@@ -181,87 +188,80 @@ impl<T: Clone> BinaryTree<T> {
     }
 
 
-    pub(crate) fn flatten_tree(node: &BinaryTree<T>, path: Path, flattened: &mut Vec<(T, Path)>) {
+    fn flatten_tree(&self) -> Vec<(T, Path)> {
+        let mut flattened = Vec::new();
+        Self::_flatten_tree(self, Path::new(vec![]), &mut flattened);
+        flattened
+    }
+
+    fn _flatten_tree(node: &BinaryTree<T>, path: Path, flattened: &mut Vec<(T, Path)>) {
         if let Some(right) = &node.right {
             let mut right_path = path.clone();
             right_path.push(Direction::Right);
-            Self::flatten_tree(right, right_path, flattened);
+            Self::_flatten_tree(right, right_path, flattened);
         }
         if let Some(left) = &node.left {
             let mut left_path = path.clone();
             left_path.push(Direction::Left);
-            Self::flatten_tree(left, left_path, flattened);
+            Self::_flatten_tree(left, left_path, flattened);
         }
         if let Some(value) = &node.value {
             flattened.push((value.clone(), path.clone()));
         }
     }
 
-    pub(crate) fn zip_flatten_tree(lhs: &Option<Box<BinaryTree<T>>>, rhs: &Option<Box<BinaryTree<T>>>, path: Path, flattened: &mut Vec<(Option<T>, Option<T>, Path)>) {
+    pub fn zip_flatten_tree<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
+        let mut flattened = Vec::new();
+        Self::_zip_flatten_tree(&Some(Box::new(self.clone())), &Some(Box::new(rhs.clone())), Path::new(vec![]), &mut flattened);
+        flattened
+    }
+
+    fn _zip_flatten_tree<S: Clone>(lhs: &Option<Box<BinaryTree<T>>>, rhs: &Option<Box<BinaryTree<S>>>, path: Path, flattened: &mut Vec<(Option<T>, Option<S>, Path)>) {
         match (lhs, rhs) {
             (Some(lhs), Some(rhs)) => {
-                flattened.push((lhs.value.clone(), rhs.value.clone(), path.clone()));
+                if lhs.value.is_some() {
+                    flattened.push((lhs.value.clone(), rhs.value.clone(), path.clone()));
+                }
 
                 if let (Some(left_lhs), Some(left_rhs)) = (&lhs.left, &rhs.left) {
                     let mut left_path = path.clone();
                     left_path.push(Direction::Left);
-                    Self::zip_flatten_tree(&Some(left_lhs.clone()), &Some(left_rhs.clone()), left_path, flattened);
+                    Self::_zip_flatten_tree(&Some(left_lhs.clone()), &Some(left_rhs.clone()), left_path, flattened);
                 }
                 else if let (Some(left_lhs), None) = (&lhs.left, &rhs.left) {
                     let mut left_path = path.clone();
                     left_path.push(Direction::Left);
-                    Self::zip_flatten_tree(&Some(left_lhs.clone()), &None, left_path, flattened);
-                }
-                else if let (None, Some(left_rhs)) = (&lhs.left, &rhs.left) {
-                    let mut left_path = path.clone();
-                    left_path.push(Direction::Left);
-                    Self::zip_flatten_tree(&None, &Some(left_rhs.clone()), left_path, flattened);
+                    Self::_zip_flatten_tree(&Some(left_lhs.clone()), &None, left_path, flattened);
                 }
 
                 if let (Some(right_lhs), Some(right_rhs)) = (&lhs.right, &rhs.right) {
                     let mut right_path = path.clone();
                     right_path.push(Direction::Right);
-                    Self::zip_flatten_tree(&Some(right_lhs.clone()), &Some(right_rhs.clone()), right_path, flattened);
+                    Self::_zip_flatten_tree(&Some(right_lhs.clone()), &Some(right_rhs.clone()), right_path, flattened);
                 }
                 else if let (Some(right_lhs), None) = (&lhs.right, &rhs.right) {
                     let mut right_path = path.clone();
                     right_path.push(Direction::Right);
-                    Self::zip_flatten_tree(&Some(right_lhs.clone()), &None, right_path, flattened);
-                }
-                else if let (None, Some(right_rhs)) = (&lhs.right, &rhs.right) {
-                    let mut right_path = path.clone();
-                    right_path.push(Direction::Right);
-                    Self::zip_flatten_tree(&None, &Some(right_rhs.clone()), right_path, flattened);
+                    Self::_zip_flatten_tree(&Some(right_lhs.clone()), &None, right_path, flattened);
                 }
 
             },
             (Some(lhs), None) => {
-                flattened.push((lhs.value.clone(), None, path.clone()));
+                if lhs.value.is_some() {
+                    flattened.push((lhs.value.clone(), None, path.clone()));
+                }
                 if let Some(left_lhs) = &lhs.left {
                     let mut left_path = path.clone();
                     left_path.push(Direction::Left);
-                    Self::zip_flatten_tree(&Some(left_lhs.clone()), &None, left_path, flattened);
+                    Self::_zip_flatten_tree(&Some(left_lhs.clone()), &None, left_path, flattened);
                 }
                 if let Some(right_lhs) = &lhs.right {
                     let mut right_path = path.clone();
                     right_path.push(Direction::Right);
-                    Self::zip_flatten_tree(&Some(right_lhs.clone()), &None, right_path, flattened);
+                    Self::_zip_flatten_tree(&Some(right_lhs.clone()), &None, right_path, flattened);
                 }
             }
-            (None, Some(rhs)) => {
-                flattened.push((None, rhs.value.clone(), path.clone()));
-                if let Some(left_rhs) = &rhs.left {
-                    let mut left_path = path.clone();
-                    left_path.push(Direction::Left);
-                    Self::zip_flatten_tree(&None, &Some(left_rhs.clone()), left_path, flattened);
-                }
-                if let Some(right_rhs) = &rhs.right {
-                    let mut right_path = path.clone();
-                    right_path.push(Direction::Right);
-                    Self::zip_flatten_tree(&None, &Some(right_rhs.clone()), right_path, flattened);
-                }
-            }
-            (None, None) => (),
+            (None, Some(_)) | (None, None) => (),
         }
     }
 }
@@ -272,7 +272,7 @@ impl<T: Clone + Display> IntoIterator for BinaryTree<T> {
 
     fn into_iter(self) -> Self::IntoIter {
         let mut flattened = Vec::new();
-        BinaryTree::<T>::flatten_tree(&self, Path::new(vec![]), &mut flattened);
+        BinaryTree::<T>::_flatten_tree(&self, Path::new(vec![]), &mut flattened);
         BinaryTreeIntoIterator { flattened }
     }
 }
@@ -606,7 +606,7 @@ mod zip_flatten_tree_tests {
         let mut flattened = Vec::new();
 
         // Call zip_flatten_tree with the roots of both trees
-        BinaryTree::<i32>::zip_flatten_tree(
+        BinaryTree::<i32>::_zip_flatten_tree(
             &Some(Box::new(tree1.clone())),
             &Some(Box::new(tree2.clone())),
             Path::new(vec![]),
@@ -649,7 +649,7 @@ mod zip_flatten_tree_tests {
         let mut flattened = Vec::new();
 
         // Call zip_flatten_tree with tree1 empty and tree2
-        BinaryTree::<i32>::zip_flatten_tree(
+        BinaryTree::<i32>::_zip_flatten_tree(
             &Some(Box::new(tree1.clone())),
             &Some(Box::new(tree2.clone())),
             Path::new(vec![]),
@@ -657,11 +657,7 @@ mod zip_flatten_tree_tests {
         );
 
         // Define the expected flattened result
-        let mut expected = vec![
-            (None, Some(4), Path::new(vec![])),
-            (None, Some(5), Path::new(vec![Direction::Left])),
-            (None, Some(6), Path::new(vec![Direction::Right])),
-        ];
+        let expected = vec![];
 
         // Assert that the flattened vector matches the expected result
         assert_eq!(flattened, expected, "The zipped flattened trees with one empty do not match the expected output");
@@ -679,7 +675,7 @@ mod zip_flatten_tree_tests {
         let mut flattened = Vec::new();
 
         // Call zip_flatten_tree with both trees empty
-        BinaryTree::<i32>::zip_flatten_tree(
+        BinaryTree::<i32>::_zip_flatten_tree(
             &Some(Box::new(tree1.clone())),
             &Some(Box::new(tree2.clone())),
             Path::new(vec![]),
@@ -687,7 +683,7 @@ mod zip_flatten_tree_tests {
         );
 
         // Define the expected flattened result (empty)
-        let expected: Vec<(Option<i32>, Option<i32>, Path)> = vec![(None, None, Path::new(vec![]))];
+        let expected = vec![];
 
         // Assert that the flattened vector matches the expected result
         assert_eq!(flattened, expected, "The zipped flattened trees when both are empty should result in an empty vector");
@@ -725,7 +721,7 @@ mod zip_flatten_tree_tests {
         let mut flattened = Vec::new();
 
         // Call zip_flatten_tree with tree1 and tree2
-        BinaryTree::<i32>::zip_flatten_tree(
+        BinaryTree::<i32>::_zip_flatten_tree(
             &Some(Box::new(tree1.clone())),
             &Some(Box::new(tree2.clone())),
             Path::new(vec![]),
@@ -733,12 +729,10 @@ mod zip_flatten_tree_tests {
         );
 
         // Define the expected flattened result
-        let mut expected = vec![
+        let expected = vec![
             (Some(1), Some(4), Path::new(vec![])),
             (Some(2), None, Path::new(vec![Direction::Left])),
             (Some(3), None, Path::new(vec![Direction::Left, Direction::Left])),
-            (None, Some(5), Path::new(vec![Direction::Right])),
-            (None, Some(6), Path::new(vec![Direction::Right, Direction::Right])),
         ];
 
         assert_eq!(flattened, expected, "The zipped flattened trees with different structures do not match the expected output");
