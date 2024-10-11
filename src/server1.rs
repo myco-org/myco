@@ -1,5 +1,5 @@
 use crate::tree::BinaryTree;
-use crate::{constants::*, new_bid, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
+use crate::{constants::*, decrypt, new_bid, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
 use crate::server2::Server2;
 use rand::{thread_rng, Rng};
 use std::borrow::BorrowMut;
@@ -40,15 +40,15 @@ impl Server1 {
     pub fn write(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Vec<u8>, cw: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
         let l = prf(&l, &cw);
-        self.insert_message(ct, Path::from(l), k_oram_t, t_exp);
+        self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
         Ok(())
     }
 
-    pub fn insert_message(&mut self, ct: Vec<u8>, l: Path, k_oram_t: Vec<u8>, t_exp: u64) {
+    pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Vec<u8>, t_exp: u64) {
         let c_msg = crate::encrypt(&k_oram_t.clone(), &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
         let (bucket, path) = self.p.as_ref().map(|p| p.lca(&l).unwrap()).expect("Failed to get bucket");
         let mut bucket = bucket.clone();
-        bucket.push(Block::new(new_bid(), c_msg));
+        bucket.push(Block::new(c_msg));
         self.p.as_mut().map(|p| p.borrow_mut().write(bucket, path));
     }
 
@@ -62,18 +62,19 @@ impl Server1 {
 
         p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
             (0..Z).for_each(|b| {
-                metadata_bucket.as_ref().map(|bucket| {
-                    if let Some((l, k_oram_t, t_exp)) = bucket.get(b) {
-                        if self.epoch < *t_exp {
-                            if let Some(block) = bucket.get(b) {
-                                let c_msg = &block.1;
-                                // Use c_msg here as needed
-                            }
-                        }
+                let bucket = bucket.as_ref().expect("Bucket should exist");
+                metadata_bucket.as_ref().map(|metadata_bucket| {
+                    let (l, k_oram_t, t_exp) = metadata_bucket.get(b).expect("Failed to get metadata bucket at index {b}");
+                    if self.epoch < *t_exp {
+                        let c_msg = bucket.get(b).expect("Failed to get bucket at index {b}");
+                        let ct = decrypt(&k_oram_t, &c_msg.0).expect("Failed to decrypt message");
+                        self.insert_message(&ct, l, k_oram_t, *t_exp);
                     }
                 });
             });
         });
+
+
 
     }
 }

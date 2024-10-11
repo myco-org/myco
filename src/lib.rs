@@ -112,10 +112,7 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct Block {
-    bid: Vec<u8>,
-    data: Vec<u8>,
-}
+pub(crate) struct Block(Vec<u8>);
 
 pub(crate) fn new_bid() -> Vec<u8> {
     let mut rng = thread_rng();
@@ -123,16 +120,13 @@ pub(crate) fn new_bid() -> Vec<u8> {
 }
 
 impl Block {
-    pub(crate) fn new(bid: Vec<u8>, data: Vec<u8>) -> Self {
-        Block { bid, data }
+    pub(crate) fn new(data: Vec<u8>) -> Self {
+        Block(data)
     }
 
     pub(crate) fn new_random() -> Self {
         let mut rng = thread_rng();
-        Block {
-            bid: (0..D).map(|_| rng.gen()).collect(),
-            data: (0..64).map(|_| rng.gen()).collect(),
-        }
+        Block((0..64).map(|_| rng.gen()).collect())
     }
 }
 
@@ -205,7 +199,7 @@ impl Client {
         // 4: for block ∈ p do
         for block in path {
             // 5: if ℓ||ct ← Deckoram,t (block) succeeds then
-            if let Ok(decrypted) = decrypt(&k_oram_t, &block.data) {
+            if let Ok(decrypted) = decrypt(&k_oram_t, &block.0) {
                 let (block_l, ct) = decrypted.split_at(32);
                 // if block_l == l {
                 //     // 6: return m ← Deckmsg (ct)
