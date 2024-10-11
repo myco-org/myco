@@ -1,6 +1,6 @@
 use rand::{rngs::ThreadRng, thread_rng, Rng, RngCore};
 
-use crate::{BUCKET_SIZE, LAMBDA};
+use crate::{BUCKET_SIZE, D, LAMBDA};
 
 pub(crate) type Timestamp = u64;
 
@@ -88,13 +88,16 @@ impl Into<Vec<u8>> for Path {
 
 impl From<Vec<u8>> for Path {
     fn from(bytes: Vec<u8>) -> Self {
-        let mut directions = Vec::new();
-        for byte in bytes {
-            for bit_position in 0..8 {
-                let bit = (byte >> bit_position) & 1;
-                directions.push(Direction::from(bit));
-            }
-        }
+        let directions: Vec<Direction> = bytes
+            .into_iter()
+            .flat_map(|byte| {
+                (0..8).map(move |bit_position| {
+                    (byte >> bit_position) & 1 
+                })
+            })
+            .take(D)
+            .map(Direction::from)
+            .collect();
         Path(directions)
     }
 }
@@ -281,12 +284,17 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid direction value")]
-    fn test_from_vecu8_invalid_bit() {
-        // This test will attempt to decode a byte with an invalid bit (e.g., bit set to 2)
-        // Since Direction::from will panic on invalid bits, this should trigger a panic
-        let bytes = vec![0b00000010]; // bit 1 set to 1 (Right), which is valid
-        // Modify Direction::from to handle invalid bits properly if needed
-        let _path = Path::from(bytes);
+    fn test_more_than_d_bits() {
+        let bytes = vec![0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101, 0b11110000, 0b00001111, 0b11001100, 0b00110011, 0b11111111, 0b00000000, 0b10101010, 0b01010101];
+        let path = Path::from(bytes.clone());
+
+        assert_eq!(path.0.len(), D, "Path length should be exactly D");
+        
+        for (i, direction) in path.0.iter().enumerate() {
+            let byte_index = i / 8;
+            let bit_position = i % 8;
+            let bit = (bytes[byte_index] >> bit_position) & 1;
+            assert_eq!(*direction, Direction::from(bit), "Direction at index {} should match the corresponding bit in the byte array", i);
+        }
     }
 }
