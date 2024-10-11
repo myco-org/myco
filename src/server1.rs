@@ -4,8 +4,6 @@ use crate::server2::Server2;
 use rand::seq::SliceRandom;
 use rand::{thread_rng, Rng, SeedableRng};
 use std::borrow::BorrowMut;
-use std::os::unix::thread;
-use std::{cell::RefCell, rc::Rc};
 
 pub struct Server1 {
     pub epoch: u64,
