@@ -1,4 +1,4 @@
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, Rng, RngCore};
 use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
 use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, rc::Rc};
 use thiserror::Error;
@@ -49,6 +49,8 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
         .map_err(|_| CryptoError::HkdfFillFailed)?;
     Ok(result)
 }
+
+
 
 // Pseudorandom Function (PRF)
 // Make this an arbitrary-length PRF
@@ -114,11 +116,6 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Block(Vec<u8>);
 
-pub(crate) fn new_bid() -> Vec<u8> {
-    let mut rng = thread_rng();
-    (0..D).map(|_| rng.gen()).collect()
-}
-
 impl Block {
     pub(crate) fn new(data: Vec<u8>) -> Self {
         Block(data)
@@ -126,7 +123,10 @@ impl Block {
 
     pub(crate) fn new_random() -> Self {
         let mut rng = thread_rng();
-        Block((0..64).map(|_| rng.gen()).collect())
+        let mut block = vec![0u8; BUCKET_SIZE / 8];
+        rng.fill_bytes(&mut block);
+
+        Block(block)
     }
 }
 

@@ -1,5 +1,5 @@
 use crate::tree::BinaryTree;
-use crate::{constants::*, decrypt, new_bid, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
+use crate::{constants::*, decrypt, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
 use crate::server2::Server2;
 use rand::{thread_rng, Rng};
 use std::borrow::BorrowMut;
@@ -73,8 +73,5 @@ impl Server1 {
                 });
             });
         });
-
-
-
     }
 }
