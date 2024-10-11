@@ -113,22 +113,6 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     Ok(in_out)
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct Block(Vec<u8>);
-
-impl Block {
-    pub(crate) fn new(data: Vec<u8>) -> Self {
-        Block(data)
-    }
-
-    pub(crate) fn new_random() -> Self {
-        let mut rng = thread_rng();
-        let mut block = vec![0u8; BUCKET_SIZE / 8];
-        rng.fill_bytes(&mut block);
-
-        Block(block)
-    }
-}
 
 struct Client {
     id: String,

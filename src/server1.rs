@@ -1,8 +1,10 @@
 use crate::tree::BinaryTree;
-use crate::{constants::*, decrypt, prf, Block, CryptoError, Key, Metadata, Path, Timestamp};
+use crate::{constants::*, decrypt, prf, Block, Bucket, CryptoError, Key, Metadata, Path, Timestamp};
 use crate::server2::Server2;
-use rand::{thread_rng, Rng};
+use rand::seq::SliceRandom;
+use rand::{thread_rng, Rng, SeedableRng};
 use std::borrow::BorrowMut;
+use std::os::unix::thread;
 use std::{cell::RefCell, rc::Rc};
 
 pub struct Server1 {
@@ -10,15 +12,15 @@ pub struct Server1 {
     pub counter: usize,
     pub num_clients: usize,
     pub s2: Rc<RefCell<Server2>>,
-    pub p: Option<BinaryTree<Vec<Block>>>,
-    pub pt: Option<BinaryTree<Path>>,
-    pub metadata_pt: Option<BinaryTree<Metadata>>,  
+    pub p: Option<BinaryTree<Bucket>>,
+    pub pt: Option<BinaryTree<Bucket>>,
+    pub metadata_pt: BinaryTree<Metadata>,  
     pub metadata: BinaryTree<Metadata>,
 }
 
 impl Server1 {
     pub fn new(s2: Rc<RefCell<Server2>>) -> Self {
-        Self { epoch: 0, counter: 0, num_clients: 0, s2, p: None, pt: None, metadata_pt: None, metadata: BinaryTree::new_with_depth(D) }
+        Self { epoch: 0, counter: 0, num_clients: 0, s2, p: None, pt: None, metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
     }
 
     pub fn batch_init(&mut self, num_clients: usize, s2: Rc<RefCell<Server2>>) {
@@ -31,8 +33,8 @@ impl Server1 {
             .collect();
     
         self.p = Some(BinaryTree::from_vec_with_paths(blocks_and_paths));
-        self.pt = None;
-        self.metadata_pt = None;
+        self.pt = Some(BinaryTree::new_empty());
+        self.metadata_pt = BinaryTree::new_empty();
         self.num_clients = num_clients;
         self.s2 = s2;
     }
@@ -56,11 +58,10 @@ impl Server1 {
         if self.p.is_none() {
             return;
         }
+        let mut rng = thread_rng();
+        let seed: [u8; 32] = rng.gen();
 
-        let mut p = self.p.clone().expect("Failed to get p");
-        let mut pt = self.pt.clone().expect("Failed to get pt");
-
-        p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
+        self.p.as_ref().unwrap().zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
             (0..Z).for_each(|b| {
                 let bucket = bucket.as_ref().expect("Bucket should exist");
                 metadata_bucket.as_ref().map(|metadata_bucket| {
@@ -73,5 +74,35 @@ impl Server1 {
                 });
             });
         });
+
+        self.pt.as_mut().unwrap().zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
+            let bucket = bucket.as_mut().expect("Bucket should exist");
+            let metadata_bucket = metadata_bucket.as_mut().expect("Metadata bucket should exist");
+            (bucket.len()..Z).for_each(|b| {
+                bucket[b] = Block::new_random();
+            });
+
+            let mut rng1 = rand::rngs::StdRng::from_seed(seed);
+            let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+            bucket.shuffle(&mut rng1);
+            metadata_bucket.shuffle(&mut rng2);
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_same_shuffle() {
+        let seed: [u8; 32] = [0; 32]; // Use a fixed seed
+        let mut rng1 = rand::rngs::StdRng::from_seed(seed);
+        let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+        let mut v1 = (0..10).collect::<Vec<_>>();
+        let mut v2 = v1.clone();
+        v1.shuffle(&mut rng1);
+        v2.shuffle(&mut rng2); // Use the same RNG instance
+        assert_eq!(v1, v2); // The vectors should be equal after shuffling with the same RNG
     }
 }

@@ -1,3 +1,7 @@
+use rand::{thread_rng, RngCore};
+
+use crate::BUCKET_SIZE;
+
 pub(crate) type Key = Vec<u8>;
 pub(crate) type Timestamp = u64;
 
@@ -95,6 +99,25 @@ impl From<Vec<u8>> for Path {
         Path(directions)
     }
 }
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Block(pub(crate) Vec<u8>);
+
+impl Block {
+    pub(crate) fn new(data: Vec<u8>) -> Self {
+        Block(data)
+    }
+
+    pub(crate) fn new_random() -> Self {
+        let mut rng = thread_rng();
+        let mut block = vec![0u8; BUCKET_SIZE / 8];
+        rng.fill_bytes(&mut block);
+
+        Block(block)
+    }
+}
+
+pub(crate) type Bucket = Vec<Block>;
 
 #[cfg(test)]
 mod tests {
