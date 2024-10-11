@@ -50,8 +50,6 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
     Ok(result)
 }
 
-
-
 // Pseudorandom Function (PRF)
 // Make this an arbitrary-length PRF
 fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
@@ -112,6 +110,7 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     in_out.truncate(in_out.len() - 16); // Remove the tag
     Ok(in_out)
 }
+
 
 
 struct Client {

@@ -26,8 +26,8 @@ impl Server2 {
         self.prf_keys.clone()
     }
 
-    pub fn add_prf_keys(&mut self, key: Key) {
-        self.prf_keys.push(key);
+    pub fn add_prf_keys(&mut self, key: &Key) {
+        self.prf_keys.push(key.clone());
         self.prf_keys.remove(0);
     }
 }

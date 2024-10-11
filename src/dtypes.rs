@@ -1,8 +1,7 @@
-use rand::{thread_rng, RngCore};
+use rand::{rngs::ThreadRng, thread_rng, Rng, RngCore};
 
-use crate::BUCKET_SIZE;
+use crate::{BUCKET_SIZE, LAMBDA};
 
-pub(crate) type Key = Vec<u8>;
 pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +117,20 @@ impl Block {
 }
 
 pub(crate) type Bucket = Vec<Block>;
+
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Key(pub(crate) Vec<u8>);
+
+impl Key {
+    pub(crate) fn new(bytes: Vec<u8>) -> Key {
+        Key(bytes)
+    }
+
+    pub(crate) fn random(rng: &mut ThreadRng) -> Key {
+        Key((0..LAMBDA / 8).map(|_| rng.gen()).collect())
+    }
+}
 
 #[cfg(test)]
 mod tests {
