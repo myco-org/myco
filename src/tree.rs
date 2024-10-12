@@ -1,5 +1,5 @@
 use crate::Path;
-use std::{fmt::{self, Display}, iter::Zip};
+use std::fmt::{self, Display};
 use crate::Direction;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -22,7 +22,8 @@ impl<T: Clone> BinaryTree<T> {
         if depth == 0 {
             return BinaryTree::new_empty();
         }
-        BinaryTree { value: None, left: Some(Box::new(BinaryTree::new_with_depth(depth - 1))), right: Some(Box::new(BinaryTree::new_with_depth(depth - 1))) }
+        let node = BinaryTree::new_with_depth(depth - 1);
+        BinaryTree { value: None, left: Some(Box::new(node.clone())), right: Some(Box::new(node)) }
     }
 
     pub fn from_vec_with_paths(items: Vec<(T, Path)>) -> Self
@@ -587,6 +588,140 @@ mod tests {
 
         let flattened: Vec<(i32, Path)> = tree.into_iter().collect();    
         assert_eq!(flattened, vec![(1, Path::new(vec![])), (2, Path::new(vec![Direction::Left])), (4, Path::new(vec![Direction::Left, Direction::Left])), (5, Path::new(vec![Direction::Left, Direction::Right])), (3, Path::new(vec![Direction::Right])), (6, Path::new(vec![Direction::Right, Direction::Left])), (7, Path::new(vec![Direction::Right, Direction::Right]))]);
+    }
+
+    #[test]
+    fn test_new_with_depth_zero() {
+        // Create a binary tree with depth 0
+        let tree = BinaryTree::<i32>::new_with_depth(0);
+
+        // Define the expected tree: a single root node with no children
+        let expected = BinaryTree::new_empty();
+
+        // Assert that the created tree matches the expected tree
+        assert_eq!(tree, expected, "A tree with depth 0 should be a single empty root node");
+    }
+
+    #[test]
+    fn test_new_with_depth_one() {
+        // Create a binary tree with depth 1
+        let tree = BinaryTree::<i32>::new_with_depth(1);
+
+        // Define the expected tree:
+        //      root
+        //     /    \
+        //  empty  empty
+        let expected = BinaryTree {
+            value: None,
+            left: Some(Box::new(BinaryTree::new_empty())),
+            right: Some(Box::new(BinaryTree::new_empty())),
+        };
+
+        // Assert that the created tree matches the expected tree
+        assert_eq!(tree, expected, "A tree with depth 1 should have a root with two empty children");
+    }
+
+    #[test]
+    fn test_new_with_depth_two() {
+        // Create a binary tree with depth 2
+        let tree = BinaryTree::<i32>::new_with_depth(2);
+
+        // Define the expected tree structure:
+        //         root
+        //        /    \
+        //    empty    empty
+        //    /  \      /  \
+        // empty empty empty empty
+        let empty = BinaryTree::new_empty();
+        let child = BinaryTree {
+            value: None,
+            left: Some(Box::new(empty.clone())),
+            right: Some(Box::new(empty.clone())),
+        };
+
+        let expected = BinaryTree {
+            value: None,
+            left: Some(Box::new(child.clone())),
+            right: Some(Box::new(child)),
+        };
+
+        // Assert that the created tree matches the expected tree
+        assert_eq!(tree, expected, "A tree with depth 2 should have a root with two children, each having two empty children");
+    }
+
+    #[test]
+    fn test_new_with_depth_three() {
+        // Create a binary tree with depth 3
+        let tree = BinaryTree::<i32>::new_with_depth(3);
+
+        // Define the expected tree structure:
+        // Level 0: root
+        // Level 1: root.left, root.right
+        // Level 2: root.left.left, root.left.right, root.right.left, root.right.right
+        // All leaves at level 2 have their own empty children
+
+        let empty = BinaryTree::new_empty();
+        let level2 = BinaryTree {
+            value: None,
+            left: Some(Box::new(empty.clone())),
+            right: Some(Box::new(empty.clone())),
+        };
+
+        let level1 = BinaryTree {
+            value: None,
+            left: Some(Box::new(level2.clone())),
+            right: Some(Box::new(level2.clone())),
+        };
+
+        let expected = BinaryTree {
+            value: None,
+            left: Some(Box::new(level1.clone())),
+            right: Some(Box::new(level1)),
+        };
+
+        // Assert that the created tree matches the expected tree
+        assert_eq!(tree, expected, "A tree with depth 3 should have a root with two children, each having two children, and so on");
+    }
+
+    #[test]
+    fn test_new_with_depth_large() {
+        // Create a binary tree with a larger depth
+        let depth = 4;
+        let tree = BinaryTree::<i32>::new_with_depth(depth);
+
+        // Function to recursively count the number of nodes in the tree
+        fn count_nodes<T>(tree: &BinaryTree<T>) -> usize {
+            let mut count = 1; // Count the current node
+            if let Some(left) = &tree.left {
+                count += count_nodes(left);
+            }
+            if let Some(right) = &tree.right {
+                count += count_nodes(right);
+            }
+            count
+        }
+
+        // The expected number of nodes for a binary tree of depth d is 2^(d+1) - 1
+        let expected_nodes = (2_usize.pow((depth + 1) as u32)) - 1;
+        let actual_nodes = count_nodes(&tree);
+
+        // Assert that the number of nodes matches the expected count
+        assert_eq!(actual_nodes, expected_nodes, "A tree with depth {} should have {} nodes, but found {}", depth, expected_nodes, actual_nodes);
+    }
+
+    #[test]
+    fn test_new_with_depth_negative() {
+        // Since depth is usize, negative values are not possible.
+        // This test ensures that providing depth 0 works as expected.
+
+        // Create a binary tree with depth 0
+        let tree = BinaryTree::<i32>::new_with_depth(0);
+
+        // The tree should be a single empty root node
+        let expected = BinaryTree::new_empty();
+
+        // Assert that the created tree matches the expected tree
+        assert_eq!(tree, expected, "A tree with depth 0 should be a single empty root node");
     }
 }
 

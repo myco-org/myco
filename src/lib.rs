@@ -1,6 +1,6 @@
 use rand::{thread_rng, Rng, RngCore};
 use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, rc::Rc};
+use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
 use thiserror::Error;
 
 // Add module declarations
@@ -116,12 +116,12 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
 struct Client {
     id: String,
     keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
-    s1: Rc<RefCell<Server1>>,
-    s2: Rc<RefCell<Server2>>,
+    s1: Arc<Mutex<Server1>>,
+    s2: Arc<Mutex<Server2>>,
 }
 
 impl Client {
-    fn new(id: String, s1: Rc<RefCell<Server1>>, s2: Rc<RefCell<Server2>>) -> Self {
+    fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
             id,
             keys: HashMap::new(),
@@ -147,7 +147,9 @@ impl Client {
         Ok(())
     }
 
-    fn write(&self, msg: &[u8], recipient: &str, epoch: u64, cw: Vec<u8>) -> Result<(), CryptoError> {
+    fn write(&mut self, msg: &[u8], recipient: &str, cw: Vec<u8>) -> Result<(), CryptoError> {
+        let epoch  = self.s1.lock().unwrap().epoch;
+
         // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
 
@@ -161,10 +163,12 @@ impl Client {
         let ct = encrypt(k_msg, msg)?;
 
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.s1.borrow_mut().write(ct, l, Key::new(k_oram_t), cw)
+        self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
     }
 
-    fn read(&self, sender: &str, epoch: u64) -> Result<Vec<u8>, CryptoError> {
+    fn read(&self, sender: &str) -> Result<Vec<u8>, CryptoError> {
+        let epoch  = self.s1.lock().unwrap().epoch;
+
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
         let k_oram_t =
@@ -176,7 +180,7 @@ impl Client {
         let l = prf(k_prf, &[&f[..], &sender.as_bytes()[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
-        let path = self.s2.borrow().read(&Path::from(l.clone()));
+        let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
 
         // 4: for block ∈ p do
         for block in path {
@@ -211,63 +215,77 @@ impl Client {
         let mut rng = thread_rng();
         let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        self.s2.borrow().read(&u8_vec_to_path_vec(ll))
+        self.s2.lock().unwrap().read(&u8_vec_to_path_vec(ll))
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     #[test]
-//     fn test_kdf() {
-//         let key = b"original key";
-//         let info1 = "purpose1";
-//         let info2 = "purpose2";
+    #[test]
+    fn test_kdf() {
+        let key = b"original key";
+        let info1 = "purpose1";
+        let info2 = "purpose2";
 
-//         let derived1 = kdf(key, info1).expect("KDF failed");
-//         let derived2 = kdf(key, info2).expect("KDF failed");
+        let derived1 = kdf(key, info1).expect("KDF failed");
+        let derived2 = kdf(key, info2).expect("KDF failed");
 
-//         assert_ne!(derived1, derived2);
-//         assert_eq!(derived1.len(), 32);
-//         assert_eq!(derived2.len(), 32);
-//     }
+        assert_ne!(derived1, derived2);
+        assert_eq!(derived1.len(), 32);
+        assert_eq!(derived2.len(), 32);
+    }
 
-//     #[test]
-//     fn test_prf() {
-//         let key = b"prf key";
-//         let input1 = b"input1";
-//         let input2 = b"input2";
+    #[test]
+    fn test_prf() {
+        let key = b"prf key";
+        let input1 = b"input1";
+        let input2 = b"input2";
 
-//         let output1 = prf(key, input1);
-//         let output2 = prf(key, input2);
+        let output1 = prf(key, input1);
+        let output2 = prf(key, input2);
 
-//         assert_ne!(output1, output2);
-//         assert_eq!(output1.len(), 32);
-//         assert_eq!(output2.len(), 32);
-//     }
+        assert_ne!(output1, output2);
+        assert_eq!(output1.len(), 32);
+        assert_eq!(output2.len(), 32);
+    }
 
-//     #[test]
-//     fn test_encrypt_decrypt() {
-//         let key = kdf(b"encryption key", "enc").expect("KDF failed");
-//         let message = b"Hello, World!";
+    #[test]
+    fn test_encrypt_decrypt() {
+        let key = kdf(b"encryption key", "enc").expect("KDF failed");
+        let message = b"Hello, World!";
 
-//         let ciphertext = encrypt(&key, message).expect("Encryption failed");
-//         let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
+        let ciphertext = encrypt(&key, message).expect("Encryption failed");
+        let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
 
-//         assert_ne!(ciphertext, message);
-//         assert_eq!(decrypted, message);
-//     }
+        assert_ne!(ciphertext, message);
+        assert_eq!(decrypted, message);
+    }
 
-//     #[test]
-//     fn test_client_setup() {
-//         let s1 = Server1::new(0, Rc::new(RefCell::new(Server2::new())));
-//         let s1 = Rc::new(RefCell::new(s1));
-//         let s2 = Rc::new(RefCell::new(Server2::new()));
-//         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-//         alice.setup(&["Bob".to_string()]).expect("Setup failed");
-//         assert!(alice.keys.contains_key("Bob"));
-//     }
+    #[test]
+    fn test_client_setup() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1, s2);
+        alice.setup(&["Bob".to_string()]).expect("Setup failed");
+        assert!(alice.keys.contains_key("Bob"));
+    }
+
+    #[test]
+    fn test_write_and_read() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
+        alice.setup(&["Bob".to_string()]).expect("Setup failed");
+
+        s1.lock().unwrap().batch_init(1);
+
+        alice.write(&[1, 2, 3], "Bob", vec![]).expect("Write failed");
+        let msg = alice.read("Bob").expect("Read failed");
+        assert_eq!(msg, vec![1, 2, 3]);
+    }
+}
 
 //     #[test]
 //     fn test_write_and_read() {

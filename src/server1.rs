@@ -1,16 +1,25 @@
-use crate::tree::BinaryTree;
-use crate::{constants::*, decrypt, prf, Block, Bucket, CryptoError, Key, Metadata, Path, Timestamp};
-use crate::server2::Server2;
-use rand::seq::SliceRandom;
-use rand::{thread_rng, Rng, SeedableRng};
-use std::borrow::BorrowMut;
+use std::{borrow::BorrowMut, cell::RefCell, rc::Rc, sync::{Arc, Mutex}};
 
+use crate::{
+    tree::BinaryTree,
+    constants::*,
+    decrypt,
+    prf,
+    Block,
+    Bucket,
+    CryptoError,
+    Key,
+    Metadata,
+    Path,
+    server2::Server2,
+};
+use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub counter: usize,
     pub num_clients: usize,
-    pub s2: Server2,
+    pub s2: Arc<Mutex<Server2>>,
     pub p: Option<BinaryTree<Bucket>>,
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,  
@@ -18,16 +27,16 @@ pub struct Server1 {
 }
 
 impl Server1 {
-    pub fn new(s2: Server2) -> Self {
+    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
         Self { epoch: 0, k_s1_t: Key::new(vec![]), counter: 0, num_clients: 0, s2, p: None, pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
     }
 
-    pub fn batch_init(&mut self, num_clients: usize, s2: Server2) {
+    pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = thread_rng();
         let blocks_and_paths: Vec<(Vec<Block>, Path)> = (0..(NU * self.num_clients))
             .map(|_| {
                 let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
-                (self.s2.read(&l), l)
+                (self.s2.lock().unwrap().read(&l), l)
             })
             .collect();
     
@@ -35,7 +44,6 @@ impl Server1 {
         self.pt = BinaryTree::new_empty();
         self.metadata_pt = BinaryTree::new_empty();
         self.num_clients = num_clients;
-        self.s2 = s2;
         self.k_s1_t = Key::random(&mut rng);
     }
 
@@ -48,10 +56,11 @@ impl Server1 {
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
         let c_msg = crate::encrypt(&k_oram_t.0, &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
-        let (bucket, path) = self.p.as_ref().map(|p| p.lca(&l).unwrap()).expect("Failed to get bucket");
+        println!("self.pt:\n{}", self.pt);
+        let (bucket, path) = self.pt.lca(&l).unwrap();
         let mut bucket = bucket.clone();
         bucket.push(Block::new(c_msg));
-        self.p.as_mut().map(|p| p.borrow_mut().write(bucket, path));
+        self.metadata_pt.write(vec![(l.clone(), k_oram_t.clone(), t_exp)], path);
     }
 
     pub fn batch_write(&mut self) {
@@ -89,8 +98,9 @@ impl Server1 {
         });
 
         self.metadata.overwrite_tree(&self.metadata_pt);
-        self.s2.write(self.pt.clone());
-        self.s2.add_prf_keys(&self.k_s1_t);
+        let mut server2 = self.s2.lock().unwrap();
+        server2.write(self.pt.clone());
+        server2.add_prf_keys(&self.k_s1_t);
         self.epoch += 1;
     }
 }

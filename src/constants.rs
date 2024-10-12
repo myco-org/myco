@@ -1,6 +1,6 @@
 pub const BUCKET_SIZE: usize = 4;
 pub const DELTA: u64 = 10;
-pub const D: usize = 32;
+pub const D: usize = 20;
 pub const EVICTION_RATE: usize = 2;
 pub const LAMBDA: usize = 128;
 pub const NUM_WRITES_PER_EPOCH: usize = 2;
