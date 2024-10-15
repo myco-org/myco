@@ -45,15 +45,7 @@ impl Server1 {
     }
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
-        let c_msg = encrypt(&k_oram_t.0, &ct).expect("Failed to encrypt message");
-        let c_msg_dec = decrypt(&k_oram_t.0, &c_msg).expect("Failed to decrypt message");
-
-        println!("ct {:?}", ct);
-        println!("c_msg {:?}", c_msg);
-        println!("c_msg_dec {:?}", c_msg_dec);
-
-        println!("[insert_message] k_oram_t {:?}", k_oram_t);
-
+        let c_msg = encrypt(&k_oram_t.0, &ct).unwrap();
         let (bucket, path) = self.pt.lca(&l).unwrap();
         bucket.push(Block::new(c_msg));
         self.metadata_pt.write(vec![(l.clone(), k_oram_t.clone(), t_exp)], path);
@@ -63,7 +55,6 @@ impl Server1 {
         if self.p.is_none() {
             return;
         }
-        println!("self.pt:\n{}", self.pt);
         let mut rng = thread_rng();
         let seed: [u8; 32] = rng.gen();
 
@@ -98,7 +89,7 @@ impl Server1 {
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
-        // self.epoch += 1;
+        self.epoch += 1;
     }
 }
 

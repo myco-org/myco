@@ -1,6 +1,9 @@
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use ::hkdf::Hkdf;
 use rand::{thread_rng, Rng, RngCore};
-use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
+use ring::{digest, hkdf, pbkdf2};
+use sha2::Sha256;
+use std::{collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
 use thiserror::Error;
 
 // Add module declarations
@@ -64,58 +67,59 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     result
 }
 
-// Encryption
+const NONCE_SIZE: usize = 12; // GCM standard nonce size is 12 bytes
+
 fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
-    let mut sealing_key: aead::LessSafeKey = aead::LessSafeKey::new(key);
-
-    let mut nonce = [0u8; 12];
-    ring::rand::SystemRandom::new()
-        .fill(&mut nonce)
+    // Step 1: Derive a 32-byte key for AES-256 using HKDF
+    let hk = Hkdf::<Sha256>::new(None, key);
+    let mut aes_key = [0u8; 32];
+    hk.expand(b"encryption_key", &mut aes_key)
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
-    let mut in_out = message.to_vec();
-    sealing_key
-        .seal_in_place_append_tag(
-            aead::Nonce::assume_unique_for_key(nonce),
-            aead::Aad::empty(),
-            &mut in_out,
-        )
+    // Step 2: Initialize AES-256-GCM with the derived key
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::EncryptionFailed)?;
+    
+    // Step 3: Generate a random nonce
+    let mut rng = rand::thread_rng();
+    let nonce = rng.gen::<[u8; NONCE_SIZE]>();
+    let nonce = Nonce::from_slice(&nonce);
+    
+    // Step 4: Encrypt the data
+    let ciphertext = cipher.encrypt(nonce, message)
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
-    let mut result = nonce.to_vec();
-    result.extend(in_out);
-    Ok(result)
+    // Concatenate the nonce and ciphertext
+    Ok([nonce.as_slice(), ciphertext.as_slice()].concat())
 }
 
-// Decryption
-fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    if ciphertext.len() < 12 + 16 {
+fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if encrypted_data.len() < NONCE_SIZE {
         return Err(CryptoError::DecryptionFailed);
     }
 
-    let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-    let opening_key = aead::LessSafeKey::new(key);
-
-    let nonce = aead::Nonce::try_assume_unique_for_key(&ciphertext[..12])
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-    let mut in_out = ciphertext[12..].to_vec();
-
-    opening_key
-        .open_in_place(nonce, aead::Aad::empty(), &mut in_out)
+    // Step 1: Derive the same 32-byte key for AES-256 using HKDF
+    let hk = Hkdf::<Sha256>::new(None, key);
+    let mut aes_key = [0u8; 32];
+    hk.expand(b"encryption_key", &mut aes_key)
         .map_err(|_| CryptoError::DecryptionFailed)?;
 
-    in_out.truncate(in_out.len() - 16); // Remove the tag
-    Ok(in_out)
+    // Step 2: Initialize AES-256-GCM with the derived key
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::DecryptionFailed)?;
+
+    // Step 3: Separate the nonce and the ciphertext
+    let (nonce, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let nonce = Nonce::from_slice(nonce);
+
+    // Step 4: Decrypt the data
+    cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| CryptoError::DecryptionFailed)
 }
 
 
 
 struct Client {
     id: String,
-    keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
+    keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
     s1: Arc<Mutex<Server1>>,
     s2: Arc<Mutex<Server2>>,
 }
@@ -130,28 +134,20 @@ impl Client {
         }
     }
 
-    fn setup(&mut self, other_clients: &[String]) -> Result<(), CryptoError> {
-        // 2: for k ∈ K: do
-        for client in other_clients {
-            // 3: kmsg = KDF(k, “MSG”)
-            let k: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
-            let k_msg = kdf(&k, "MSG")?;
-            // 4: koram = KDF(k, “ORAM”)
-            let k_oram = kdf(&k, "ORAM")?;
-            // 5: kprf = KDF(k, “PRF”)
-            let k_prf = kdf(&k, "PRF")?;
-            // 6: client.keys[k] = {kmsg, koram, kprf }
-            self.keys.insert(client.clone(), (k_msg, k_oram, k_prf));
-        }
-        // 7: end for
+    fn setup(&mut self, k: &Key) -> Result<(), CryptoError> {
+        let k_msg = kdf(&k.0, "MSG")?;
+        let k_oram = kdf(&k.0, "ORAM")?;
+        let k_prf = kdf(&k.0, "PRF")?;
+        self.keys.insert(k.clone(), (k_msg, k_oram, k_prf));
         Ok(())
     }
 
-    fn write(&mut self, msg: &[u8], recipient: &str, cw: Vec<u8>) -> Result<(), CryptoError> {
+    fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), CryptoError> {
         let epoch  = self.s1.lock().unwrap().epoch;
+        let cw = self.id.clone().into_bytes();
 
         // 1: {kmsg, koram, kprf } ← keys[k]
-        let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
+        let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
 
         // 2: ℓ = PRF_kprf (t)
         let l = prf(k_prf, &epoch.to_be_bytes());
@@ -166,31 +162,25 @@ impl Client {
         self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
     }
 
-    fn read(&self, sender: &str) -> Result<Vec<u8>, CryptoError> {
-        let epoch  = self.s1.lock().unwrap().epoch;
+    fn read(&self, k: &Key) -> Result<Vec<u8>, CryptoError> {
+        let epoch  = self.s1.lock().unwrap().epoch - 1;
 
         // 1: koram,t = KDF(koram, t)
-        let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
-        println!("[client.read] epoch {:?}", epoch);
+        let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t =
             kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
-        println!("[client.read] k_oram_t {:?}", k_oram_t);
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
         // 2: ℓ = PRFkprf (t)
-        let l = prf(k_prf, &[&f[..], &sender.as_bytes()[..]].concat());
+        let l = prf(k_prf, &[&f[..], &self.id.as_bytes()[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
 
-        println!("Path {:?}", path);
-
         // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
-                println!("trying to decrypt {:?}", block.0);
-                println!("k_oram_t {:?}", k_oram_t);
                 if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
                     return decrypt(k_msg, &c_msg);
                 }
@@ -202,15 +192,11 @@ impl Client {
 
     fn fake_write(&self) -> Result<(), CryptoError> {
         let mut rng = thread_rng();
-        // 1: ℓ′ $ ←− {0, 1}D
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        // 2: k′ oram,t $ ←− {0, 1}λ
-        let k_oram_t: Vec<u8> = (0..LAMBDA).map(|_| rng.gen()).collect();
-        // 3: ct′ $ ←− {0, 1}|ct|
+        let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
-        // 4: S1.Write(ct′, ℓ′, k′ oram,t)
-        // self.s1.borrow_mut().write(ct, l, k_oram_t)
-        todo!()
+        let cw = self.id.clone().into_bytes();
+        self.s1.lock().unwrap().write(ct, l, k_oram_t, cw)
     }
 
     fn fake_read(&self) -> Vec<Bucket> {
@@ -225,6 +211,17 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn try_to_decrypt_data_on_path(path: Vec<Bucket>, k_oram_t: &Key, k_msg: &Key) -> Result<Vec<u8>, CryptoError> {
+        for bucket in path {
+            for block in bucket {
+                if let Ok(c_msg)= decrypt(&k_oram_t.0, &block.0) {
+                    return decrypt(&k_msg.0, &c_msg);
+                }
+            }
+        }
+        Err(CryptoError::DecryptionFailed)
+    }
 
     #[test]
     fn test_kdf() {
@@ -271,8 +268,9 @@ mod tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1, s2);
-        alice.setup(&["Bob".to_string()]).expect("Setup failed");
-        assert!(alice.keys.contains_key("Bob"));
+        let k = Key::random(&mut thread_rng());
+        alice.setup(&k).expect("Setup failed");
+        assert!(alice.keys.contains_key(&k));
     }
 
     #[test]
@@ -280,43 +278,70 @@ mod tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
-        alice.setup(&["Bob".to_string()]).expect("Setup failed");
+        let k = Key::random(&mut thread_rng());
+        alice.setup(&k).expect("Setup failed");
 
         s1.lock().unwrap().batch_init(1);
 
-        alice.write(&[1, 2, 3], "Bob", vec![]).expect("Write failed");
+        alice.write(&[1, 2, 3], &k).expect("Write failed");
         s1.lock().unwrap().batch_write();
 
-        let msg = alice.read("Bob").expect("Read failed");
+        let msg = alice.read(&k).expect("Read failed");
         assert_eq!(msg, vec![1, 2, 3]);
     }
 
-//     #[test]
-//     fn test_write_and_read() {
-//         let (s1, s2) = (
-//             Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
-//             Rc::new(RefCell::new(Server2::new())),
-//         );
-//         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-//         let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+    #[test]
+    fn test_fake_operations() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
 
-//         alice.setup(&["Bob".to_string()]).expect("Setup failed");
-//         bob.setup(&["Alice".to_string()]).expect("Setup failed");
-//     }
+        s1.lock().unwrap().batch_init(1);
 
-//     #[test]
-//     fn test_fake_operations() {
-//         let (s1, s2) = (
-//             Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
-//             Rc::new(RefCell::new(Server2::new())),
-//         );
-//         let alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        // Perform multiple fake writes
+        for _ in 0..10 {
+            alice.fake_write().expect("Fake write failed");
+        }
 
-//         alice.fake_write().expect("Fake write failed");
+        // Check that the server state hasn't changed
+        let server_state_before = s1.lock().unwrap().pt.clone();
+        s1.lock().unwrap().batch_write();
+        let server_state_after = s1.lock().unwrap().pt.clone();
+        assert_eq!(server_state_before, server_state_after, "Server state changed after fake writes");
 
-//         let fake_read = alice.fake_read();
-//         assert_eq!(fake_read.len(), 32);
-//     }
+        // Perform multiple fake reads
+        for _ in 0..10 {
+            let fake_read = alice.fake_read();
+            assert_eq!(fake_read.len(), 1, "Fake read should return a single block");
+            assert!(!fake_read[0].is_empty(), "Fake read block should be full of dummy data");
+        }
+        // Perform a real write and read operation
+        let k = Key::random(&mut thread_rng());
+        alice.setup(&k).expect("Setup failed");
+
+        alice.write(&[1, 2, 3], &k).expect("Real write failed");
+        s1.lock().unwrap().batch_write();
+
+        let real_read = alice.read(&k).expect("Real read failed");
+        assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
+
+        // Extract keys for later use in decryption attempts
+        let (k_msg, k_oram, _) = alice.keys.get(&k).unwrap();
+        let epoch = s1.lock().unwrap().epoch;
+        let k_oram_t = Key::new(kdf(k_oram, &epoch.to_string()).expect("KDF failed"));
+        let k_msg = Key::new(k_msg.clone());
+
+        // Perform more fake reads, ensure they don't return the real data
+        for _ in 0..10 {
+            let fake_read = alice.fake_read();
+            let decrypted = try_to_decrypt_data_on_path(fake_read, &k_oram_t, &k_msg);
+            assert!(decrypted.is_err(), "Fake read should not return real data");
+        }
+
+        // Verify that a real read returns the correct data
+        let real_read = alice.read(&k).expect("Real read failed");
+        assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
+    }
 
 //     #[test]
 //     fn test_server1_batch_write() {
@@ -355,4 +380,37 @@ mod tests {
 //         let total_blocks: usize = s2.tree.iter().map(|level| level.len()).sum();
 //         assert!(total_blocks < (1 << TREE_HEIGHT) * BUCKET_SIZE);
 //     }
+
+    #[test]
+    fn test_encrypt_decrypt_different_key_sizes() {
+        use crate::{encrypt, decrypt, Key};
+        use rand::{thread_rng, RngCore};
+
+        let mut rng = thread_rng();
+
+        // Test cases with 128-bit and 256-bit key sizes
+        let key_sizes = [128, 256]; // AES-128, AES-256
+        let message = b"Hello, World!";
+
+        for &key_size in &key_sizes {
+            // Generate a random key of the specified size
+            let mut key_data = vec![0u8; key_size];
+            rng.fill_bytes(&mut key_data);
+            let key = Key::new(key_data);
+
+            // Encrypt the message
+            let encrypted = encrypt(&key.0, message).expect("Encryption failed");
+
+            // Decrypt the message
+            let decrypted = decrypt(&key.0, &encrypted).expect("Decryption failed");
+
+            // Check if the decrypted message matches the original
+            assert_eq!(decrypted, message, "Decryption failed for key size: {} bits", key_size * 8);
+
+            // Ensure the encrypted message is different from the original
+            assert_ne!(encrypted, message, "Encryption didn't change the message for key size: {} bits", key_size * 8);
+        }
+    }
+
+
 }

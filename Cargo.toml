@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 aes-gcm = "0.10.3"
 hex = "0.4.3"
+hkdf = "0.12.4"
 rand = "0.8.5"
 ring = "0.17.8"
 sha2 = "0.10.8"

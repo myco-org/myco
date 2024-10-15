@@ -3,9 +3,9 @@ use crate::{Direction, Path};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BinaryTree<T> {
-    value: Option<T>,
-    left: Option<Box<BinaryTree<T>>>,
-    right: Option<Box<BinaryTree<T>>>,
+    pub(crate) value: Option<T>,
+    pub(crate) left: Option<Box<BinaryTree<T>>>,
+    pub(crate) right: Option<Box<BinaryTree<T>>>,
 }
 
 impl<T: Clone> BinaryTree<T> {
