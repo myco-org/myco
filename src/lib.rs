@@ -1,7 +1,7 @@
 // Standard library imports
 use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 // External crate imports
 use rand::{thread_rng, Rng};
@@ -167,9 +167,9 @@ struct Client {
     /// A map of keys for communicating with other clients.
     keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
     /// A reference to Server1.
-    s1: Arc<Mutex<Server1>>,
+    s1: Arc<RwLock<Server1>>,
     /// A reference to Server2.
-    s2: Arc<Mutex<Server2>>,
+    s2: Arc<RwLock<Server2>>,
 }
 
 impl Client {
@@ -184,7 +184,7 @@ impl Client {
     /// # Returns
     ///
     /// A new Client instance.
-    fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
+    fn new(id: String, s1: Arc<RwLock<Server1>>, s2: Arc<RwLock<Server2>>) -> Self {
         Client {
             id,
             keys: HashMap::new(),
@@ -225,12 +225,12 @@ impl Client {
     ///
     /// A Result indicating success or failure.
     fn write(&mut self, msg: &[u8], recipient: &str, cw: Vec<u8>) -> Result<(), McOsamError> {
-        let epoch  = self.s1.lock().unwrap().epoch;
+        let epoch = self.s1.read().map_err(|_| McOsamError::ServerLockFailed)?.epoch;
         let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
         let l = prf(k_prf, &epoch.to_be_bytes());
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
         let ct = encrypt(k_msg, msg)?;
-        self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
+        self.s1.write().map_err(|_| McOsamError::ServerLockFailed)?.write(ct, l, Key::new(k_oram_t), cw)
     }
 
     /// Reads a message from another client.
@@ -243,12 +243,12 @@ impl Client {
     ///
     /// A Result containing either the decrypted message or an error.
     fn read(&self, sender: &str) -> Result<Vec<u8>, McOsamError> {
-        let epoch  = self.s1.lock().unwrap().epoch;
+        let epoch = self.s1.read().map_err(|_| McOsamError::ServerLockFailed)?.epoch;
         let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
         let f = prf(&k_prf, &epoch.to_be_bytes());
         let l = prf(k_prf, &[&f[..], &sender.as_bytes()[..]].concat());
-        let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
+        let path = self.s2.read().map_err(|_| McOsamError::ServerLockFailed)?.read(&Path::from(l.clone()));
 
         for bucket in path {
             for block in bucket {
@@ -281,7 +281,7 @@ impl Client {
     fn fake_read(&self) -> Vec<Bucket> {
         let mut rng = thread_rng();
         let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        self.s2.lock().unwrap().read(&u8_vec_to_path_vec(ll))
+        self.s2.read().unwrap().read(&u8_vec_to_path_vec(ll))
     }
 }
 
@@ -331,8 +331,8 @@ mod tests {
 
     #[test]
     fn test_client_setup() {
-        let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(RwLock::new(Server2::new()));
+        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1, s2);
         alice.setup(&["Bob".to_string()]).expect("Setup failed");
         assert!(alice.keys.contains_key("Bob"));
@@ -340,15 +340,15 @@ mod tests {
 
     #[test]
     fn test_write_and_read() {
-        let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(RwLock::new(Server2::new()));
+        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
         alice.setup(&["Bob".to_string()]).expect("Setup failed");
 
-        s1.lock().unwrap().batch_init(1);
+        s1.write().unwrap().batch_init(1).expect("Batch init failed");
 
         alice.write(&[1, 2, 3], "Bob", vec![]).expect("Write failed");
-        s1.lock().unwrap().batch_write();
+        s1.write().unwrap().batch_write().expect("Batch write failed");
 
         let msg = alice.read("Bob").expect("Read failed");
         assert_eq!(msg, vec![1, 2, 3]);

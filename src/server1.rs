@@ -1,6 +1,6 @@
 // Standard library imports
 use std::cmp::min;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 // External crate imports
 use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
@@ -12,7 +12,7 @@ use crate::{
     encrypt,
     prf,
     server2::Server2,
-    tree::BinaryTree,
+    tree::{BinaryTree, BalancedBinaryTree},
     Block,
     Bucket,
     McOsamError,
@@ -30,54 +30,47 @@ pub struct Server1 {
     /// The number of clients in the system.
     pub num_clients: usize,
     /// A reference to Server2.
-    pub s2: Arc<Mutex<Server2>>,
+    pub s2: Arc<RwLock<Server2>>,
     /// The main ORAM tree.
-    pub p: Option<BinaryTree<Bucket>>,
+    pub p: Option<BalancedBinaryTree<Bucket>>,
     /// The temporary ORAM tree.
-    pub pt: BinaryTree<Bucket>,
+    pub pt: BalancedBinaryTree<Bucket>,
     /// The temporary metadata tree.
-    pub metadata_pt: BinaryTree<Metadata>,  
+    pub metadata_pt: BalancedBinaryTree<Metadata>,  
     /// The main metadata tree.
-    pub metadata: BinaryTree<Metadata>,
+    pub metadata: BalancedBinaryTree<Metadata>,
 }
 
 impl Server1 {
     /// Creates a new Server1 instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `s2` - A reference to Server2.
-    ///
-    /// # Returns
-    ///
-    /// A new Server1 instance.
-    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
-        Self { epoch: 0, k_s1_t: Key::new(vec![]), num_clients: 0, s2, p: None, pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
+    pub fn new(s2: Arc<RwLock<Server2>>) -> Self {
+        Self { 
+            epoch: 0, 
+            k_s1_t: Key::new(vec![]), 
+            num_clients: 0, 
+            s2, 
+            p: None, 
+            pt: BalancedBinaryTree::new_empty(), 
+            metadata_pt: BalancedBinaryTree::new_empty(), 
+            metadata: BalancedBinaryTree::new_with_depth(D) 
+        }
     }
 
     /// Initializes the server for a batch of clients.
-    ///
-    /// # Arguments
-    ///
-    /// * `num_clients` - The number of clients to initialize for.
-    ///
-    /// # Returns
-    ///
-    /// A Result indicating success or failure.
     pub fn batch_init(&mut self, num_clients: usize) -> Result<(), McOsamError> {
         let mut rng = thread_rng();
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * self.num_clients))
             .map(|_| {
                 let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
-                let s2 = self.s2.lock()
+                let s2 = self.s2.read()
                     .map_err(|_| McOsamError::ServerLockFailed)?;
                 Ok((s2.read(&l), l))
             })
             .collect::<Result<Vec<_>, McOsamError>>()?;
     
-        self.p = Some(BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
-        self.pt = BinaryTree::new(vec![]);
-        self.metadata_pt = BinaryTree::new(vec![]);
+        self.p = Some(BalancedBinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
+        self.pt = BalancedBinaryTree::new(vec![]);
+        self.metadata_pt = BalancedBinaryTree::new(vec![]);
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
         Ok(())
@@ -138,7 +131,7 @@ impl Server1 {
         let mut rng = thread_rng();
         let seed: [u8; 32] = rng.gen();
 
-        self.p.as_ref().unwrap().zip_flatten_tree(&self.metadata).iter().try_for_each(|(bucket, metadata_bucket, path)| -> Result<(), McOsamError> {
+        self.p.as_ref().unwrap().zip(&self.metadata).iter().try_for_each(|(bucket, metadata_bucket, path)| -> Result<(), McOsamError> {
             (0..Z).try_for_each(|b| -> Result<(), McOsamError> {
                 let bucket = bucket.as_ref()
                     .ok_or(McOsamError::BucketAccessFailed)?;
@@ -157,7 +150,7 @@ impl Server1 {
             })
         })?;
 
-        self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().try_for_each(|(bucket, metadata_bucket, path)| -> Result<(), McOsamError> {
+        self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(|(bucket, metadata_bucket, path)| -> Result<(), McOsamError> {
             let bucket = bucket.as_mut()
                 .ok_or(McOsamError::BucketAccessFailed)?;
             let metadata_bucket = metadata_bucket.as_mut()
@@ -174,7 +167,7 @@ impl Server1 {
         })?;
 
         self.metadata.overwrite_tree(&self.metadata_pt);
-        let mut server2 = self.s2.lock()
+        let mut server2 = self.s2.write()
             .map_err(|_| McOsamError::ServerLockFailed)?;
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
