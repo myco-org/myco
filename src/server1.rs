@@ -1,4 +1,4 @@
-use std::{borrow::BorrowMut, cell::RefCell, rc::Rc, sync::{Arc, Mutex}};
+use std::{borrow::BorrowMut, cell::RefCell, cmp::min, path, rc::Rc, sync::{Arc, Mutex}};
 
 use crate::{
     tree::BinaryTree,
@@ -33,16 +33,16 @@ impl Server1 {
 
     pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = thread_rng();
-        let blocks_and_paths: Vec<(Vec<Block>, Path)> = (0..(NU * self.num_clients))
+        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * self.num_clients))
             .map(|_| {
                 let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
                 (self.s2.lock().unwrap().read(&l), l)
             })
             .collect();
     
-        self.p = Some(BinaryTree::from_vec_with_paths(blocks_and_paths));
-        self.pt = BinaryTree::new_empty();
-        self.metadata_pt = BinaryTree::new_empty();
+        self.p = Some(BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
+        self.pt = BinaryTree::new(vec![]);
+        self.metadata_pt = BinaryTree::new(vec![]);
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }
@@ -56,9 +56,7 @@ impl Server1 {
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
         let c_msg = crate::encrypt(&k_oram_t.0, &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
-        println!("self.pt:\n{}", self.pt);
         let (bucket, path) = self.pt.lca(&l).unwrap();
-        let mut bucket = bucket.clone();
         bucket.push(Block::new(c_msg));
         self.metadata_pt.write(vec![(l.clone(), k_oram_t.clone(), t_exp)], path);
     }
@@ -67,6 +65,7 @@ impl Server1 {
         if self.p.is_none() {
             return;
         }
+        println!("self.pt:\n{}", self.pt);
         let mut rng = thread_rng();
         let seed: [u8; 32] = rng.gen();
 
@@ -87,7 +86,7 @@ impl Server1 {
         self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
             let bucket = bucket.as_mut().expect("Bucket should exist");
             let metadata_bucket = metadata_bucket.as_mut().expect("Metadata bucket should exist");
-            (bucket.len()..Z).for_each(|b| {
+            (0..min(bucket.len(), Z)).for_each(|b| {
                 bucket[b] = Block::new_random();
             });
 

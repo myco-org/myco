@@ -1,4 +1,4 @@
-use crate::{tree::BinaryTree, Block, Key, Path};
+use crate::{tree::BinaryTree, Block, Bucket, Key, Path};
 
 pub struct Server2 {
     pathset: BinaryTree<Vec<Block>>,
@@ -14,8 +14,8 @@ impl Server2 {
     }
 
     /// l is the leaf block
-    pub fn read(&self, l: &Path) -> Vec<Block> {
-        self.pathset.get(l).cloned().unwrap_or_default()
+    pub fn read(&self, l: &Path) -> Vec<Bucket> {
+        self.pathset.get_all_nodes_along_path(l)
     }
 
     pub fn write(&mut self, pathset: BinaryTree<Vec<Block>>) {

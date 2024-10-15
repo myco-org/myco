@@ -183,13 +183,13 @@ impl Client {
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
 
         // 4: for block ∈ p do
-        for block in path {
-            // 5: if ℓ||ct ← Deckoram,t (block) succeeds then
-            if let Ok(decrypted) = decrypt(&k_oram_t, &block.0) {
-                let (block_l, ct) = decrypted.split_at(32);
-                if block_l == l.as_slice() {
-                    // 6: return m ← Deckmsg (ct)
-                    return decrypt(k_msg, ct);
+        for bucket in path {
+            for block in bucket {
+                if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
+                    let (block_l, ct) = c_msg.split_at(32);
+                    if block_l == l.as_slice() {
+                        return decrypt(k_msg, ct);
+                    }
                 }
             }
         }
@@ -210,7 +210,7 @@ impl Client {
         todo!()
     }
 
-    fn fake_read(&self) -> Vec<Block> {
+    fn fake_read(&self) -> Vec<Bucket> {
         // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = thread_rng();
         let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
@@ -282,10 +282,11 @@ mod tests {
         s1.lock().unwrap().batch_init(1);
 
         alice.write(&[1, 2, 3], "Bob", vec![]).expect("Write failed");
+        s1.lock().unwrap().batch_write();
+
         let msg = alice.read("Bob").expect("Read failed");
         assert_eq!(msg, vec![1, 2, 3]);
     }
-}
 
 //     #[test]
 //     fn test_write_and_read() {
@@ -351,4 +352,4 @@ mod tests {
 //         let total_blocks: usize = s2.tree.iter().map(|level| level.len()).sum();
 //         assert!(total_blocks < (1 << TREE_HEIGHT) * BUCKET_SIZE);
 //     }
-// }
+}
