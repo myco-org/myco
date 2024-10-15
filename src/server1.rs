@@ -7,7 +7,6 @@ use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
-    pub counter: usize,
     pub num_clients: usize,
     pub s2: Arc<Mutex<Server2>>,
     pub p: Option<BinaryTree<Bucket>>,
@@ -18,18 +17,19 @@ pub struct Server1 {
 
 impl Server1 {
     pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
-        Self { epoch: 0, k_s1_t: Key::new(vec![]), counter: 0, num_clients: 0, s2, p: None, pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
+        Self { epoch: 0, k_s1_t: Key::new(vec![]), num_clients: 0, s2, p: None, pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = thread_rng();
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * self.num_clients))
+        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * num_clients))
             .map(|_| {
                 let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
-                (self.s2.lock().unwrap().read(&l), l)
+                let bucket = self.s2.lock().unwrap().read(&l);
+                (bucket, l)
             })
             .collect();
-    
+
         self.p = Some(BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
         self.pt = BinaryTree::new(vec![]);
         self.metadata_pt = BinaryTree::new(vec![]);
@@ -58,9 +58,11 @@ impl Server1 {
         let mut rng = thread_rng();
         let seed: [u8; 32] = rng.gen();
 
+        println!("s1.p: {:?}", self.p.as_ref().unwrap());
+
         self.p.as_ref().unwrap().zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
-            (0..Z).for_each(|b| {
-                let bucket = bucket.as_ref().expect("Bucket should exist");
+            let bucket = bucket.as_ref().expect("Bucket should exist");
+            (0..bucket.len()).for_each(|b| {
                 metadata_bucket.as_ref().map(|metadata_bucket| {
                     let (l, k_oram_t, t_exp) = metadata_bucket.get(b).expect("Failed to get metadata bucket at index {b}");
                     if self.epoch < *t_exp {
@@ -89,6 +91,11 @@ impl Server1 {
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
+
+        println!("s1.pt: {}", self.pt);
+        println!("s1.p: {}", self.p.as_ref().unwrap());
+        println!("s1.metadata_pt: {}", self.metadata_pt);
+
         self.epoch += 1;
     }
 }

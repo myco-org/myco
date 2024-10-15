@@ -172,8 +172,10 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
+        let k_s1_t = self.s1.lock().unwrap().k_s1_t.clone();
+
         // 2: ℓ = PRFkprf (t)
-        let l = prf(k_prf, &[&f[..], &self.id.as_bytes()[..]].concat());
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &self.id.as_bytes()[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
@@ -252,7 +254,8 @@ mod tests {
     }
 
     #[test]
-    fn test_encrypt_decrypt() {
+    fn test_encrypt_decrypt_with_kdf_key() {
+        // Test with KDF-derived key
         let key = kdf(b"encryption key", "enc").expect("KDF failed");
         let message = b"Hello, World!";
 
@@ -261,6 +264,19 @@ mod tests {
 
         assert_ne!(ciphertext, message);
         assert_eq!(decrypted, message);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_with_random_key() {
+        // Test with random key
+        let random_key = Key::random(&mut thread_rng());
+        let random_message = b"Random message";
+
+        let random_ciphertext = encrypt(&random_key.0, random_message).expect("Encryption failed");
+        let random_decrypted = decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
+
+        assert_ne!(random_ciphertext, random_message);
+        assert_eq!(random_decrypted, random_message);
     }
 
     #[test]
@@ -343,43 +359,112 @@ mod tests {
         assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
     }
 
-//     #[test]
-//     fn test_server1_batch_write() {
-//         let mut s1 = Server1::new(0, Rc::new(RefCell::new(Server2::new())));
-//         let dummy_data = vec![0; 64];
-//         let dummy_l = vec![0; 32];
-//         let dummy_k_oram_t = vec![0; 32];
+    #[test]
+    fn test_multiple_writes_and_reads() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
+        
+        s1.lock().unwrap().batch_init(1);
 
-//         for _ in 0..NUM_WRITES_PER_EPOCH {
-//             s1.write(dummy_data.clone(), dummy_l.clone(), dummy_k_oram_t.clone())
-//                 .expect("Server1 write failed");
-//         }
+        let num_operations = 50;
+        let mut keys = Vec::new();
+        let mut messages = Vec::new();
 
-//         assert_eq!(s1.epoch, 1);
-//         assert_eq!(s1.counter, 0);
-//         assert!(s1.write_queue.is_empty());
-//     }
+        // Perform multiple writes
+        for i in 0..num_operations {
+            let k = Key::random(&mut thread_rng());
+            alice.setup(&k).expect("Setup failed");
+            keys.push(k);
 
-//     #[test]
-//     fn test_server2_eviction() {
-//         let mut s2 = Server2::new();
-//         let dummy_block = Block {
-//             bid: vec![0; 32],
-//             data: vec![1; 64],
-//         };
+            let msg = vec![i as u8, (i + 1) as u8, (i + 2) as u8];
+            alice.write(&msg, &keys[i]).expect("Write failed");
+            messages.push(msg);
+        }
 
-//         // Fill the tree
-//         for _ in 0..(1 << TREE_HEIGHT) * BUCKET_SIZE {
-//             s2.write(vec![dummy_block.clone()]);
-//         }
+        s1.lock().unwrap().batch_write();
 
-//         // Perform eviction
-//         s2.evict();
+        // Perform multiple reads and verify
+        for i in 0..num_operations {
+            let read_msg = alice.read(&keys[i]).expect("Read failed");
+            assert_eq!(read_msg, messages[i], "Read message doesn't match written message for key {}", i);
+        }
 
-//         // Check if eviction happened (this is a simple check, might need adjustment)
-//         let total_blocks: usize = s2.tree.iter().map(|level| level.len()).sum();
-//         assert!(total_blocks < (1 << TREE_HEIGHT) * BUCKET_SIZE);
-//     }
+        // Write and read again to ensure consistency
+        for i in 0..num_operations {
+            let new_msg = vec![(i * 2) as u8, (i * 2 + 1) as u8, (i * 2 + 2) as u8];
+            alice.write(&new_msg, &keys[i]).expect("Second write failed");
+        }
+
+        s1.lock().unwrap().batch_write();
+
+        for i in 0..num_operations {
+            let new_msg = vec![(i * 2) as u8, (i * 2 + 1) as u8, (i * 2 + 2) as u8];
+            let read_msg = alice.read(&keys[i]).expect("Second read failed");
+            assert_eq!(read_msg, new_msg, "Second read message doesn't match written message for key {}", i);
+        }
+    }
+
+    #[test]
+    fn test_multiple_clients_multiple_epochs() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        
+        let mut rng = thread_rng();
+        
+        // Initialize the first epoch
+        s1.lock().unwrap().batch_init(1);
+        
+        for epoch in 1..=3 {
+            println!("Epoch {}", epoch);
+            
+            let mut keys = Vec::new();
+            let mut messages = Vec::new();
+
+            // Perform writes for both clients
+            for client in [&mut alice, &mut bob] {
+                for _ in 0..3 {
+                    let k = Key::random(&mut rng);
+                    client.setup(&k).expect("Setup failed");
+                    keys.push(k.clone());
+                    
+                    let msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
+                    client.write(&msg, &k).expect("Write failed");
+                    messages.push(msg.clone());
+                    
+                    // Perform an immediate read to verify
+                    let read_msg = client.read(&k).expect("Read failed");
+                    assert_eq!(read_msg, msg, "Immediate read failed for {}", client.id);
+                }
+            }
+            
+            // Perform batch write
+            s1.lock().unwrap().batch_write();
+            
+            // Perform reads for both clients using the same keys
+            let mut key_index = 0;
+            for client in [&mut alice, &mut bob] {
+                for _ in 0..3 {
+                    let k = &keys[key_index];
+                    let msg = &messages[key_index];
+                    
+                    // Read after batch write
+                    let read_msg = client.read(k).expect("Read after batch write failed");
+                    assert_eq!(read_msg, *msg, "Read after batch write failed for {}", client.id);
+                    
+                    key_index += 1;
+                }
+            }
+            
+            // Initialize next epoch if not the last one
+            if epoch < 3 {
+                s1.lock().unwrap().batch_init(epoch + 1);
+            }
+        }
+    }
 
     #[test]
     fn test_encrypt_decrypt_different_key_sizes() {

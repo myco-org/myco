@@ -102,7 +102,7 @@ impl From<Vec<u8>> for Path {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 
 impl Block {
@@ -118,6 +118,15 @@ impl Block {
         Block(block)
     }
 }
+
+impl std::fmt::Debug for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Block")
+            .field(&self.0.len())
+            .finish()
+    }
+}
+
 
 pub(crate) type Bucket = Vec<Block>;
 
