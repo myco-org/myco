@@ -1,17 +1,7 @@
 use std::{borrow::BorrowMut, cell::RefCell, cmp::min, path, rc::Rc, sync::{Arc, Mutex}};
 
 use crate::{
-    tree::BinaryTree,
-    constants::*,
-    decrypt,
-    prf,
-    Block,
-    Bucket,
-    CryptoError,
-    Key,
-    Metadata,
-    Path,
-    server2::Server2,
+    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket, CryptoError, Key, Metadata, Path
 };
 use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
 pub struct Server1 {
@@ -55,7 +45,15 @@ impl Server1 {
     }
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
-        let c_msg = crate::encrypt(&k_oram_t.0, &[&Into::<Vec<u8>>::into(l.clone())[..], &ct[..]].concat()).expect("Failed to encrypt message");
+        let c_msg = encrypt(&k_oram_t.0, &ct).expect("Failed to encrypt message");
+        let c_msg_dec = decrypt(&k_oram_t.0, &c_msg).expect("Failed to decrypt message");
+
+        println!("ct {:?}", ct);
+        println!("c_msg {:?}", c_msg);
+        println!("c_msg_dec {:?}", c_msg_dec);
+
+        println!("[insert_message] k_oram_t {:?}", k_oram_t);
+
         let (bucket, path) = self.pt.lca(&l).unwrap();
         bucket.push(Block::new(c_msg));
         self.metadata_pt.write(vec![(l.clone(), k_oram_t.clone(), t_exp)], path);

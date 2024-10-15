@@ -157,11 +157,11 @@ impl Client {
         let l = prf(k_prf, &epoch.to_be_bytes());
 
         // 3: koram,t = KDF(koram, t)
+        println!("epoch: {:?}", epoch);
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
 
         // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
-
         // 5: return S1.Write(ct, ℓ, koram,t)
         self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
     }
@@ -171,8 +171,10 @@ impl Client {
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
+        println!("[client.read] epoch {:?}", epoch);
         let k_oram_t =
             kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
+        println!("[client.read] k_oram_t {:?}", k_oram_t);
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
@@ -182,14 +184,18 @@ impl Client {
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
 
+        println!("Path {:?}", path);
+
         // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
+                println!("trying to decrypt {:?}", block.0);
+                println!("k_oram_t {:?}", k_oram_t);
                 if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
-                    let (block_l, ct) = c_msg.split_at(32);
-                    if block_l == l.as_slice() {
-                        return decrypt(k_msg, ct);
-                    }
+                    // let (block_l, ct) = c_msg.split_at(32);
+                    // if block_l == l.as_slice() {
+                    //     return decrypt(k_msg, ct);
+                    // }
                 }
             }
         }
