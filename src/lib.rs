@@ -1,33 +1,39 @@
-use rand::{thread_rng, Rng, RngCore};
-use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
-use std::{cell::RefCell, cmp::Ordering, collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
-use thiserror::Error;
+// Standard library imports
+use std::collections::HashMap;
+use std::num::NonZeroU32;
+use std::sync::{Arc, Mutex};
 
-// Add module declarations
+// External crate imports
+use rand::{thread_rng, Rng};
+use ring::{aead, digest, hkdf, pbkdf2, rand::SecureRandom};
+
+// Internal module declarations
 mod constants;
 mod server1;
 mod server2;
 mod tree;
 mod dtypes;
+mod error;
 
-// Import constants and server modules
+// Internal module imports
 use constants::*;
 use server1::Server1;
 use server2::Server2;
 use dtypes::*;
+use error::McOsamError;
 
-#[derive(Debug, Error)]
-enum CryptoError {
-    #[error("HKDF expansion failed")]
-    HkdfExpansionFailed,
-    #[error("HKDF fill failed")]
-    HkdfFillFailed,
-    #[error("Encryption failed")]
-    EncryptionFailed,
-    #[error("Decryption failed")]
-    DecryptionFailed,
-}
-
+/// Converts a vector of u8 to a Path.
+///
+/// This function takes a vector of bytes and converts it to a Path by
+/// expanding each byte into its individual bits.
+///
+/// # Arguments
+///
+/// * `input` - A vector of u8 to be converted to a Path.
+///
+/// # Returns
+///
+/// A Path object representing the binary expansion of the input vector.
 pub(crate) fn u8_vec_to_path_vec(input: Vec<u8>) -> Path {
     Path::new(input
         .into_iter()
@@ -36,22 +42,43 @@ pub(crate) fn u8_vec_to_path_vec(input: Vec<u8>) -> Path {
         }).collect())
 }
 
-// Key Derivation Function (KDF)
-fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
+/// Key Derivation Function (KDF)
+///
+/// This function derives a new key from an input key and some context information.
+///
+/// # Arguments
+///
+/// * `key` - The input key material.
+/// * `info` - Additional context information for the key derivation.
+///
+/// # Returns
+///
+/// A Result containing either the derived key as a Vec<u8>, or a McOsamError.
+fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, McOsamError> {
     let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
     let binding = [info.as_bytes()];
     let okm = prk
         .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| CryptoError::HkdfExpansionFailed)?;
+        .map_err(|_| McOsamError::HkdfExpansionFailed)?;
     let mut result = vec![0u8; 32];
     okm.fill(&mut result)
-        .map_err(|_| CryptoError::HkdfFillFailed)?;
+        .map_err(|_| McOsamError::HkdfFillFailed)?;
     Ok(result)
 }
 
-// Pseudorandom Function (PRF)
-// Make this an arbitrary-length PRF
+/// Pseudorandom Function (PRF)
+///
+/// This function generates a pseudorandom output based on a key and input.
+///
+/// # Arguments
+///
+/// * `key` - The key for the PRF.
+/// * `input` - The input data for the PRF.
+///
+/// # Returns
+///
+/// A Vec<u8> containing the pseudorandom output.
 fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     let mut result = vec![0u8; 32];
     pbkdf2::derive(
@@ -64,16 +91,27 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     result
 }
 
-// Encryption
-fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+/// Encryption function
+///
+/// This function encrypts a message using AES-256-GCM.
+///
+/// # Arguments
+///
+/// * `key` - The encryption key.
+/// * `message` - The message to be encrypted.
+///
+/// # Returns
+///
+/// A Result containing either the encrypted message as a Vec<u8>, or a McOsamError.
+fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, McOsamError> {
     let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
+        .map_err(|_| McOsamError::EncryptionFailed)?;
     let mut sealing_key: aead::LessSafeKey = aead::LessSafeKey::new(key);
 
     let mut nonce = [0u8; 12];
     ring::rand::SystemRandom::new()
         .fill(&mut nonce)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
+        .map_err(|_| McOsamError::EncryptionFailed)?;
 
     let mut in_out = message.to_vec();
     sealing_key
@@ -82,45 +120,70 @@ fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
             aead::Aad::empty(),
             &mut in_out,
         )
-        .map_err(|_| CryptoError::EncryptionFailed)?;
+        .map_err(|_| McOsamError::EncryptionFailed)?;
 
     let mut result = nonce.to_vec();
     result.extend(in_out);
     Ok(result)
 }
 
-// Decryption
-fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+/// Decryption function
+///
+/// This function decrypts a ciphertext using AES-256-GCM.
+///
+/// # Arguments
+///
+/// * `key` - The decryption key.
+/// * `ciphertext` - The ciphertext to be decrypted.
+///
+/// # Returns
+///
+/// A Result containing either the decrypted message as a Vec<u8>, or a McOsamError.
+fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, McOsamError> {
     if ciphertext.len() < 12 + 16 {
-        return Err(CryptoError::DecryptionFailed);
+        return Err(McOsamError::DecryptionFailed);
     }
 
     let key = aead::UnboundKey::new(&aead::AES_256_GCM, key)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|_| McOsamError::DecryptionFailed)?;
     let opening_key = aead::LessSafeKey::new(key);
 
     let nonce = aead::Nonce::try_assume_unique_for_key(&ciphertext[..12])
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|_| McOsamError::DecryptionFailed)?;
     let mut in_out = ciphertext[12..].to_vec();
 
     opening_key
         .open_in_place(nonce, aead::Aad::empty(), &mut in_out)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|_| McOsamError::DecryptionFailed)?;
 
     in_out.truncate(in_out.len() - 16); // Remove the tag
     Ok(in_out)
 }
 
-
-
+/// Represents a client in the MC-OSAM system.
 struct Client {
+    /// The client's identifier.
     id: String,
+    /// A map of keys for communicating with other clients.
     keys: HashMap<String, (Vec<u8>, Vec<u8>, Vec<u8>)>,
+    /// A reference to Server1.
     s1: Arc<Mutex<Server1>>,
+    /// A reference to Server2.
     s2: Arc<Mutex<Server2>>,
 }
 
 impl Client {
+    /// Creates a new Client instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The client's identifier.
+    /// * `s1` - A reference to Server1.
+    /// * `s2` - A reference to Server2.
+    ///
+    /// # Returns
+    ///
+    /// A new Client instance.
     fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
             id,
@@ -130,94 +193,94 @@ impl Client {
         }
     }
 
-    fn setup(&mut self, other_clients: &[String]) -> Result<(), CryptoError> {
-        // 2: for k ∈ K: do
+    /// Sets up the client's keys for communicating with other clients.
+    ///
+    /// # Arguments
+    ///
+    /// * `other_clients` - A slice of strings representing other clients' identifiers.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or failure.
+    fn setup(&mut self, other_clients: &[String]) -> Result<(), McOsamError> {
         for client in other_clients {
-            // 3: kmsg = KDF(k, “MSG”)
             let k: Vec<u8> = (0..32).map(|_| thread_rng().gen()).collect();
             let k_msg = kdf(&k, "MSG")?;
-            // 4: koram = KDF(k, “ORAM”)
             let k_oram = kdf(&k, "ORAM")?;
-            // 5: kprf = KDF(k, “PRF”)
             let k_prf = kdf(&k, "PRF")?;
-            // 6: client.keys[k] = {kmsg, koram, kprf }
             self.keys.insert(client.clone(), (k_msg, k_oram, k_prf));
         }
-        // 7: end for
         Ok(())
     }
 
-    fn write(&mut self, msg: &[u8], recipient: &str, cw: Vec<u8>) -> Result<(), CryptoError> {
+    /// Writes a message to another client.
+    ///
+    /// # Arguments
+    ///
+    /// * `msg` - The message to be written.
+    /// * `recipient` - The recipient's identifier.
+    /// * `cw` - Additional write information.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or failure.
+    fn write(&mut self, msg: &[u8], recipient: &str, cw: Vec<u8>) -> Result<(), McOsamError> {
         let epoch  = self.s1.lock().unwrap().epoch;
-
-        // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(recipient).unwrap();
-
-        // 2: ℓ = PRF_kprf (t)
         let l = prf(k_prf, &epoch.to_be_bytes());
-
-        // 3: koram,t = KDF(koram, t)
-        println!("epoch: {:?}", epoch);
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
-
-        // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
-        // 5: return S1.Write(ct, ℓ, koram,t)
         self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
     }
 
-    fn read(&self, sender: &str) -> Result<Vec<u8>, CryptoError> {
+    /// Reads a message from another client.
+    ///
+    /// # Arguments
+    ///
+    /// * `sender` - The sender's identifier.
+    ///
+    /// # Returns
+    ///
+    /// A Result containing either the decrypted message or an error.
+    fn read(&self, sender: &str) -> Result<Vec<u8>, McOsamError> {
         let epoch  = self.s1.lock().unwrap().epoch;
-
-        // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(sender).unwrap();
-        println!("[client.read] epoch {:?}", epoch);
-        let k_oram_t =
-            kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
-        println!("[client.read] k_oram_t {:?}", k_oram_t);
-
+        let k_oram_t = kdf(k_oram, &epoch.to_string())?;
         let f = prf(&k_prf, &epoch.to_be_bytes());
-
-        // 2: ℓ = PRFkprf (t)
         let l = prf(k_prf, &[&f[..], &sender.as_bytes()[..]].concat());
-
-        // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
 
-        println!("Path {:?}", path);
-
-        // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
-                println!("trying to decrypt {:?}", block.0);
-                println!("k_oram_t {:?}", k_oram_t);
-                if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
+                if let Ok(c_msg) = decrypt(&k_oram_t, &block.0) {
                     return decrypt(k_msg, &c_msg);
                 }
             }
         }
-        // 8: end for
-        Err(CryptoError::DecryptionFailed)
+        Err(McOsamError::DecryptionFailed)
     }
 
-    fn fake_write(&self) -> Result<(), CryptoError> {
+    /// Performs a fake write operation.
+    ///
+    /// # Returns
+    ///
+    /// A Result indicating success or failure.
+    fn fake_write(&self) -> Result<(), McOsamError> {
         let mut rng = thread_rng();
-        // 1: ℓ′ $ ←− {0, 1}D
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        // 2: k′ oram,t $ ←− {0, 1}λ
         let k_oram_t: Vec<u8> = (0..LAMBDA).map(|_| rng.gen()).collect();
-        // 3: ct′ $ ←− {0, 1}|ct|
         let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
-        // 4: S1.Write(ct′, ℓ′, k′ oram,t)
-        // self.s1.borrow_mut().write(ct, l, k_oram_t)
         todo!()
     }
 
+    /// Performs a fake read operation.
+    ///
+    /// # Returns
+    ///
+    /// A vector of Buckets.
     fn fake_read(&self) -> Vec<Bucket> {
-        // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = thread_rng();
         let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        // 2: S2.Read(ℓ′)
         self.s2.lock().unwrap().read(&u8_vec_to_path_vec(ll))
     }
 }
@@ -290,69 +353,4 @@ mod tests {
         let msg = alice.read("Bob").expect("Read failed");
         assert_eq!(msg, vec![1, 2, 3]);
     }
-
-//     #[test]
-//     fn test_write_and_read() {
-//         let (s1, s2) = (
-//             Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
-//             Rc::new(RefCell::new(Server2::new())),
-//         );
-//         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-//         let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
-
-//         alice.setup(&["Bob".to_string()]).expect("Setup failed");
-//         bob.setup(&["Alice".to_string()]).expect("Setup failed");
-//     }
-
-//     #[test]
-//     fn test_fake_operations() {
-//         let (s1, s2) = (
-//             Rc::new(RefCell::new(Server1::new(0, Rc::new(RefCell::new(Server2::new()))))),
-//             Rc::new(RefCell::new(Server2::new())),
-//         );
-//         let alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-
-//         alice.fake_write().expect("Fake write failed");
-
-//         let fake_read = alice.fake_read();
-//         assert_eq!(fake_read.len(), 32);
-//     }
-
-//     #[test]
-//     fn test_server1_batch_write() {
-//         let mut s1 = Server1::new(0, Rc::new(RefCell::new(Server2::new())));
-//         let dummy_data = vec![0; 64];
-//         let dummy_l = vec![0; 32];
-//         let dummy_k_oram_t = vec![0; 32];
-
-//         for _ in 0..NUM_WRITES_PER_EPOCH {
-//             s1.write(dummy_data.clone(), dummy_l.clone(), dummy_k_oram_t.clone())
-//                 .expect("Server1 write failed");
-//         }
-
-//         assert_eq!(s1.epoch, 1);
-//         assert_eq!(s1.counter, 0);
-//         assert!(s1.write_queue.is_empty());
-//     }
-
-//     #[test]
-//     fn test_server2_eviction() {
-//         let mut s2 = Server2::new();
-//         let dummy_block = Block {
-//             bid: vec![0; 32],
-//             data: vec![1; 64],
-//         };
-
-//         // Fill the tree
-//         for _ in 0..(1 << TREE_HEIGHT) * BUCKET_SIZE {
-//             s2.write(vec![dummy_block.clone()]);
-//         }
-
-//         // Perform eviction
-//         s2.evict();
-
-//         // Check if eviction happened (this is a simple check, might need adjustment)
-//         let total_blocks: usize = s2.tree.iter().map(|level| level.len()).sum();
-//         assert!(total_blocks < (1 << TREE_HEIGHT) * BUCKET_SIZE);
-//     }
 }

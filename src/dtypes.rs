@@ -2,10 +2,10 @@ use rand::{rngs::ThreadRng, thread_rng, Rng, RngCore};
 
 use crate::{BUCKET_SIZE, D, LAMBDA};
 
-pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Path(Vec<Direction>);
+pub type Timestamp = u64;
 pub type Metadata = Vec<(Path, Key, Timestamp)>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
