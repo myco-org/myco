@@ -98,7 +98,7 @@ impl Server1 {
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
-        self.epoch += 1;
+        // self.epoch += 1;
     }
 }
 

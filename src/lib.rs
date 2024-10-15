@@ -192,10 +192,7 @@ impl Client {
                 println!("trying to decrypt {:?}", block.0);
                 println!("k_oram_t {:?}", k_oram_t);
                 if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
-                    // let (block_l, ct) = c_msg.split_at(32);
-                    // if block_l == l.as_slice() {
-                    //     return decrypt(k_msg, ct);
-                    // }
+                    return decrypt(k_msg, &c_msg);
                 }
             }
         }
