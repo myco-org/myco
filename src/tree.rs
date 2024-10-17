@@ -312,26 +312,27 @@ impl<T: TreeValue> BinaryTree<T> {
             (None, Some(_)) | (None, None) => (),
         }
     }
-
-    pub fn print_with_path(&self, path: &Path) -> String {
+    pub fn print_with_paths(&self, paths: &[Path]) -> String {
         let mut output = String::new();
-        self.print_tree_with_path("", true, path, &mut output, Path::new(vec![]));
+        self.print_tree_with_paths("", true, paths, &mut output, Path::new(vec![]));
         output
     }
 
-    fn print_tree_with_path(&self, prefix: &str, is_left: bool, path: &Path, output: &mut String, current_path: Path) {
+    fn print_tree_with_paths(&self, prefix: &str, is_left: bool, paths: &[Path], output: &mut String, current_path: Path) {
         let (branch, new_prefix) = if is_left {
             ("├─ ", "│ ")
         } else {
             ("└─ ", "  ")
         };
 
-        let is_on_path = !path.is_empty() && path.into_iter().zip(current_path.clone().into_iter()).all(|(a, b)| *a == b);
+        let is_on_path = paths.iter().any(|path| 
+            !path.is_empty() && path.into_iter().zip(current_path.clone().into_iter()).all(|(a, b)| *a == b)
+        );
 
         let value_str = if is_on_path {
-            format!("\x1b[31m{:?}\x1b[0m", self.value) // Red color for nodes on the path
+            format!("\x1b[31m{:?}\x1b[0m", self.value) // Red color for nodes on any path
         } else {
-            format!("{:?}", self.value) // Default color for nodes not on the path
+            format!("{:?}", self.value) // Default color for nodes not on any path
         };
 
         output.push_str(&format!("{}{}{}\n", prefix, branch, value_str));
@@ -339,13 +340,13 @@ impl<T: TreeValue> BinaryTree<T> {
         if let Some(left) = &self.left {
             let mut left_path = current_path.clone();
             left_path.push(Direction::Left);
-            left.print_tree_with_path(&format!("{}{}", prefix, new_prefix), true, path, output, left_path);
+            left.print_tree_with_paths(&format!("{}{}", prefix, new_prefix), true, paths, output, left_path);
         }
 
         if let Some(right) = &self.right {
             let mut right_path = current_path.clone();
             right_path.push(Direction::Right);
-            right.print_tree_with_path(&format!("{}{}", prefix, new_prefix), false, path, output, right_path);
+            right.print_tree_with_paths(&format!("{}{}", prefix, new_prefix), false, paths, output, right_path);
         }
     }
 }
@@ -421,6 +422,12 @@ mod tests {
             let mut rng = rand::thread_rng();
             IntWrapper(rng.gen())
         }
+    }
+
+    #[test]
+    fn test_print_tree_with_depth() {
+        let tree = BinaryTree::<IntWrapper>::new_with_depth(3);
+        println!("{}", tree);
     }
 
     #[test]
@@ -1106,45 +1113,72 @@ mod tests {
     #[test]
     fn test_print_with_path() {
         // Create a binary tree for testing:
-        //         7
-        //        / \
-        //       5   6
-        //      / \   \
-        //     1   2   3
-        let mut tree = BinaryTree::new(IntWrapper(7));
-        tree.left = Some(Box::new(BinaryTree::new(IntWrapper(5))));
-        tree.right = Some(Box::new(BinaryTree::new(IntWrapper(6))));
-        tree.left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(1))));
-        tree.left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(2))));
-        tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(3))));
+        //             15
+        //            /  \
+        //           7    14
+        //          / \   / \
+        //         3   6 10  13
+        //        / \         \
+        //       1   2         12
+        let mut tree = BinaryTree::new(IntWrapper(15));
+        tree.left = Some(Box::new(BinaryTree::new(IntWrapper(7))));
+        tree.right = Some(Box::new(BinaryTree::new(IntWrapper(14))));
+        tree.left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(3))));
+        tree.left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(6))));
+        tree.right.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(10))));
+        tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(13))));
+        tree.left.as_mut().unwrap().left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(1))));
+        tree.left.as_mut().unwrap().left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(2))));
+        tree.right.as_mut().unwrap().right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(12))));
 
         // Define paths to test
         let test_cases = vec![
             (
-                Path::new(vec![]),
+                vec![Path::new(vec![])],
                 "Empty path should highlight no nodes",
             ),
             (
-                Path::new(vec![Direction::Left]),
-                "Path [Left] should highlight nodes 7 and 5",
+                vec![Path::new(vec![Direction::Left])],
+                "Path [Left] should highlight nodes 15 and 7",
             ),
             (
-                Path::new(vec![Direction::Right, Direction::Right]),
-                "Path [Right, Right] should highlight nodes 6 and 3",
+                vec![Path::new(vec![Direction::Right, Direction::Right])],
+                "Path [Right, Right] should highlight nodes 15, 14, and 13",
             ),
             (
-                Path::new(vec![Direction::Left, Direction::Right]),
-                "Path [Left, Right] should highlight nodes 7, 5, and 2",
+                vec![Path::new(vec![Direction::Left, Direction::Right])],
+                "Path [Left, Right] should highlight nodes 15, 7, and 6",
             ),
             (
-                Path::new(vec![Direction::Left, Direction::Left, Direction::Left]),
-                "Path [Left, Left, Left] should highlight nodes 7, 5, and 1",
+                vec![Path::new(vec![Direction::Left, Direction::Left, Direction::Left])],
+                "Path [Left, Left, Left] should highlight nodes 15, 7, 3, and 1",
+            ),
+            (
+                vec![
+                    Path::new(vec![Direction::Left]),
+                    Path::new(vec![Direction::Right]),
+                ],
+                "Paths [Left] and [Right] should highlight nodes 15, 7, and 14",
+            ),
+            (
+                vec![
+                    Path::new(vec![Direction::Left, Direction::Left]),
+                    Path::new(vec![Direction::Right, Direction::Right, Direction::Right]),
+                ],
+                "Paths [Left, Left] and [Right, Right, Right] should highlight nodes 15, 7, 3, 14, 13, and 12",
+            ),
+            (
+                vec![
+                    Path::new(vec![Direction::Left, Direction::Left, Direction::Right]),
+                    Path::new(vec![Direction::Right, Direction::Left]),
+                ],
+                "Paths [Left, Left, Right] and [Right, Left] should highlight nodes 15, 7, 3, 2, 14, and 10",
             ),
         ];
 
         for (path, description) in test_cases {
             println!("=== {} ===", description);
-            let output = tree.print_with_path(&path);
+            let output = tree.print_with_paths(&path);
             println!("{}", output);
         }
     }

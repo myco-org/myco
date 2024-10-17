@@ -30,10 +30,13 @@ impl Server1 {
             })
             .collect();
 
-        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths);
+        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
         
         let mut p = BinaryTree::new_with_depth(D);
         p.overwrite_tree(&self.pt);
+        let paths = buckets_and_paths.iter().map(|(_, path)| path.clone()).collect::<Vec<Path>>();
+        println!("{}", p.print_with_paths(&paths));
+
         self.p = Some(p);
 
         self.metadata_pt = BinaryTree::new_empty();
