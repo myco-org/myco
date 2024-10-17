@@ -30,8 +30,12 @@ impl Server1 {
             })
             .collect();
 
-        self.p = Some(BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
-        self.pt = self.p.clone().unwrap();
+        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths);
+        
+        let mut p = BinaryTree::new_with_depth(D);
+        p.overwrite_tree(&self.pt);
+        self.p = Some(p);
+
         self.metadata_pt = BinaryTree::new_empty();
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
