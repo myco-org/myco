@@ -7,9 +7,6 @@ use crate::{tree::TreeValue, BUCKET_SIZE, D, LAMBDA};
 pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Path(Vec<Direction>);
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Metadata(Vec<(Path, Key, Timestamp)>);
 
 impl Metadata {
@@ -67,6 +64,10 @@ impl From<u8> for Direction {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Path(Vec<Direction>);
+
 impl Path {
     pub fn new(directions: Vec<Direction>) -> Self {
         Path(directions)
@@ -83,6 +84,10 @@ impl Path {
     pub fn random(rng: &mut ThreadRng) -> Self {
         let directions: Vec<Direction> = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
         Path(directions)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 

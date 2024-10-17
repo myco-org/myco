@@ -315,35 +315,37 @@ impl<T: TreeValue> BinaryTree<T> {
 
     pub fn print_with_path(&self, path: &Path) -> String {
         let mut output = String::new();
-        self.print_tree_with_path("", true, path, &mut output);
+        self.print_tree_with_path("", true, path, &mut output, Path::new(vec![]));
         output
     }
 
-    fn print_tree_with_path(&self, prefix: &str, is_left: bool, path: &Path, output: &mut String) {
+    fn print_tree_with_path(&self, prefix: &str, is_left: bool, path: &Path, output: &mut String, current_path: Path) {
         let (branch, new_prefix) = if is_left {
             ("├─ ", "│ ")
         } else {
             ("└─ ", "  ")
         };
-        let mut current_path = Path::new(vec![]);
-        let is_on_path = path.into_iter().zip(current_path.clone().into_iter()).all(|(a, b)| *a == b);
+
+        let is_on_path = !path.is_empty() && path.into_iter().zip(current_path.clone().into_iter()).all(|(a, b)| *a == b);
 
         let value_str = if is_on_path {
             format!("\x1b[31m{:?}\x1b[0m", self.value) // Red color for nodes on the path
         } else {
-            format!("{:?}", self.value)
+            format!("{:?}", self.value) // Default color for nodes not on the path
         };
 
         output.push_str(&format!("{}{}{}\n", prefix, branch, value_str));
 
         if let Some(left) = &self.left {
-            current_path.push(Direction::Left);
-            left.print_tree_with_path(&format!("{}{}", prefix, new_prefix), true, path, output);
+            let mut left_path = current_path.clone();
+            left_path.push(Direction::Left);
+            left.print_tree_with_path(&format!("{}{}", prefix, new_prefix), true, path, output, left_path);
         }
 
         if let Some(right) = &self.right {
-            current_path.push(Direction::Right);
-            right.print_tree_with_path(&format!("{}{}", prefix, new_prefix), false, path, output);
+            let mut right_path = current_path.clone();
+            right_path.push(Direction::Right);
+            right.print_tree_with_path(&format!("{}{}", prefix, new_prefix), false, path, output, right_path);
         }
     }
 }
@@ -1101,5 +1103,50 @@ mod tests {
         assert_eq!(original, expected, "Overwriting with a tree that partially overlaps did not result in the expected tree");
     }
 
+    #[test]
+    fn test_print_with_path() {
+        // Create a binary tree for testing:
+        //         7
+        //        / \
+        //       5   6
+        //      / \   \
+        //     1   2   3
+        let mut tree = BinaryTree::new(IntWrapper(7));
+        tree.left = Some(Box::new(BinaryTree::new(IntWrapper(5))));
+        tree.right = Some(Box::new(BinaryTree::new(IntWrapper(6))));
+        tree.left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(1))));
+        tree.left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(2))));
+        tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(3))));
+
+        // Define paths to test
+        let test_cases = vec![
+            (
+                Path::new(vec![]),
+                "Empty path should highlight no nodes",
+            ),
+            (
+                Path::new(vec![Direction::Left]),
+                "Path [Left] should highlight nodes 7 and 5",
+            ),
+            (
+                Path::new(vec![Direction::Right, Direction::Right]),
+                "Path [Right, Right] should highlight nodes 6 and 3",
+            ),
+            (
+                Path::new(vec![Direction::Left, Direction::Right]),
+                "Path [Left, Right] should highlight nodes 7, 5, and 2",
+            ),
+            (
+                Path::new(vec![Direction::Left, Direction::Left, Direction::Left]),
+                "Path [Left, Left, Left] should highlight nodes 7, 5, and 1",
+            ),
+        ];
+
+        for (path, description) in test_cases {
+            println!("=== {} ===", description);
+            let output = tree.print_with_path(&path);
+            println!("{}", output);
+        }
+    }
     
 }
