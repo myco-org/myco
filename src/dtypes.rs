@@ -1,12 +1,46 @@
-use rand::{rngs::ThreadRng, thread_rng, Rng, RngCore};
+use std::ops::{Index, IndexMut};
 
-use crate::{BUCKET_SIZE, D, LAMBDA};
+use rand::{rngs::{StdRng, ThreadRng}, seq::SliceRandom, thread_rng, Rng, RngCore};
+
+use crate::{tree::TreeValue, BUCKET_SIZE, D, LAMBDA};
 
 pub(crate) type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Path(Vec<Direction>);
-pub type Metadata = Vec<(Path, Key, Timestamp)>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Metadata(Vec<(Path, Key, Timestamp)>);
+
+impl Metadata {
+    pub(crate) fn new(path: Path, key: Key, timestamp: Timestamp) -> Self {
+        Metadata(vec![(path, key, timestamp)])
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn push(&mut self, path: Path, key: Key, timestamp: Timestamp) {
+        self.0.push((path, key, timestamp));
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&(Path, Key, Timestamp)> {
+        self.0.get(index)
+    }
+
+    pub(crate) fn shuffle(&mut self, rng: &mut StdRng) {
+        self.0.shuffle(rng);
+    }
+}
+
+impl TreeValue for Metadata {
+    fn new_random() -> Self {
+        let mut rng = thread_rng();
+        let timestamp = rng.gen();
+        Metadata(vec![(Path::random(&mut rng), Key::random(&mut rng), timestamp)])
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Direction {
@@ -44,6 +78,11 @@ impl Path {
 
     pub fn push(&mut self, direction: Direction) {
         self.0.push(direction);
+    }
+
+    pub fn random(rng: &mut ThreadRng) -> Self {
+        let directions: Vec<Direction> = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
+        Path(directions)
     }
 }
 
@@ -102,7 +141,7 @@ impl From<Vec<u8>> for Path {
     }
 }
 
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 
 impl Block {
@@ -112,23 +151,75 @@ impl Block {
 
     pub(crate) fn new_random() -> Self {
         let mut rng = thread_rng();
-        let mut block = vec![0u8; BUCKET_SIZE / 8];
+        let mut block = vec![0u8; BUCKET_SIZE];
         rng.fill_bytes(&mut block);
 
         Block(block)
     }
 }
 
-impl std::fmt::Debug for Block {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Block")
-            .field(&self.0.len())
-            .finish()
+// impl std::fmt::Debug for Block {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         f.debug_tuple("Block")
+//             .field(&self.0.len())
+//             .finish()
+//     }
+// }
+
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Bucket(Vec<Block>);
+
+impl TreeValue for Bucket {
+    fn new_random() -> Self {
+        Bucket(vec![Block::new_random(); BUCKET_SIZE])
     }
 }
 
 
-pub(crate) type Bucket = Vec<Block>;
+impl Iterator for Bucket {
+    type Item = Block;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.pop()
+    }
+}
+
+impl Index<usize> for Bucket {
+    type Output = Block;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}   
+
+impl IndexMut<usize> for Bucket {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
+    }
+}
+
+impl Bucket {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn push(&mut self, block: Block) {
+        self.0.push(block);
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Option<&Block> {
+        self.0.get(index)
+    }
+
+    pub(crate) fn shuffle(&mut self, rng: &mut StdRng) {
+        self.0.shuffle(rng);
+    }
+}
 
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

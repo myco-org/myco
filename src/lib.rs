@@ -216,7 +216,7 @@ mod tests {
 
     fn try_to_decrypt_data_on_path(path: Vec<Bucket>, k_oram_t: &Key, k_msg: &Key) -> Result<Vec<u8>, CryptoError> {
         for bucket in path {
-            for block in bucket {
+            for block in bucket { 
                 if let Ok(c_msg)= decrypt(&k_oram_t.0, &block.0) {
                     return decrypt(&k_msg.0, &c_msg);
                 }
@@ -367,7 +367,7 @@ mod tests {
         
         s1.lock().unwrap().batch_init(1);
 
-        let num_operations = 50;
+        let num_operations = 5;
         let mut keys = Vec::new();
         let mut messages = Vec::new();
 

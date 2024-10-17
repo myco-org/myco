@@ -24,15 +24,15 @@ impl Server1 {
         let mut rng = thread_rng();
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * num_clients))
             .map(|_| {
-                let l = Path::new((0..D).map(|_| rng.gen_range(0..2).into()).collect());
+                let l = Path::random(&mut rng);
                 let bucket = self.s2.lock().unwrap().read(&l);
                 (bucket, l)
             })
             .collect();
 
         self.p = Some(BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths));
-        self.pt = BinaryTree::new(vec![]);
-        self.metadata_pt = BinaryTree::new(vec![]);
+        self.pt = self.p.clone().unwrap();
+        self.metadata_pt = BinaryTree::new_empty();
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }
@@ -48,7 +48,7 @@ impl Server1 {
         let c_msg = encrypt(&k_oram_t.0, &ct).unwrap();
         let (bucket, path) = self.pt.lca(&l).unwrap();
         bucket.push(Block::new(c_msg));
-        self.metadata_pt.write(vec![(l.clone(), k_oram_t.clone(), t_exp)], path);
+        self.metadata_pt.write(Metadata::new(l.clone(), k_oram_t.clone(), t_exp), path);
     }
 
     pub fn batch_write(&mut self) {
