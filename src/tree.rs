@@ -26,8 +26,9 @@ impl<T: TreeValue> BinaryTree<T> {
         if depth == 0 {
             return BinaryTree::new_empty();
         }
-        let node = BinaryTree::new_with_depth(depth - 1);
-        BinaryTree { value: T::new_random(), left: Some(Box::new(node.clone())), right: Some(Box::new(node)) }
+        let left = BinaryTree::new_with_depth(depth - 1);
+        let right = BinaryTree::new_with_depth(depth - 1);
+        BinaryTree { value: T::new_random(), left: Some(Box::new(left)), right: Some(Box::new(right)) }
     }
 
     pub fn from_vec_with_paths(items: Vec<(Vec<T>, Path)>) -> Self
@@ -422,12 +423,6 @@ mod tests {
             let mut rng = rand::thread_rng();
             IntWrapper(rng.gen())
         }
-    }
-
-    #[test]
-    fn test_print_tree_with_depth() {
-        let tree = BinaryTree::<IntWrapper>::new_with_depth(3);
-        println!("{}", tree);
     }
 
     #[test]
