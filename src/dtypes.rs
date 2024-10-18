@@ -2,11 +2,11 @@ use std::ops::{Index, IndexMut};
 
 use rand::{rngs::{StdRng, ThreadRng}, seq::SliceRandom, thread_rng, Rng, RngCore};
 
-use crate::{tree::TreeValue, BUCKET_SIZE, D, LAMBDA};
+use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
 
 pub(crate) type Timestamp = u64;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Metadata(Vec<(Path, Key, Timestamp)>);
 
 impl Metadata {
@@ -156,7 +156,7 @@ impl Block {
 
     pub(crate) fn new_random() -> Self {
         let mut rng = thread_rng();
-        let mut block = vec![0u8; BUCKET_SIZE];
+        let mut block = vec![0u8; BLOCK_SIZE];
         rng.fill_bytes(&mut block);
 
         Block(block)
@@ -172,12 +172,12 @@ impl Block {
 // }
 
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Default)]
 pub(crate) struct Bucket(Vec<Block>);
 
 impl TreeValue for Bucket {
     fn new_random() -> Self {
-        Bucket(vec![Block::new_random(); BUCKET_SIZE])
+        Bucket(vec![Block::new_random(); BLOCK_SIZE])
     }
 }
 

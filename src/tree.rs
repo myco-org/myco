@@ -9,7 +9,7 @@ pub(crate) struct BinaryTree<T> {
     pub(crate) right: Option<Box<BinaryTree<T>>>,
 }
 
-pub(crate) trait TreeValue: Clone + Debug {
+pub(crate) trait TreeValue: Clone + Debug + Default {
     fn new_random() -> Self;
 }
 
@@ -19,7 +19,7 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 
     pub fn new_empty() -> Self {
-        BinaryTree { value: T::new_random(), left: None, right: None }
+        BinaryTree { value: T::default(), left: None, right: None }
     }
 
     pub fn new_with_depth(depth: usize) -> Self {
@@ -28,7 +28,27 @@ impl<T: TreeValue> BinaryTree<T> {
         }
         let left = BinaryTree::new_with_depth(depth - 1);
         let right = BinaryTree::new_with_depth(depth - 1);
-        BinaryTree { value: T::new_random(), left: Some(Box::new(left)), right: Some(Box::new(right)) }
+        BinaryTree { value: T::default(), left: Some(Box::new(left)), right: Some(Box::new(right)) }
+    }
+
+    pub fn fill(&mut self, value: T) {
+        self.value = value.clone();
+        if let Some(left) = &mut self.left {
+            left.fill(value.clone());
+        }
+        if let Some(right) = &mut self.right {
+            right.fill(value.clone());
+        }
+    }
+
+    pub fn fill_with_random(&mut self) {
+        self.value = T::new_random();
+        if let Some(left) = &mut self.left {
+            left.fill_with_random();
+        }
+        if let Some(right) = &mut self.right {
+            right.fill_with_random();
+        }
     }
 
     pub fn from_vec_with_paths(items: Vec<(Vec<T>, Path)>) -> Self
@@ -414,7 +434,7 @@ impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
 mod tests {
     use super::*;
 
-    #[derive(Debug, Clone, PartialEq)]
+    #[derive(Default, Debug, Clone, PartialEq)]
     struct IntWrapper(i32);
 
     impl TreeValue for IntWrapper {

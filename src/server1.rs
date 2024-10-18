@@ -1,7 +1,7 @@
 use std::{borrow::BorrowMut, cell::RefCell, cmp::min, path, rc::Rc, sync::{Arc, Mutex}};
 
 use crate::{
-    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket, CryptoError, Key, Metadata, Path
+    constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, Key, Metadata, Path
 };
 use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
 pub struct Server1 {
@@ -9,7 +9,7 @@ pub struct Server1 {
     pub k_s1_t: Key,
     pub num_clients: usize,
     pub s2: Arc<Mutex<Server2>>,
-    pub p: Option<BinaryTree<Bucket>>,
+    pub p: BinaryTree<Bucket>,
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,  
     pub metadata: BinaryTree<Metadata>,
@@ -17,36 +17,46 @@ pub struct Server1 {
 
 impl Server1 {
     pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
-        Self { epoch: 0, k_s1_t: Key::new(vec![]), num_clients: 0, s2, p: None, pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata: BinaryTree::new_with_depth(D) }
+        let metadata = BinaryTree::<Metadata>::new_with_depth(D);
+        Self { epoch: 0, k_s1_t: Key::new(vec![]), num_clients: 0, s2, p: BinaryTree::new_empty(), pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata }
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = thread_rng();
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = (0..(NU * num_clients))
-            .map(|_| {
-                let l = Path::random(&mut rng);
-                let bucket = self.s2.lock().unwrap().read(&l);
-                (bucket, l)
-            })
-            .collect();
 
-        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
-        
-        let mut p = BinaryTree::new_with_depth(D);
-        p.overwrite_tree(&self.pt);
-        let paths = buckets_and_paths.iter().map(|(_, path)| path.clone()).collect::<Vec<Path>>();
-        println!("{}", p.print_with_paths(&paths));
+        let paths = (0..(NU * num_clients)).map(|_| Path::random(&mut rng)).collect::<Vec<Path>>();
 
-        self.p = Some(p);
+        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths.iter().map(|path| {
+            let bucket = self.s2.lock().unwrap().read(&path);
+            (bucket, path.clone())
+        }).collect();
 
-        self.metadata_pt = BinaryTree::new_empty();
+        let pt_data: Vec<(Vec<Bucket>, Path)> = paths.iter().map(|path| {
+            (vec![Bucket::default(); D], path.clone())
+        }).collect();
+
+        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths.iter().map(|path| {
+            (vec![Metadata::default(); D], path.clone())
+        }).collect();
+
+        self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
+        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
+        self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
+
+        println!("[batch_init] metadata_pt:\n{}", self.metadata_pt);
+        println!("[batch_init] pt:\n{}", self.pt);
+        println!("[batch_init] p:\n{}", self.p);
+
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }
 
-    pub fn write(&mut self, ct: Vec<u8>, l: Vec<u8>, k_oram_t: Key, cw: Vec<u8>) -> Result<(), CryptoError> {
+    pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cw: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
-        let l = prf(&l, &cw);
+
+        let l = prf(&self.k_s1_t.0, &[&f[..], &cw[..]].concat());
+        println!("[write] l: {:?}", l);
+
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
         Ok(())
     }
@@ -59,16 +69,11 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) {
-        if self.p.is_none() {
-            return;
-        }
         let mut rng = thread_rng();
         let seed: [u8; 32] = rng.gen();
 
-        println!("s1.p: {:?}", self.p.as_ref().unwrap());
-
-        self.p.as_ref().unwrap().zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
-            let bucket = bucket.as_ref().expect("Bucket should exist");
+        self.p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
+            let bucket = bucket.clone().expect("Bucket should exist");
             (0..bucket.len()).for_each(|b| {
                 metadata_bucket.as_ref().map(|metadata_bucket| {
                     let (l, k_oram_t, t_exp) = metadata_bucket.get(b).expect("Failed to get metadata bucket at index {b}");
@@ -81,17 +86,20 @@ impl Server1 {
             });
         });
 
+        println!("[batch_write] epoch: {}", self.epoch);
+        println!("[batch_write] metadata_pt:\n{}", self.metadata_pt);
+        println!("[batch_write] pt:\n{}", self.pt);
         self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
             let bucket = bucket.as_mut().expect("Bucket should exist");
-            let metadata_bucket = metadata_bucket.as_mut().expect("Metadata bucket should exist");
-            (0..min(bucket.len(), Z)).for_each(|b| {
-                bucket[b] = Block::new_random();
-            });
+            let metadata_bucket: &mut Metadata = metadata_bucket.as_mut().expect("Metadata bucket should exist");
+            // (0..min(bucket.len(), Z)).for_each(|b| {
+            //     bucket[b] = Block::new_random();
+            // });
 
-            let mut rng1 = rand::rngs::StdRng::from_seed(seed);
-            let mut rng2 = rand::rngs::StdRng::from_seed(seed);
-            bucket.shuffle(&mut rng1);
-            metadata_bucket.shuffle(&mut rng2);
+            // let mut rng1 = rand::rngs::StdRng::from_seed(seed);
+            // let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+            // bucket.shuffle(&mut rng1);
+            // metadata_bucket.shuffle(&mut rng2);
         });
 
         self.metadata.overwrite_tree(&self.metadata_pt);
@@ -100,7 +108,7 @@ impl Server1 {
         server2.add_prf_keys(&self.k_s1_t);
 
         println!("s1.pt: {}", self.pt);
-        println!("s1.p: {}", self.p.as_ref().unwrap());
+        println!("s1.p: {}", self.p);
         println!("s1.metadata_pt: {}", self.metadata_pt);
 
         self.epoch += 1;

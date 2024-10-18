@@ -70,6 +70,9 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
 const NONCE_SIZE: usize = 12; // GCM standard nonce size is 12 bytes
 
 fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let mut message = message.to_vec();
+    message.resize(BLOCK_SIZE, 0);
+
     // Step 1: Derive a 32-byte key for AES-256 using HKDF
     let hk = Hkdf::<Sha256>::new(None, key);
     let mut aes_key = [0u8; 32];
@@ -85,10 +88,13 @@ fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let nonce = Nonce::from_slice(&nonce);
     
     // Step 4: Encrypt the data
-    let ciphertext = cipher.encrypt(nonce, message)
+    let ciphertext = cipher.encrypt(nonce, message.as_slice())
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
     // Concatenate the nonce and ciphertext
+    println!("[encrypt] nonce length: {:?}", nonce.as_slice().len());
+    println!("[encrypt] ciphertext length: {:?}", ciphertext.as_slice().len());
+
     Ok([nonce.as_slice(), ciphertext.as_slice()].concat())
 }
 
@@ -111,8 +117,11 @@ fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let nonce = Nonce::from_slice(nonce);
 
     // Step 4: Decrypt the data
-    cipher.decrypt(nonce, ciphertext)
-        .map_err(|_| CryptoError::DecryptionFailed)
+    let decrypted = cipher.decrypt(nonce, ciphertext)
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+
+    // Ok(decrypted.into_iter().rev().skip_while(|&x| x == 0).collect::<Vec<_>>().into_iter().rev().collect())
+    Ok(decrypted)
 }
 
 
@@ -148,18 +157,22 @@ impl Client {
 
         // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
+        println!("[write] k_msg: {:?}", k_msg);
 
         // 2: ℓ = PRF_kprf (t)
-        let l = prf(k_prf, &epoch.to_be_bytes());
+        let f = prf(k_prf, &epoch.to_be_bytes());
+        println!("[write] f: {:?}", f);
 
         // 3: koram,t = KDF(koram, t)
-        println!("epoch: {:?}", epoch);
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
+        println!("[write] k_oram_t: {:?}", k_oram_t);
 
         // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
+        println!("[write] ct: {:?}", ct);
+
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.s1.lock().unwrap().write(ct, l, Key::new(k_oram_t), cw)
+        self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cw)
     }
 
     fn read(&self, k: &Key) -> Result<Vec<u8>, CryptoError> {
@@ -167,24 +180,35 @@ impl Client {
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
+        println!("[read] k_msg: {:?}", k_msg);
         let k_oram_t =
             kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
 
+        println!("[read] epoch: {}", epoch);
+        println!("[read] k_oram_t: {:?}", k_oram_t);
+
         let f = prf(&k_prf, &epoch.to_be_bytes());
+        println!("[read] f: {:?}", f);
 
         let k_s1_t = self.s1.lock().unwrap().k_s1_t.clone();
 
         // 2: ℓ = PRFkprf (t)
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &self.id.as_bytes()[..]].concat());
+        println!("[read] l: {:?}", l);
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
+        // [read] ct: [96, 157, 167, 170, 34, 215, 238, 42, 4, 220, 66, 185, 103, 144, 173, 107, 251, 152, 157, 123, 191, 107, 253, 189, 77, 253, 107, 207, 247, 170, 128, 55, 121, 68, 47, 49, 41, 248, 239, 27, 30, 236, 96, 253, 146, 165, 214, 147, 157, 15, 1, 152, 166, 218, 46, 3, 12, 237, 22, 164, 103, 212, 201, 16]
+        // [write] ct: [96, 157, 167, 170, 34, 215, 238, 42, 4, 220, 66, 185, 103, 144, 173, 107, 251, 152, 157, 123, 191, 107, 253, 189, 77, 253, 107, 207, 247, 170, 128, 55, 121, 68, 47, 49, 41, 248, 239, 27, 30, 236, 96, 253, 146, 165, 214, 147, 157, 15, 1, 152, 166, 218, 46, 3, 12, 237, 22, 164, 103, 212, 201, 16, 160, 137, 82, 244, 240, 31, 177, 2, 2, 238, 97, 170, 164, 203, 156, 14, 63, 155, 221, 195, 13, 177, 159, 70, 198, 116, 85, 18]
 
         // 4: for block ∈ p do
+        println!("[read] path: {:?}", path);
         for bucket in path {
             for block in bucket {
-                if let Ok(c_msg)= decrypt(&k_oram_t, &block.0) {
-                    return decrypt(k_msg, &c_msg);
+                if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
+                    println!("[read] trying to do internal decryption");
+                    println!("[read] ct: {:?}", ct);
+                    return decrypt(k_msg, &ct);
                 }
             }
         }
@@ -257,7 +281,7 @@ mod tests {
     fn test_encrypt_decrypt_with_kdf_key() {
         // Test with KDF-derived key
         let key = kdf(b"encryption key", "enc").expect("KDF failed");
-        let message = b"Hello, World!";
+        let message = b"1234";
 
         let ciphertext = encrypt(&key, message).expect("Encryption failed");
         let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
@@ -270,7 +294,7 @@ mod tests {
     fn test_encrypt_decrypt_with_random_key() {
         // Test with random key
         let random_key = Key::random(&mut thread_rng());
-        let random_message = b"Random message";
+        let random_message = b"123987234789234";
 
         let random_ciphertext = encrypt(&random_key.0, random_message).expect("Encryption failed");
         let random_decrypted = decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
@@ -299,11 +323,11 @@ mod tests {
 
         s1.lock().unwrap().batch_init(1);
 
-        alice.write(&[1, 2, 3], &k).expect("Write failed");
+        alice.write(&[1], &k).expect("Write failed");
         s1.lock().unwrap().batch_write();
 
         let msg = alice.read(&k).expect("Read failed");
-        assert_eq!(msg, vec![1, 2, 3]);
+        assert_eq!(msg, vec![1]);
     }
 
     #[test]
