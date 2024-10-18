@@ -43,21 +43,15 @@ impl Server1 {
         self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
         self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
 
-        println!("[batch_init] metadata_pt:\n{}", self.metadata_pt);
-        println!("[batch_init] pt:\n{}", self.pt);
-        println!("[batch_init] p:\n{}", self.p);
-
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }
 
     pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cw: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
-
         let l = prf(&self.k_s1_t.0, &[&f[..], &cw[..]].concat());
-        println!("[write] l: {:?}", l);
-
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
+
         Ok(())
     }
 
@@ -86,9 +80,6 @@ impl Server1 {
             });
         });
 
-        println!("[batch_write] epoch: {}", self.epoch);
-        println!("[batch_write] metadata_pt:\n{}", self.metadata_pt);
-        println!("[batch_write] pt:\n{}", self.pt);
         self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
             let bucket = bucket.as_mut().expect("Bucket should exist");
             let metadata_bucket: &mut Metadata = metadata_bucket.as_mut().expect("Metadata bucket should exist");
@@ -106,10 +97,6 @@ impl Server1 {
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
-
-        println!("s1.pt: {}", self.pt);
-        println!("s1.p: {}", self.p);
-        println!("s1.metadata_pt: {}", self.metadata_pt);
 
         self.epoch += 1;
     }

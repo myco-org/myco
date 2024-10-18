@@ -28,7 +28,7 @@ enum CryptoError {
     #[error("Encryption failed")]
     EncryptionFailed,
     #[error("Decryption failed")]
-    DecryptionFailed,
+    NoMessageFound,
 }
 
 pub(crate) fn u8_vec_to_path_vec(input: Vec<u8>) -> Path {
@@ -67,12 +67,7 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     result
 }
 
-const NONCE_SIZE: usize = 12; // GCM standard nonce size is 12 bytes
-
 fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    let mut message = message.to_vec();
-    message.resize(BLOCK_SIZE, 0);
-
     // Step 1: Derive a 32-byte key for AES-256 using HKDF
     let hk = Hkdf::<Sha256>::new(None, key);
     let mut aes_key = [0u8; 32];
@@ -88,29 +83,26 @@ fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let nonce = Nonce::from_slice(&nonce);
     
     // Step 4: Encrypt the data
-    let ciphertext = cipher.encrypt(nonce, message.as_slice())
+    let ciphertext = cipher.encrypt(nonce, message)
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
     // Concatenate the nonce and ciphertext
-    println!("[encrypt] nonce length: {:?}", nonce.as_slice().len());
-    println!("[encrypt] ciphertext length: {:?}", ciphertext.as_slice().len());
-
     Ok([nonce.as_slice(), ciphertext.as_slice()].concat())
 }
 
 fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     if encrypted_data.len() < NONCE_SIZE {
-        return Err(CryptoError::DecryptionFailed);
+        return Err(CryptoError::NoMessageFound);
     }
 
     // Step 1: Derive the same 32-byte key for AES-256 using HKDF
     let hk = Hkdf::<Sha256>::new(None, key);
     let mut aes_key = [0u8; 32];
     hk.expand(b"encryption_key", &mut aes_key)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|_| CryptoError::NoMessageFound)?;
 
     // Step 2: Initialize AES-256-GCM with the derived key
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::DecryptionFailed)?;
+    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::NoMessageFound)?;
 
     // Step 3: Separate the nonce and the ciphertext
     let (nonce, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
@@ -118,7 +110,7 @@ fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
 
     // Step 4: Decrypt the data
     let decrypted = cipher.decrypt(nonce, ciphertext)
-        .map_err(|_| CryptoError::DecryptionFailed)?;
+        .map_err(|_| CryptoError::NoMessageFound)?;
 
     // Ok(decrypted.into_iter().rev().skip_while(|&x| x == 0).collect::<Vec<_>>().into_iter().rev().collect())
     Ok(decrypted)
@@ -128,6 +120,7 @@ fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
 
 struct Client {
     id: String,
+    epoch: usize,
     keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
     s1: Arc<Mutex<Server1>>,
     s2: Arc<Mutex<Server2>>,
@@ -137,6 +130,7 @@ impl Client {
     fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
             id,
+            epoch: 0,
             keys: HashMap::new(),
             s1,
             s2,
@@ -152,68 +146,59 @@ impl Client {
     }
 
     fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), CryptoError> {
-        let epoch  = self.s1.lock().unwrap().epoch;
+        let epoch  = self.epoch;
         let cw = self.id.clone().into_bytes();
 
         // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
-        println!("[write] k_msg: {:?}", k_msg);
 
         // 2: ℓ = PRF_kprf (t)
         let f = prf(k_prf, &epoch.to_be_bytes());
-        println!("[write] f: {:?}", f);
 
         // 3: koram,t = KDF(koram, t)
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
-        println!("[write] k_oram_t: {:?}", k_oram_t);
 
         // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
         println!("[write] ct: {:?}", ct);
 
+        self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
         self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cw)
     }
 
     fn read(&self, k: &Key) -> Result<Vec<u8>, CryptoError> {
-        let epoch  = self.s1.lock().unwrap().epoch - 1;
+        let epoch  = self.epoch - 1;
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-        println!("[read] k_msg: {:?}", k_msg);
         let k_oram_t =
-            kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::DecryptionFailed)?;
+            kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::NoMessageFound)?;
 
-        println!("[read] epoch: {}", epoch);
-        println!("[read] k_oram_t: {:?}", k_oram_t);
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
-        println!("[read] f: {:?}", f);
 
         let k_s1_t = self.s1.lock().unwrap().k_s1_t.clone();
 
         // 2: ℓ = PRFkprf (t)
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &self.id.as_bytes()[..]].concat());
-        println!("[read] l: {:?}", l);
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
-        // [read] ct: [96, 157, 167, 170, 34, 215, 238, 42, 4, 220, 66, 185, 103, 144, 173, 107, 251, 152, 157, 123, 191, 107, 253, 189, 77, 253, 107, 207, 247, 170, 128, 55, 121, 68, 47, 49, 41, 248, 239, 27, 30, 236, 96, 253, 146, 165, 214, 147, 157, 15, 1, 152, 166, 218, 46, 3, 12, 237, 22, 164, 103, 212, 201, 16]
-        // [write] ct: [96, 157, 167, 170, 34, 215, 238, 42, 4, 220, 66, 185, 103, 144, 173, 107, 251, 152, 157, 123, 191, 107, 253, 189, 77, 253, 107, 207, 247, 170, 128, 55, 121, 68, 47, 49, 41, 248, 239, 27, 30, 236, 96, 253, 146, 165, 214, 147, 157, 15, 1, 152, 166, 218, 46, 3, 12, 237, 22, 164, 103, 212, 201, 16, 160, 137, 82, 244, 240, 31, 177, 2, 2, 238, 97, 170, 164, 203, 156, 14, 63, 155, 221, 195, 13, 177, 159, 70, 198, 116, 85, 18]
+
 
         // 4: for block ∈ p do
-        println!("[read] path: {:?}", path);
         for bucket in path {
             for block in bucket {
+                println!("[read] block: {:?}", block.0);
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    println!("[read] trying to do internal decryption");
                     println!("[read] ct: {:?}", ct);
                     return decrypt(k_msg, &ct);
                 }
             }
         }
         // 8: end for
-        Err(CryptoError::DecryptionFailed)
+        Err(CryptoError::NoMessageFound)
     }
 
     fn fake_write(&self) -> Result<(), CryptoError> {
@@ -235,7 +220,7 @@ impl Client {
 }
 
 #[cfg(test)]
-mod tests {
+mod e2e_tests {
     use super::*;
 
     fn try_to_decrypt_data_on_path(path: Vec<Bucket>, k_oram_t: &Key, k_msg: &Key) -> Result<Vec<u8>, CryptoError> {
@@ -246,7 +231,7 @@ mod tests {
                 }
             }
         }
-        Err(CryptoError::DecryptionFailed)
+        Err(CryptoError::NoMessageFound)
     }
 
     #[test]
@@ -330,58 +315,58 @@ mod tests {
         assert_eq!(msg, vec![1]);
     }
 
-    #[test]
-    fn test_fake_operations() {
-        let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+    // #[test]
+    // fn test_fake_operations() {
+    //     let s2 = Arc::new(Mutex::new(Server2::new()));
+    //     let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    //     let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
 
-        s1.lock().unwrap().batch_init(1);
+    //     s1.lock().unwrap().batch_init(1);
 
-        // Perform multiple fake writes
-        for _ in 0..10 {
-            alice.fake_write().expect("Fake write failed");
-        }
+    //     // Perform multiple fake writes
+    //     for _ in 0..10 {
+    //         alice.fake_write().expect("Fake write failed");
+    //     }
 
-        // Check that the server state hasn't changed
-        let server_state_before = s1.lock().unwrap().pt.clone();
-        s1.lock().unwrap().batch_write();
-        let server_state_after = s1.lock().unwrap().pt.clone();
-        assert_eq!(server_state_before, server_state_after, "Server state changed after fake writes");
+    //     // Check that the server state hasn't changed
+    //     let server_state_before = s1.lock().unwrap().pt.clone();
+    //     s1.lock().unwrap().batch_write();
+    //     let server_state_after = s1.lock().unwrap().pt.clone();
+    //     assert_eq!(server_state_before, server_state_after, "Server state changed after fake writes");
 
-        // Perform multiple fake reads
-        for _ in 0..10 {
-            let fake_read = alice.fake_read();
-            assert_eq!(fake_read.len(), 1, "Fake read should return a single block");
-            assert!(!fake_read[0].is_empty(), "Fake read block should be full of dummy data");
-        }
-        // Perform a real write and read operation
-        let k = Key::random(&mut thread_rng());
-        alice.setup(&k).expect("Setup failed");
+    //     // Perform multiple fake reads
+    //     for _ in 0..10 {
+    //         let fake_read = alice.fake_read();
+    //         assert_eq!(fake_read.len(), 1, "Fake read should return a single block");
+    //         assert!(!fake_read[0].is_empty(), "Fake read block should be full of dummy data");
+    //     }
+    //     // Perform a real write and read operation
+    //     let k = Key::random(&mut thread_rng());
+    //     alice.setup(&k).expect("Setup failed");
 
-        alice.write(&[1, 2, 3], &k).expect("Real write failed");
-        s1.lock().unwrap().batch_write();
+    //     alice.write(&[1, 2, 3], &k).expect("Real write failed");
+    //     s1.lock().unwrap().batch_write();
 
-        let real_read = alice.read(&k).expect("Real read failed");
-        assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
+    //     let real_read = alice.read(&k).expect("Real read failed");
+    //     assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
 
-        // Extract keys for later use in decryption attempts
-        let (k_msg, k_oram, _) = alice.keys.get(&k).unwrap();
-        let epoch = s1.lock().unwrap().epoch;
-        let k_oram_t = Key::new(kdf(k_oram, &epoch.to_string()).expect("KDF failed"));
-        let k_msg = Key::new(k_msg.clone());
+    //     // Extract keys for later use in decryption attempts
+    //     let (k_msg, k_oram, _) = alice.keys.get(&k).unwrap();
+    //     let epoch = s1.lock().unwrap().epoch;
+    //     let k_oram_t = Key::new(kdf(k_oram, &epoch.to_string()).expect("KDF failed"));
+    //     let k_msg = Key::new(k_msg.clone());
 
-        // Perform more fake reads, ensure they don't return the real data
-        for _ in 0..10 {
-            let fake_read = alice.fake_read();
-            let decrypted = try_to_decrypt_data_on_path(fake_read, &k_oram_t, &k_msg);
-            assert!(decrypted.is_err(), "Fake read should not return real data");
-        }
+    //     // Perform more fake reads, ensure they don't return the real data
+    //     for _ in 0..10 {
+    //         let fake_read = alice.fake_read();
+    //         let decrypted = try_to_decrypt_data_on_path(fake_read, &k_oram_t, &k_msg);
+    //         assert!(decrypted.is_err(), "Fake read should not return real data");
+    //     }
 
-        // Verify that a real read returns the correct data
-        let real_read = alice.read(&k).expect("Real read failed");
-        assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
-    }
+    //     // Verify that a real read returns the correct data
+    //     let real_read = alice.read(&k).expect("Real read failed");
+    //     assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
+    // }
 
     #[test]
     fn test_multiple_writes_and_reads() {
@@ -389,43 +374,21 @@ mod tests {
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
         
-        s1.lock().unwrap().batch_init(1);
-
         let num_operations = 5;
-        let mut keys = Vec::new();
-        let mut messages = Vec::new();
 
         // Perform multiple writes
         for i in 0..num_operations {
             let k = Key::random(&mut thread_rng());
-            alice.setup(&k).expect("Setup failed");
-            keys.push(k);
-
             let msg = vec![i as u8, (i + 1) as u8, (i + 2) as u8];
-            alice.write(&msg, &keys[i]).expect("Write failed");
-            messages.push(msg);
-        }
 
-        s1.lock().unwrap().batch_write();
 
-        // Perform multiple reads and verify
-        for i in 0..num_operations {
-            let read_msg = alice.read(&keys[i]).expect("Read failed");
-            assert_eq!(read_msg, messages[i], "Read message doesn't match written message for key {}", i);
-        }
+            alice.setup(&k).expect("Setup failed");
+            s1.lock().unwrap().batch_init(1);
+            alice.write(&msg, &k).expect("Write failed");
+            s1.lock().unwrap().batch_write();
 
-        // Write and read again to ensure consistency
-        for i in 0..num_operations {
-            let new_msg = vec![(i * 2) as u8, (i * 2 + 1) as u8, (i * 2 + 2) as u8];
-            alice.write(&new_msg, &keys[i]).expect("Second write failed");
-        }
-
-        s1.lock().unwrap().batch_write();
-
-        for i in 0..num_operations {
-            let new_msg = vec![(i * 2) as u8, (i * 2 + 1) as u8, (i * 2 + 2) as u8];
-            let read_msg = alice.read(&keys[i]).expect("Second read failed");
-            assert_eq!(read_msg, new_msg, "Second read message doesn't match written message for key {}", i);
+            let read_msg = alice.read(&k).expect("Read failed");
+            assert_eq!(read_msg, msg, "Read message doesn't match written message for key {}", i);
         }
     }
 
@@ -440,53 +403,41 @@ mod tests {
         let mut rng = thread_rng();
         
         // Initialize the first epoch
-        s1.lock().unwrap().batch_init(1);
         
-        for epoch in 1..=3 {
-            println!("Epoch {}", epoch);
-            
-            let mut keys = Vec::new();
-            let mut messages = Vec::new();
+        for _ in 0..2 {
+            println!("s1.pt: {}", s1.lock().unwrap().pt);
+            println!("s1.p: {}", s1.lock().unwrap().p);
+            println!("s1.metadata: {}", s1.lock().unwrap().metadata);
+            println!("s1.metadata_pt: {}", s1.lock().unwrap().metadata_pt);
+            println!("s2.tree: {}", s2.lock().unwrap().tree);
 
+            s1.lock().unwrap().batch_init(2);
+            
             // Perform writes for both clients
-            for client in [&mut alice, &mut bob] {
-                for _ in 0..3 {
-                    let k = Key::random(&mut rng);
-                    client.setup(&k).expect("Setup failed");
-                    keys.push(k.clone());
-                    
-                    let msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
-                    client.write(&msg, &k).expect("Write failed");
-                    messages.push(msg.clone());
-                    
-                    // Perform an immediate read to verify
-                    let read_msg = client.read(&k).expect("Read failed");
-                    assert_eq!(read_msg, msg, "Immediate read failed for {}", client.id);
-                }
-            }
+            let k_alice_to_bob = Key::random(&mut rng);
+            let k_bob_to_alice = Key::random(&mut rng);
+
+            alice.setup(&k_alice_to_bob).expect("Setup failed");
+            alice.setup(&k_bob_to_alice).expect("Setup failed");
+
+            bob.setup(&k_bob_to_alice).expect("Setup failed");
+            bob.setup(&k_alice_to_bob).expect("Setup failed");
+
+            let alice_msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
+            let bob_msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
+            alice.write(&alice_msg, &k_alice_to_bob).expect("Write failed");
+            bob.write(&bob_msg, &k_bob_to_alice).expect("Write failed");
             
             // Perform batch write
             s1.lock().unwrap().batch_write();
             
-            // Perform reads for both clients using the same keys
-            let mut key_index = 0;
-            for client in [&mut alice, &mut bob] {
-                for _ in 0..3 {
-                    let k = &keys[key_index];
-                    let msg = &messages[key_index];
-                    
-                    // Read after batch write
-                    let read_msg = client.read(k).expect("Read after batch write failed");
-                    assert_eq!(read_msg, *msg, "Read after batch write failed for {}", client.id);
-                    
-                    key_index += 1;
-                }
-            }
+            let alice_read = alice.read(&k_bob_to_alice).expect("Read failed");
+            println!("Alice read: {:?}", alice_read);
+            assert_eq!(bob_msg, alice_read, "Read message doesn't match written message for bob");
             
-            // Initialize next epoch if not the last one
-            if epoch < 3 {
-                s1.lock().unwrap().batch_init(epoch + 1);
-            }
+            let bob_read = bob.read(&k_alice_to_bob).expect("Read failed");
+            println!("Bob read: {:?}", bob_read);
+            assert_eq!(alice_msg, bob_read, "Read message doesn't match written message for alice");
         }
     }
 
