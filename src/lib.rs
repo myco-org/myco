@@ -160,15 +160,15 @@ impl Client {
 
         // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg)?;
-        println!("[write] ct: {:?}", ct);
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
         self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cw)
     }
 
-    fn read(&self, k: &Key) -> Result<Vec<u8>, CryptoError> {
+    fn read(&self, k: &Key, cw: String) -> Result<Vec<u8>, CryptoError> {
         let epoch  = self.epoch - 1;
+        let cw = cw.into_bytes();
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
@@ -181,7 +181,7 @@ impl Client {
         let k_s1_t = self.s1.lock().unwrap().k_s1_t.clone();
 
         // 2: ℓ = PRFkprf (t)
-        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &self.id.as_bytes()[..]].concat());
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cw[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
@@ -190,9 +190,7 @@ impl Client {
         // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
-                println!("[read] block: {:?}", block.0);
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    println!("[read] ct: {:?}", ct);
                     return decrypt(k_msg, &ct);
                 }
             }
@@ -311,62 +309,39 @@ mod e2e_tests {
         alice.write(&[1], &k).expect("Write failed");
         s1.lock().unwrap().batch_write();
 
-        let msg = alice.read(&k).expect("Read failed");
+        let msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
         assert_eq!(msg, vec![1]);
     }
 
-    // #[test]
-    // fn test_fake_operations() {
-    //     let s2 = Arc::new(Mutex::new(Server2::new()));
-    //     let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-    //     let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+    #[test]
+    fn test_multiple_clients_one_epoch() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
 
-    //     s1.lock().unwrap().batch_init(1);
+        let k1 = Key::random(&mut thread_rng());
+        let k2 = Key::random(&mut thread_rng());
 
-    //     // Perform multiple fake writes
-    //     for _ in 0..10 {
-    //         alice.fake_write().expect("Fake write failed");
-    //     }
+        alice.setup(&k1).expect("Setup failed");
+        alice.setup(&k2).expect("Setup failed");
 
-    //     // Check that the server state hasn't changed
-    //     let server_state_before = s1.lock().unwrap().pt.clone();
-    //     s1.lock().unwrap().batch_write();
-    //     let server_state_after = s1.lock().unwrap().pt.clone();
-    //     assert_eq!(server_state_before, server_state_after, "Server state changed after fake writes");
+        bob.setup(&k1).expect("Setup failed");
+        bob.setup(&k2).expect("Setup failed");
 
-    //     // Perform multiple fake reads
-    //     for _ in 0..10 {
-    //         let fake_read = alice.fake_read();
-    //         assert_eq!(fake_read.len(), 1, "Fake read should return a single block");
-    //         assert!(!fake_read[0].is_empty(), "Fake read block should be full of dummy data");
-    //     }
-    //     // Perform a real write and read operation
-    //     let k = Key::random(&mut thread_rng());
-    //     alice.setup(&k).expect("Setup failed");
+        s1.lock().unwrap().batch_init(2);
 
-    //     alice.write(&[1, 2, 3], &k).expect("Real write failed");
-    //     s1.lock().unwrap().batch_write();
+        alice.write(&[1], &k1).expect("Write failed");
+        bob.write(&[2], &k2).expect("Write failed");
 
-    //     let real_read = alice.read(&k).expect("Real read failed");
-    //     assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
+        s1.lock().unwrap().batch_write();
 
-    //     // Extract keys for later use in decryption attempts
-    //     let (k_msg, k_oram, _) = alice.keys.get(&k).unwrap();
-    //     let epoch = s1.lock().unwrap().epoch;
-    //     let k_oram_t = Key::new(kdf(k_oram, &epoch.to_string()).expect("KDF failed"));
-    //     let k_msg = Key::new(k_msg.clone());
+        let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![2]);
 
-    //     // Perform more fake reads, ensure they don't return the real data
-    //     for _ in 0..10 {
-    //         let fake_read = alice.fake_read();
-    //         let decrypted = try_to_decrypt_data_on_path(fake_read, &k_oram_t, &k_msg);
-    //         assert!(decrypted.is_err(), "Fake read should not return real data");
-    //     }
-
-    //     // Verify that a real read returns the correct data
-    //     let real_read = alice.read(&k).expect("Real read failed");
-    //     assert_eq!(real_read, vec![1, 2, 3], "Real read should return the written data");
-    // }
+        let msg = bob.read(&k1, "Alice".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![1]);
+    }
 
     #[test]
     fn test_multiple_writes_and_reads() {
@@ -387,7 +362,7 @@ mod e2e_tests {
             alice.write(&msg, &k).expect("Write failed");
             s1.lock().unwrap().batch_write();
 
-            let read_msg = alice.read(&k).expect("Read failed");
+            let read_msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
             assert_eq!(read_msg, msg, "Read message doesn't match written message for key {}", i);
         }
     }
@@ -404,12 +379,8 @@ mod e2e_tests {
         
         // Initialize the first epoch
         
-        for _ in 0..2 {
-            println!("s1.pt: {}", s1.lock().unwrap().pt);
-            println!("s1.p: {}", s1.lock().unwrap().p);
-            println!("s1.metadata: {}", s1.lock().unwrap().metadata);
-            println!("s1.metadata_pt: {}", s1.lock().unwrap().metadata_pt);
-            println!("s2.tree: {}", s2.lock().unwrap().tree);
+        for _ in 0..5 {
+            s1.lock().unwrap().batch_init(2);
 
             s1.lock().unwrap().batch_init(2);
             
@@ -431,12 +402,10 @@ mod e2e_tests {
             // Perform batch write
             s1.lock().unwrap().batch_write();
             
-            let alice_read = alice.read(&k_bob_to_alice).expect("Read failed");
-            println!("Alice read: {:?}", alice_read);
+            let alice_read = alice.read(&k_bob_to_alice, "Bob".to_string()).expect("Read failed");
             assert_eq!(bob_msg, alice_read, "Read message doesn't match written message for bob");
             
-            let bob_read = bob.read(&k_alice_to_bob).expect("Read failed");
-            println!("Bob read: {:?}", bob_read);
+            let bob_read = bob.read(&k_alice_to_bob, "Alice".to_string()).expect("Read failed");
             assert_eq!(alice_msg, bob_read, "Read message doesn't match written message for alice");
         }
     }

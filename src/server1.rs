@@ -49,7 +49,7 @@ impl Server1 {
 
     pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cw: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
-        let l = prf(&self.k_s1_t.0, &[&f[..], &cw[..]].concat());
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cw[..]].concat());
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
 
         Ok(())
