@@ -358,14 +358,10 @@ mod e2e_tests {
             let k = Key::random(&mut thread_rng());
             let msg = vec![i as u8, (i + 1) as u8, (i + 2) as u8];
 
-
             alice.setup(&k).expect("Setup failed");
             s1.lock().unwrap().batch_init(1);
-
             alice.write(&msg, &k).expect("Write failed");
-
             s1.lock().unwrap().batch_write();
-
             let read_msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
 
             assert_eq!(read_msg, msg, "Read message doesn't match written message for key {}", i);
