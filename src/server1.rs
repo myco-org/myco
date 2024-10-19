@@ -4,6 +4,7 @@ use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, Key, Metadata, Path
 };
 use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use rayon::prelude::*; 
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
@@ -92,7 +93,7 @@ impl Server1 {
                 metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
             });
 
-            assert_eq!(bucket.len(), Z, "Bucket length is not Z");
+            assert_eq!(bucket.len(), Z, "Bucket length is not Z in epoch {}: bucket length={}, expected={}", self.epoch, bucket.len(), Z);            
             assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
 
             let mut rng1 = rand::rngs::StdRng::from_seed(seed);
