@@ -58,8 +58,15 @@ impl Server1 {
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
         let c_msg = encrypt(&k_oram_t.0, &ct).unwrap();
         let (bucket, path) = self.pt.lca(&l).unwrap();
+
+        let mut metadata_bucket = self.metadata_pt.get(&path).unwrap().clone();
+
+        assert_eq!(bucket.len(), metadata_bucket.len(), "Bucket and metadata bucket are not the same length");
+        assert!(bucket.len() < Z, "Bucket is full");
+
         bucket.push(Block::new(c_msg));
-        self.metadata_pt.write(Metadata::new(l.clone(), k_oram_t.clone(), t_exp), path);
+        metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
+        self.metadata_pt.write(metadata_bucket, path);
     }
 
     pub fn batch_write(&mut self) {
@@ -73,8 +80,9 @@ impl Server1 {
                     let (l, k_oram_t, t_exp) = metadata_bucket.get(b).expect("Failed to get metadata bucket at index {b}");
                     if self.epoch < *t_exp {
                         let c_msg = bucket.get(b).expect("Failed to get bucket at index {b}");
-                        let ct = decrypt(&k_oram_t.0, &c_msg.0).expect("Failed to decrypt message");
-                        self.insert_message(&ct, l, k_oram_t, *t_exp);
+                        if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                            self.insert_message(&ct, l, k_oram_t, *t_exp);
+                        }
                     }
                 });
             });
@@ -83,14 +91,14 @@ impl Server1 {
         self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
             let bucket = bucket.as_mut().expect("Bucket should exist");
             let metadata_bucket: &mut Metadata = metadata_bucket.as_mut().expect("Metadata bucket should exist");
-            // (0..min(bucket.len(), Z)).for_each(|b| {
-            //     bucket[b] = Block::new_random();
-            // });
+            (0..min(bucket.len(), Z)).for_each(|b| {
+                bucket[b] = Block::new_random();
+            });
 
-            // let mut rng1 = rand::rngs::StdRng::from_seed(seed);
-            // let mut rng2 = rand::rngs::StdRng::from_seed(seed);
-            // bucket.shuffle(&mut rng1);
-            // metadata_bucket.shuffle(&mut rng2);
+            let mut rng1 = rand::rngs::StdRng::from_seed(seed);
+            let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+            bucket.shuffle(&mut rng1);
+            metadata_bucket.shuffle(&mut rng2);
         });
 
         self.metadata.overwrite_tree(&self.metadata_pt);
