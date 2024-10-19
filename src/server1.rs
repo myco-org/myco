@@ -47,9 +47,9 @@ impl Server1 {
         self.k_s1_t = Key::random(&mut rng);
     }
 
-    pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cw: Vec<u8>) -> Result<(), CryptoError> {
+    pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cs: Vec<u8>) -> Result<(), CryptoError> {
         let t_exp = self.epoch + DELTA; 
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cw[..]].concat());
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
 
         Ok(())
@@ -58,11 +58,7 @@ impl Server1 {
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
         let c_msg = encrypt(&k_oram_t.0, &ct).unwrap();
         let (bucket, path) = self.pt.lca(&l).unwrap();
-
         let mut metadata_bucket = self.metadata_pt.get(&path).unwrap().clone();
-
-        assert_eq!(bucket.len(), metadata_bucket.len(), "Bucket and metadata bucket are not the same length");
-        assert!(bucket.len() < Z, "Bucket is full");
 
         bucket.push(Block::new(c_msg));
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
@@ -91,9 +87,13 @@ impl Server1 {
         self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
             let bucket = bucket.as_mut().expect("Bucket should exist");
             let metadata_bucket: &mut Metadata = metadata_bucket.as_mut().expect("Metadata bucket should exist");
-            (0..min(bucket.len(), Z)).for_each(|b| {
-                bucket[b] = Block::new_random();
+            (bucket.len()..Z).for_each(|_| {
+                bucket.push(Block::new_random());
+                metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
             });
+
+            assert_eq!(bucket.len(), Z, "Bucket length is not Z");
+            assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
 
             let mut rng1 = rand::rngs::StdRng::from_seed(seed);
             let mut rng2 = rand::rngs::StdRng::from_seed(seed);

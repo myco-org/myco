@@ -2,7 +2,7 @@ use std::ops::{Index, IndexMut};
 
 use rand::{rngs::{StdRng, ThreadRng}, seq::SliceRandom, thread_rng, Rng, RngCore};
 
-use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
+use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA, Z};
 
 pub(crate) type Timestamp = u64;
 
@@ -293,7 +293,7 @@ mod tests {
     fn test_from_vecu8_single_byte() {
         let bytes = vec![0b00000001];
         let path = Path::from(bytes);
-        assert_eq!(path.0, vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left], "Decoding Vec<u8> with single bit set should result in one Right direction");
+        assert_eq!(path.0, vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left, Direction::Left].into_iter().take(D).collect::<Vec<Direction>>(), "Decoding Vec<u8> with single bit set should result in one Right direction");
     }
 
     #[test]
@@ -319,7 +319,7 @@ mod tests {
                 Direction::Left,  // bit 13
                 Direction::Left,  // bit 14
                 Direction::Left,  // bit 15
-            ],
+            ].into_iter().take(D).collect::<Vec<Direction>>(),
             "Decoding multiple bytes should result in the correct sequence of Directions"
         );
     }
@@ -343,7 +343,7 @@ mod tests {
             Direction::Right,
             Direction::Left,
             Direction::Right,
-        ]);
+        ].into_iter().take(D).collect());
         
         let encoded: Vec<u8> = original_path.clone().into();
         let decoded_path = Path::from(encoded.clone());
@@ -383,7 +383,7 @@ mod tests {
                 Direction::Right, // 5
                 Direction::Left,  // 6
                 Direction::Right, // 7
-            ],
+            ].into_iter().take(D).collect::<Vec<Direction>>(),
             "Decoding a single byte should result in the correct sequence of 8 Directions"
         );
     }

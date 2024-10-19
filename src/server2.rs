@@ -1,8 +1,9 @@
-use crate::{tree::BinaryTree, Block, Bucket, Key, Path, D};
+use crate::{tree::BinaryTree, Block, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
     pub(crate) tree: BinaryTree<Bucket>,
     pub(crate) prf_keys: Vec<Key>,
+    pub(crate) epoch: u64,
 }
 
 impl Server2 {
@@ -10,6 +11,7 @@ impl Server2 {
         Server2 {
             tree: BinaryTree::new_with_depth(D),
             prf_keys: vec![],
+            epoch: 0,
         }
     }
 
@@ -20,6 +22,7 @@ impl Server2 {
 
     pub fn write(&mut self, pathset: BinaryTree<Bucket>) {
         self.tree = pathset;
+        self.epoch += 1;
     }
 
     pub fn get_prf_keys(&self) -> Vec<Key> {
@@ -28,6 +31,9 @@ impl Server2 {
 
     pub fn add_prf_keys(&mut self, key: &Key) {
         self.prf_keys.push(key.clone());
-        self.prf_keys.remove(0);
+
+        if self.epoch >= DELTA {
+            self.prf_keys.remove(0);
+        }
     }
 }

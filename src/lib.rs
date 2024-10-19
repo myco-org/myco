@@ -1,4 +1,4 @@
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use aes_gcm::{aead::Aead, Aes256Gcm, Aes128Gcm, KeyInit, Nonce};
 use ::hkdf::Hkdf;
 use rand::{thread_rng, Rng, RngCore};
 use ring::{digest, hkdf, pbkdf2};
@@ -29,14 +29,6 @@ enum CryptoError {
     EncryptionFailed,
     #[error("Decryption failed")]
     NoMessageFound,
-}
-
-pub(crate) fn u8_vec_to_path_vec(input: Vec<u8>) -> Path {
-    Path::new(input
-        .into_iter()
-        .flat_map(|byte| {
-            (0..8).rev().map(move |i| ((byte >> i) & 1).into())
-        }).collect())
 }
 
 // Key Derivation Function (KDF)
@@ -112,7 +104,6 @@ fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let decrypted = cipher.decrypt(nonce, ciphertext)
         .map_err(|_| CryptoError::NoMessageFound)?;
 
-    // Ok(decrypted.into_iter().rev().skip_while(|&x| x == 0).collect::<Vec<_>>().into_iter().rev().collect())
     Ok(decrypted)
 }
 
@@ -147,7 +138,7 @@ impl Client {
 
     fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), CryptoError> {
         let epoch  = self.epoch;
-        let cw = self.id.clone().into_bytes();
+        let cs = self.id.clone().into_bytes();
 
         // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
@@ -163,12 +154,12 @@ impl Client {
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cw)
+        self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cs)
     }
 
-    fn read(&self, k: &Key, cw: String) -> Result<Vec<u8>, CryptoError> {
+    fn read(&self, k: &Key, cs: String) -> Result<Vec<u8>, CryptoError> {
         let epoch  = self.epoch - 1;
-        let cw = cw.into_bytes();
+        let cs = cs.into_bytes();
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
@@ -178,14 +169,14 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
-        let k_s1_t = self.s1.lock().unwrap().k_s1_t.clone();
+        let keys = self.s2.lock().unwrap().get_prf_keys();
+        let k_s1_t = keys.last().unwrap();
 
         // 2: ℓ = PRFkprf (t)
-        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cw[..]].concat());
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
-
 
         // 4: for block ∈ p do
         for bucket in path {
@@ -203,17 +194,17 @@ impl Client {
         let mut rng = thread_rng();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         let k_oram_t = Key::random(&mut rng);
-        let ct: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
-        let cw = self.id.clone().into_bytes();
-        self.s1.lock().unwrap().write(ct, l, k_oram_t, cw)
+        let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
+        let cs = self.id.clone().into_bytes();
+        self.s1.lock().unwrap().write(ct, l, k_oram_t, cs)
     }
 
     fn fake_read(&self) -> Vec<Bucket> {
         // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = thread_rng();
-        let ll: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
+        let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        self.s2.lock().unwrap().read(&u8_vec_to_path_vec(ll))
+        self.s2.lock().unwrap().read(&Path::from(l))
     }
 }
 

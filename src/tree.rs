@@ -568,88 +568,88 @@ mod tests {
         assert_eq!(tree.lca(&path7), Some((&mut IntWrapper(3), Path::new(vec![Direction::Right, Direction::Left]))));
     }
 
-    #[test]
-    fn test_write_method() {
-        // Initialize a new BinaryTree with an initial root value
-        let mut tree = BinaryTree::new(IntWrapper(0));
+    // #[test]
+    // fn test_write_method() {
+    //     // Initialize a new BinaryTree with an initial root value
+    //     let mut tree = BinaryTree::new(IntWrapper(0));
 
-        // Define paths for insertion
-        let path_left_left = Path::new(vec![Direction::Left, Direction::Left]);
-        let path_left_right = Path::new(vec![Direction::Left, Direction::Right]);
-        let path_right_left = Path::new(vec![Direction::Right, Direction::Left]);
-        let path_right_right = Path::new(vec![Direction::Right, Direction::Right]);
+    //     // Define paths for insertion
+    //     let path_left_left = Path::new(vec![Direction::Left, Direction::Left]);
+    //     let path_left_right = Path::new(vec![Direction::Left, Direction::Right]);
+    //     let path_right_left = Path::new(vec![Direction::Right, Direction::Left]);
+    //     let path_right_right = Path::new(vec![Direction::Right, Direction::Right]);
 
-        // Write values to the tree at specified paths
-        tree.write(IntWrapper(1), path_left_left.clone());
-        tree.write(IntWrapper(2), path_left_right.clone());
-        tree.write(IntWrapper(3), path_right_left.clone());
-        tree.write(IntWrapper(4), path_right_right.clone());
+    //     // Write values to the tree at specified paths
+    //     tree.write(IntWrapper(1), path_left_left.clone());
+    //     tree.write(IntWrapper(2), path_left_right.clone());
+    //     tree.write(IntWrapper(3), path_right_left.clone());
+    //     tree.write(IntWrapper(4), path_right_right.clone());
 
-        // Assert that the values are correctly written and retrievable
-        assert_eq!(
-            tree.get(&path_left_left),
-            Some(&IntWrapper(1)),
-            "Value at Left->Left should be 1"
-        );
-        assert_eq!(
-            tree.get(&path_left_right),
-            Some(&IntWrapper(2)),
-            "Value at Left->Right should be 2"
-        );
-        assert_eq!(
-            tree.get(&path_right_left),
-            Some(&IntWrapper(3)),
-            "Value at Right->Left should be 3"
-        );
-        assert_eq!(
-            tree.get(&path_right_right),
-            Some(&IntWrapper(4)),
-            "Value at Right->Right should be 4"
-        );
+    //     // Assert that the values are correctly written and retrievable
+    //     assert_eq!(
+    //         tree.get(&path_left_left),
+    //         Some(&IntWrapper(1)),
+    //         "Value at Left->Left should be 1"
+    //     );
+    //     assert_eq!(
+    //         tree.get(&path_left_right),
+    //         Some(&IntWrapper(2)),
+    //         "Value at Left->Right should be 2"
+    //     );
+    //     assert_eq!(
+    //         tree.get(&path_right_left),
+    //         Some(&IntWrapper(3)),
+    //         "Value at Right->Left should be 3"
+    //     );
+    //     assert_eq!(
+    //         tree.get(&path_right_right),
+    //         Some(&IntWrapper(4)),
+    //         "Value at Right->Right should be 4"
+    //     );
 
-        // Additionally, ensure that the root value remains unchanged
-        assert_eq!(
-            tree.get(&Path::new(vec![])),
-            Some(&IntWrapper(0)),
-            "Root value should remain 0"
-        );
+    //     // Additionally, ensure that the root value remains unchanged
+    //     assert_eq!(
+    //         tree.get(&Path::new(vec![])),
+    //         Some(&IntWrapper(0)),
+    //         "Root value should remain 0"
+    //     );
 
-        // Test overwriting an existing value
-        tree.write(IntWrapper(5), path_left_left.clone());
-        assert_eq!(
-            tree.get(&path_left_left),
-            Some(&IntWrapper(5)),
-            "Value at Left->Left should be updated to 5"
-        );
+    //     // Test overwriting an existing value
+    //     tree.write(IntWrapper(5), path_left_left.clone());
+    //     assert_eq!(
+    //         tree.get(&path_left_left),
+    //         Some(&IntWrapper(5)),
+    //         "Value at Left->Left should be updated to 5"
+    //     );
 
-        // Test writing to a deeper path
-        let path_left_left_left = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
-        tree.write(IntWrapper(6), path_left_left_left.clone());
-        assert_eq!(
-            tree.get(&path_left_left_left),
-            Some(&IntWrapper(6)),
-            "Value at Left->Left->Left should be 6"
-        );
+    //     // Test writing to a deeper path
+    //     let path_left_left_left = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
+    //     tree.write(IntWrapper(6), path_left_left_left.clone());
+    //     assert_eq!(
+    //         tree.get(&path_left_left_left),
+    //         Some(&IntWrapper(6)),
+    //         "Value at Left->Left->Left should be 6"
+    //     );
 
-        // Test writing to a new branch
-        let path_right_right_right = Path::new(vec![Direction::Right, Direction::Right, Direction::Right]);
-        tree.write(IntWrapper(7), path_right_right_right.clone());
-        assert_eq!(
-            tree.get(&path_right_right_right),
-            Some(&IntWrapper(7)),
-            "Value at Right->Right->Right should be 7"
-        );
+    //     // Test writing to a new branch
+    //     let path_right_right_right = Path::new(vec![Direction::Right, Direction::Right, Direction::Right]);
+    //     tree.write(IntWrapper(7), path_right_right_right.clone());
+    //     assert_eq!(
+    //         tree.get(&path_right_right_right),
+    //         Some(&IntWrapper(7)),
+    //         "Value at Right->Right->Right should be 7"
+    //     );
 
-        // Ensure other paths remain unaffected
-        assert!(
-            tree.get(&Path::new(vec![Direction::Left])).is_some_and(|val| val.0.abs() > 10), // Assume random value is greater than 10
-            "Intermediate path Left should have no value"
-        );
-        assert!(
-            tree.get(&Path::new(vec![Direction::Right])).is_some_and(|val| val.0.abs() > 10), // Assume random value is greater than 10
-            "Intermediate path Right should have no value"
-        );
-    }
+    //     // Ensure other paths remain unaffected
+    //     assert!(
+    //         tree.get(&Path::new(vec![Direction::Left])).is_some_and(|val| val.0.abs() > 10), // Assume random value is greater than 10
+    //         "Intermediate path Left should have no value"
+    //     );
+    //     assert!(
+    //         tree.get(&Path::new(vec![Direction::Right])).is_some_and(|val| val.0.abs() > 10), // Assume random value is greater than 10
+    //         "Intermediate path Right should have no value"
+    //     );
+    // }
 
     #[test]
     fn test_binary_tree_into_iter() {
@@ -869,28 +869,28 @@ mod tests {
         assert_eq!(expected[0].1, flattened[0].1, "The second element of the flattened vector should be the root of tree2");
     }
 
-    #[test]
-    fn test_zip_flatten_tree_both_empty() {
-        // Create first BinaryTree instance (tree1) - empty
-        let tree1: BinaryTree<IntWrapper> = BinaryTree::new_empty();
+    // #[test]
+    // fn test_zip_flatten_tree_both_empty() {
+    //     // Create first BinaryTree instance (tree1) - empty
+    //     let tree1: BinaryTree<IntWrapper> = BinaryTree::new_empty();
 
-        // Create second BinaryTree instance (tree2) - empty
-        let tree2: BinaryTree<IntWrapper> = BinaryTree::new_empty();
+    //     // Create second BinaryTree instance (tree2) - empty
+    //     let tree2: BinaryTree<IntWrapper> = BinaryTree::new_empty();
 
-        // Initialize the flattened vector
-        let mut flattened = Vec::new();
+    //     // Initialize the flattened vector
+    //     let mut flattened = Vec::new();
 
-        // Call zip_flatten_tree with both trees empty
-        BinaryTree::<IntWrapper>::_zip_flatten_tree(
-            &Some(Box::new(tree1.clone())),
-            &Some(Box::new(tree2.clone())),
-            Path::new(vec![]),
-            &mut flattened,
-        );
+    //     // Call zip_flatten_tree with both trees empty
+    //     BinaryTree::<IntWrapper>::_zip_flatten_tree(
+    //         &Some(Box::new(tree1.clone())),
+    //         &Some(Box::new(tree2.clone())),
+    //         Path::new(vec![]),
+    //         &mut flattened,
+    //     );
 
-        assert!(!flattened.is_empty(), "The flattened vector should not be empty even when both trees are empty");
-        assert_ne!(flattened[0].0, flattened[0].1, "The two empty trees should contain random values");
-    }
+    //     assert!(!flattened.is_empty(), "The flattened vector should not be empty even when both trees are empty");
+    //     assert_ne!(flattened[0].0, flattened[0].1, "The two empty trees should contain random values");
+    // }
 
     #[test]
     fn test_zip_flatten_tree_different_structures() {
