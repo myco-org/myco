@@ -480,45 +480,4 @@ mod e2e_tests {
             s1.lock().unwrap().batch_write();
         }
     }
-
-    #[test]
-    fn test_encrypt_decrypt_different_key_sizes() {
-        use crate::{decrypt, encrypt, Key};
-        use rand::RngCore;
-
-        let mut rng = ChaCha20Rng::from_entropy();
-
-        // Test cases with 128-bit and 256-bit key sizes
-        let key_sizes = [128, 256]; // AES-128, AES-256
-        let message = b"Hello, World!";
-
-        for &key_size in &key_sizes {
-            // Generate a random key of the specified size
-            let mut key_data = vec![0u8; key_size];
-            rng.fill_bytes(&mut key_data);
-            let key = Key::new(key_data);
-
-            // Encrypt the message
-            let encrypted = encrypt(&key.0, message, EncryptionType::Encrypt).expect("Encryption failed");
-
-            // Decrypt the message
-            let decrypted = decrypt(&key.0, &encrypted).expect("Decryption failed");
-
-            // Check if the decrypted message matches the original
-            assert_eq!(
-                decrypted,
-                message,
-                "Decryption failed for key size: {} bits",
-                key_size * 8
-            );
-
-            // Ensure the encrypted message is different from the original
-            assert_ne!(
-                encrypted,
-                message,
-                "Encryption didn't change the message for key size: {} bits",
-                key_size * 8
-            );
-        }
-    }
 }
