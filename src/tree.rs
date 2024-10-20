@@ -15,11 +15,19 @@ pub(crate) trait TreeValue: Clone + Debug + Default {
 
 impl<T: TreeValue> BinaryTree<T> {
     pub(crate) fn new(value: T) -> Self {
-        BinaryTree { value, left: None, right: None }
+        BinaryTree {
+            value,
+            left: None,
+            right: None,
+        }
     }
 
     pub fn new_empty() -> Self {
-        BinaryTree { value: T::default(), left: None, right: None }
+        BinaryTree {
+            value: T::default(),
+            left: None,
+            right: None,
+        }
     }
 
     pub fn new_with_depth(depth: usize) -> Self {
@@ -28,7 +36,11 @@ impl<T: TreeValue> BinaryTree<T> {
         }
         let left = BinaryTree::new_with_depth(depth - 1);
         let right = BinaryTree::new_with_depth(depth - 1);
-        BinaryTree { value: T::default(), left: Some(Box::new(left)), right: Some(Box::new(right)) }
+        BinaryTree {
+            value: T::default(),
+            left: Some(Box::new(left)),
+            right: Some(Box::new(right)),
+        }
     }
 
     pub fn fill(&mut self, value: T) {
@@ -64,7 +76,7 @@ impl<T: TreeValue> BinaryTree<T> {
         for (values, path) in items {
             let mut current = &mut root;
             current.value = values.first().expect("No value in values").clone();
-            
+
             // Skip the first value as we've already set the root value
             for (direction, value) in path.into_iter().zip(values.into_iter().skip(1)) {
                 match direction {
@@ -115,7 +127,11 @@ impl<T: TreeValue> BinaryTree<T> {
 
         for i in (0..height).rev() {
             let bit = (index >> i) & 1;
-            path.push(if bit == 0 { Direction::Left } else { Direction::Right });
+            path.push(if bit == 0 {
+                Direction::Left
+            } else {
+                Direction::Right
+            });
         }
 
         for direction in path {
@@ -192,7 +208,7 @@ impl<T: TreeValue> BinaryTree<T> {
     pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
         let mut current = self;
         let mut current_path = Path::new(Vec::new());
-        
+
         for &direction in path {
             match direction {
                 Direction::Left => {
@@ -214,13 +230,13 @@ impl<T: TreeValue> BinaryTree<T> {
                     }
                 }
             }
-            
+
             // If we've reached a leaf node, return it and the path
             if current.left.is_none() && current.right.is_none() {
                 return Some((&mut current.value, current_path));
             }
         }
-        
+
         // If we've exhausted path, return the last node and the path
         Some((&mut current.value, current_path))
     }
@@ -243,7 +259,7 @@ impl<T: TreeValue> BinaryTree<T> {
                 }
             }
         }
-    
+
         current.value = value;
     }
 
@@ -283,23 +299,44 @@ impl<T: TreeValue> BinaryTree<T> {
         flattened.push((node.value.clone(), path.clone()));
     }
 
-    pub fn zip_flatten_tree<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
+    pub fn zip_flatten_tree<S: Clone>(
+        &self,
+        rhs: &BinaryTree<S>,
+    ) -> Vec<(Option<T>, Option<S>, Path)> {
         let mut flattened = Vec::new();
-        Self::_zip_flatten_tree(&Some(Box::new(self.clone())), &Some(Box::new(rhs.clone())), Path::new(vec![]), &mut flattened);
+        Self::_zip_flatten_tree(
+            &Some(Box::new(self.clone())),
+            &Some(Box::new(rhs.clone())),
+            Path::new(vec![]),
+            &mut flattened,
+        );
         flattened
     }
 
-    fn _zip_flatten_tree<S: Clone>(lhs: &Option<Box<BinaryTree<T>>>, rhs: &Option<Box<BinaryTree<S>>>, path: Path, flattened: &mut Vec<(Option<T>, Option<S>, Path)>) {
+    fn _zip_flatten_tree<S: Clone>(
+        lhs: &Option<Box<BinaryTree<T>>>,
+        rhs: &Option<Box<BinaryTree<S>>>,
+        path: Path,
+        flattened: &mut Vec<(Option<T>, Option<S>, Path)>,
+    ) {
         match (lhs, rhs) {
             (Some(lhs), Some(rhs)) => {
-                flattened.push((Some(lhs.value.clone()), Some(rhs.value.clone()), path.clone()));
+                flattened.push((
+                    Some(lhs.value.clone()),
+                    Some(rhs.value.clone()),
+                    path.clone(),
+                ));
 
                 if let (Some(left_lhs), Some(left_rhs)) = (&lhs.left, &rhs.left) {
                     let mut left_path = path.clone();
                     left_path.push(Direction::Left);
-                    Self::_zip_flatten_tree(&Some(left_lhs.clone()), &Some(left_rhs.clone()), left_path, flattened);
-                }
-                else if let (Some(left_lhs), None) = (&lhs.left, &rhs.left) {
+                    Self::_zip_flatten_tree(
+                        &Some(left_lhs.clone()),
+                        &Some(left_rhs.clone()),
+                        left_path,
+                        flattened,
+                    );
+                } else if let (Some(left_lhs), None) = (&lhs.left, &rhs.left) {
                     let mut left_path = path.clone();
                     left_path.push(Direction::Left);
                     Self::_zip_flatten_tree(&Some(left_lhs.clone()), &None, left_path, flattened);
@@ -308,15 +345,18 @@ impl<T: TreeValue> BinaryTree<T> {
                 if let (Some(right_lhs), Some(right_rhs)) = (&lhs.right, &rhs.right) {
                     let mut right_path = path.clone();
                     right_path.push(Direction::Right);
-                    Self::_zip_flatten_tree(&Some(right_lhs.clone()), &Some(right_rhs.clone()), right_path, flattened);
-                }
-                else if let (Some(right_lhs), None) = (&lhs.right, &rhs.right) {
+                    Self::_zip_flatten_tree(
+                        &Some(right_lhs.clone()),
+                        &Some(right_rhs.clone()),
+                        right_path,
+                        flattened,
+                    );
+                } else if let (Some(right_lhs), None) = (&lhs.right, &rhs.right) {
                     let mut right_path = path.clone();
                     right_path.push(Direction::Right);
                     Self::_zip_flatten_tree(&Some(right_lhs.clone()), &None, right_path, flattened);
                 }
-
-            },
+            }
             (Some(lhs), None) => {
                 flattened.push((Some(lhs.value.clone()), None, path.clone()));
                 if let Some(left_lhs) = &lhs.left {
@@ -339,16 +379,27 @@ impl<T: TreeValue> BinaryTree<T> {
         output
     }
 
-    fn print_tree_with_paths(&self, prefix: &str, is_left: bool, paths: &[Path], output: &mut String, current_path: Path) {
+    fn print_tree_with_paths(
+        &self,
+        prefix: &str,
+        is_left: bool,
+        paths: &[Path],
+        output: &mut String,
+        current_path: Path,
+    ) {
         let (branch, new_prefix) = if is_left {
             ("├─ ", "│ ")
         } else {
             ("└─ ", "  ")
         };
 
-        let is_on_path = paths.iter().any(|path| 
-            !path.is_empty() && path.into_iter().zip(current_path.clone().into_iter()).all(|(a, b)| *a == b)
-        );
+        let is_on_path = paths.iter().any(|path| {
+            !path.is_empty()
+                && path
+                    .into_iter()
+                    .zip(current_path.clone())
+                    .all(|(a, b)| *a == b)
+        });
 
         let value_str = if is_on_path {
             format!("\x1b[31m{:?}\x1b[0m", self.value) // Red color for nodes on any path
@@ -361,13 +412,25 @@ impl<T: TreeValue> BinaryTree<T> {
         if let Some(left) = &self.left {
             let mut left_path = current_path.clone();
             left_path.push(Direction::Left);
-            left.print_tree_with_paths(&format!("{}{}", prefix, new_prefix), true, paths, output, left_path);
+            left.print_tree_with_paths(
+                &format!("{}{}", prefix, new_prefix),
+                true,
+                paths,
+                output,
+                left_path,
+            );
         }
 
         if let Some(right) = &self.right {
             let mut right_path = current_path.clone();
             right_path.push(Direction::Right);
-            right.print_tree_with_paths(&format!("{}{}", prefix, new_prefix), false, paths, output, right_path);
+            right.print_tree_with_paths(
+                &format!("{}{}", prefix, new_prefix),
+                false,
+                paths,
+                output,
+                right_path,
+            );
         }
     }
 }
@@ -394,7 +457,6 @@ impl<T> Iterator for BinaryTreeIntoIterator<T> {
         self.flattened.pop()
     }
 }
-
 
 impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -432,7 +494,7 @@ impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{SeedableRng, Rng};
+    use rand::{Rng, SeedableRng};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
@@ -473,10 +535,22 @@ mod tests {
         assert!(tree.right.is_none());
         // Test from_vec_with_paths for a small tree
         let small_items = vec![
-            (vec![IntWrapper(0), IntWrapper(0), IntWrapper(1)], Path::new(vec![Direction::Left, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(0), IntWrapper(2)], Path::new(vec![Direction::Left, Direction::Right])),
-            (vec![IntWrapper(0), IntWrapper(3), IntWrapper(3)], Path::new(vec![Direction::Right, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(3), IntWrapper(4)], Path::new(vec![Direction::Right, Direction::Right])),
+            (
+                vec![IntWrapper(0), IntWrapper(0), IntWrapper(1)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(0), IntWrapper(0), IntWrapper(2)],
+                Path::new(vec![Direction::Left, Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(0), IntWrapper(3), IntWrapper(3)],
+                Path::new(vec![Direction::Right, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(0), IntWrapper(3), IntWrapper(4)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ),
         ];
         let small_tree = BinaryTree::from_vec_with_paths(small_items);
 
@@ -492,33 +566,199 @@ mod tests {
     fn test_get() {
         // Create a tree with some values, including non-leaf nodes
         let items = vec![
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(1)], Path::new(vec![Direction::Left, Direction::Left, Direction::Left, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(2)], Path::new(vec![Direction::Left, Direction::Left, Direction::Right, Direction::Right])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(3)], Path::new(vec![Direction::Left, Direction::Right, Direction::Left, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(4)], Path::new(vec![Direction::Right, Direction::Left, Direction::Left, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(5)], Path::new(vec![Direction::Right, Direction::Left, Direction::Right, Direction::Right])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(6)], Path::new(vec![Direction::Right, Direction::Right, Direction::Left, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(7)], Path::new(vec![Direction::Right, Direction::Right, Direction::Right, Direction::Left])),
-            (vec![IntWrapper(0), IntWrapper(1), IntWrapper(2), IntWrapper(3), IntWrapper(8)], Path::new(vec![Direction::Right, Direction::Right, Direction::Right, Direction::Right])),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(1),
+                ],
+                Path::new(vec![
+                    Direction::Left,
+                    Direction::Left,
+                    Direction::Left,
+                    Direction::Left,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(2),
+                ],
+                Path::new(vec![
+                    Direction::Left,
+                    Direction::Left,
+                    Direction::Right,
+                    Direction::Right,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(3),
+                ],
+                Path::new(vec![
+                    Direction::Left,
+                    Direction::Right,
+                    Direction::Left,
+                    Direction::Left,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(4),
+                ],
+                Path::new(vec![
+                    Direction::Right,
+                    Direction::Left,
+                    Direction::Left,
+                    Direction::Left,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(5),
+                ],
+                Path::new(vec![
+                    Direction::Right,
+                    Direction::Left,
+                    Direction::Right,
+                    Direction::Right,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(6),
+                ],
+                Path::new(vec![
+                    Direction::Right,
+                    Direction::Right,
+                    Direction::Left,
+                    Direction::Left,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(7),
+                ],
+                Path::new(vec![
+                    Direction::Right,
+                    Direction::Right,
+                    Direction::Right,
+                    Direction::Left,
+                ]),
+            ),
+            (
+                vec![
+                    IntWrapper(0),
+                    IntWrapper(1),
+                    IntWrapper(2),
+                    IntWrapper(3),
+                    IntWrapper(8),
+                ],
+                Path::new(vec![
+                    Direction::Right,
+                    Direction::Right,
+                    Direction::Right,
+                    Direction::Right,
+                ]),
+            ),
         ];
         let tree = BinaryTree::from_vec_with_paths(items);
 
         // Test get method for existing paths
-        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left, Direction::Left, Direction::Left])), Some(&IntWrapper(1)));
-        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left, Direction::Right, Direction::Right])), Some(&IntWrapper(2)));
-        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Right, Direction::Right, Direction::Right])), Some(&IntWrapper(8)));
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Left,
+                Direction::Left,
+                Direction::Left,
+                Direction::Left
+            ])),
+            Some(&IntWrapper(1))
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Left,
+                Direction::Left,
+                Direction::Right,
+                Direction::Right
+            ])),
+            Some(&IntWrapper(2))
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Right,
+                Direction::Right,
+                Direction::Right,
+                Direction::Right
+            ])),
+            Some(&IntWrapper(8))
+        );
 
         // Test get method for non-leaf nodes
-        assert_eq!(tree.get(&Path::new(vec![Direction::Left])), Some(&IntWrapper(1)));
-        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Left])), Some(&IntWrapper(2)));
+        assert_eq!(
+            tree.get(&Path::new(vec![Direction::Left])),
+            Some(&IntWrapper(1))
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![Direction::Right, Direction::Left])),
+            Some(&IntWrapper(2))
+        );
 
         // Test get method for root
         assert_eq!(tree.get(&Path::new(vec![])), Some(&IntWrapper(0)));
 
         // Test get method for non-existing paths
-        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Left, Direction::Left, Direction::Right])), None);
-        assert_eq!(tree.get(&Path::new(vec![Direction::Right, Direction::Right, Direction::Left, Direction::Right])), None);
-        assert_eq!(tree.get(&Path::new(vec![Direction::Left, Direction::Right, Direction::Right, Direction::Right])), None);
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Left,
+                Direction::Left,
+                Direction::Left,
+                Direction::Right
+            ])),
+            None
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Right,
+                Direction::Right,
+                Direction::Left,
+                Direction::Right
+            ])),
+            None
+        );
+        assert_eq!(
+            tree.get(&Path::new(vec![
+                Direction::Left,
+                Direction::Right,
+                Direction::Right,
+                Direction::Right
+            ])),
+            None
+        );
     }
 
     #[test]
@@ -531,12 +771,30 @@ mod tests {
         //     1  2 3 4
         let items = vec![
             (vec![IntWrapper(7)], Path::new(vec![])), // Root node
-            (vec![IntWrapper(7), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(7), IntWrapper(6)], Path::new(vec![Direction::Right])),
-            (vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)], Path::new(vec![Direction::Left, Direction::Left])),
-            (vec![IntWrapper(7), IntWrapper(5), IntWrapper(2)], Path::new(vec![Direction::Left, Direction::Right])),
-            (vec![IntWrapper(7), IntWrapper(6), IntWrapper(3)], Path::new(vec![Direction::Right, Direction::Left])),
-            (vec![IntWrapper(7), IntWrapper(6), IntWrapper(4)], Path::new(vec![Direction::Right, Direction::Right])),
+            (
+                vec![IntWrapper(7), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(2)],
+                Path::new(vec![Direction::Left, Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6), IntWrapper(3)],
+                Path::new(vec![Direction::Right, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6), IntWrapper(4)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ),
         ];
         let mut tree = BinaryTree::from_vec_with_paths(items);
 
@@ -547,7 +805,13 @@ mod tests {
 
         // Case 2: Path partially exists (extended beyond existing nodes)
         let path2 = Path::new(vec![Direction::Left, Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path2), Some((&mut IntWrapper(1), Path::new(vec![Direction::Left, Direction::Left]))));
+        assert_eq!(
+            tree.lca(&path2),
+            Some((
+                &mut IntWrapper(1),
+                Path::new(vec![Direction::Left, Direction::Left])
+            ))
+        );
 
         // Case 3: Path to another leaf node
         let path3 = Path::new(vec![Direction::Right, Direction::Right]);
@@ -563,11 +827,23 @@ mod tests {
 
         // Case 6: Path that does not exist at all
         let path6 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
-        assert_eq!(tree.lca(&path6), Some((&mut IntWrapper(2), Path::new(vec![Direction::Left, Direction::Right]))));
+        assert_eq!(
+            tree.lca(&path6),
+            Some((
+                &mut IntWrapper(2),
+                Path::new(vec![Direction::Left, Direction::Right])
+            ))
+        );
 
         // Case 7: Path to a non-existent right child
         let path7 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path7), Some((&mut IntWrapper(3), Path::new(vec![Direction::Right, Direction::Left]))));
+        assert_eq!(
+            tree.lca(&path7),
+            Some((
+                &mut IntWrapper(3),
+                Path::new(vec![Direction::Right, Direction::Left])
+            ))
+        );
     }
 
     // #[test]
@@ -663,8 +939,31 @@ mod tests {
         tree.right.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(6))));
         tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(7))));
 
-        let flattened: Vec<(IntWrapper, Path)> = tree.into_iter().collect();    
-        assert_eq!(flattened, vec![(IntWrapper(1), Path::new(vec![])), (IntWrapper(2), Path::new(vec![Direction::Left])), (IntWrapper(4), Path::new(vec![Direction::Left, Direction::Left])), (IntWrapper(5), Path::new(vec![Direction::Left, Direction::Right])), (IntWrapper(3), Path::new(vec![Direction::Right])), (IntWrapper(6), Path::new(vec![Direction::Right, Direction::Left])), (IntWrapper(7), Path::new(vec![Direction::Right, Direction::Right]))]);
+        let flattened: Vec<(IntWrapper, Path)> = tree.into_iter().collect();
+        assert_eq!(
+            flattened,
+            vec![
+                (IntWrapper(1), Path::new(vec![])),
+                (IntWrapper(2), Path::new(vec![Direction::Left])),
+                (
+                    IntWrapper(4),
+                    Path::new(vec![Direction::Left, Direction::Left])
+                ),
+                (
+                    IntWrapper(5),
+                    Path::new(vec![Direction::Left, Direction::Right])
+                ),
+                (IntWrapper(3), Path::new(vec![Direction::Right])),
+                (
+                    IntWrapper(6),
+                    Path::new(vec![Direction::Right, Direction::Left])
+                ),
+                (
+                    IntWrapper(7),
+                    Path::new(vec![Direction::Right, Direction::Right])
+                )
+            ]
+        );
     }
 
     #[test]
@@ -676,9 +975,19 @@ mod tests {
         let expected = BinaryTree::<IntWrapper>::new_empty();
 
         // Assert that the created tree matches the expected tree
-        assert_eq!(tree.height(), expected.height(), "A tree with depth 0 should have height 0");
-        assert_eq!(tree.left, expected.left, "A tree with depth 0 should have no left child");
-        assert_eq!(tree.right, expected.right, "A tree with depth 0 should have no right child");
+        assert_eq!(
+            tree.height(),
+            expected.height(),
+            "A tree with depth 0 should have height 0"
+        );
+        assert_eq!(
+            tree.left, expected.left,
+            "A tree with depth 0 should have no left child"
+        );
+        assert_eq!(
+            tree.right, expected.right,
+            "A tree with depth 0 should have no right child"
+        );
     }
 
     #[test]
@@ -704,9 +1013,12 @@ mod tests {
         let actual_nodes = count_nodes(&tree);
 
         // Assert that the number of nodes matches the expected count
-        assert_eq!(actual_nodes, expected_nodes, "A tree with depth {} should have {} nodes, but found {}", depth, expected_nodes, actual_nodes);
+        assert_eq!(
+            actual_nodes, expected_nodes,
+            "A tree with depth {} should have {} nodes, but found {}",
+            depth, expected_nodes, actual_nodes
+        );
     }
-
 
     #[test]
     fn test_get_all_nodes_along_path() {
@@ -734,43 +1046,43 @@ mod tests {
             // Test case 2: Path to the left child
             (
                 Path::new(vec![Direction::Left]),
-                vec![IntWrapper(7),IntWrapper(5)],
+                vec![IntWrapper(7), IntWrapper(5)],
                 "Path [Left] should return the left child",
             ),
             // Test case 3: Path to the right child
             (
                 Path::new(vec![Direction::Right]),
-                vec![IntWrapper(7),IntWrapper(6)],
+                vec![IntWrapper(7), IntWrapper(6)],
                 "Path [Right] should return the right child",
             ),
             // Test case 4: Path to the left-left grandchild
             (
                 Path::new(vec![Direction::Left, Direction::Left]),
-                vec![IntWrapper(7),IntWrapper(5), IntWrapper(1)],
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)],
                 "Path [Left, Left] should return the left child and its left child",
             ),
             // Test case 5: Path to the left-right grandchild
             (
                 Path::new(vec![Direction::Left, Direction::Right]),
-                vec![IntWrapper(7),IntWrapper(5), IntWrapper(2)],
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(2)],
                 "Path [Left, Right] should return the left child and its right child",
             ),
             // Test case 6: Path to the right-right grandchild
             (
                 Path::new(vec![Direction::Right, Direction::Right]),
-                vec![IntWrapper(7),IntWrapper(6), IntWrapper(3)],
+                vec![IntWrapper(7), IntWrapper(6), IntWrapper(3)],
                 "Path [Right, Right] should return the right child and its right child",
             ),
             // Test case 7: Path that partially exists (non-existent node)
             (
                 Path::new(vec![Direction::Right, Direction::Left]),
-                vec![IntWrapper(7),IntWrapper(6)],
+                vec![IntWrapper(7), IntWrapper(6)],
                 "Path [Right, Left] should return only existing nodes up to where the path breaks",
             ),
             // Test case 8: Longer path with non-existent nodes
             (
                 Path::new(vec![Direction::Left, Direction::Left, Direction::Left]),
-                vec![IntWrapper(7),IntWrapper(5), IntWrapper(1)],
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)],
                 "Path [Left, Left, Left] should return nodes up to the last existing node",
             ),
         ];
@@ -794,8 +1106,14 @@ mod tests {
         //    2   3
         let tree1 = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])),
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Create second BinaryTree instance (tree2)
@@ -805,8 +1123,14 @@ mod tests {
         //    5   6
         let tree2 = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Initialize the flattened vector
@@ -824,8 +1148,16 @@ mod tests {
         // Assuming zip_flatten_tree traverses both trees and collects nodes from both
         let expected = vec![
             (Some(IntWrapper(1)), Some(IntWrapper(4)), Path::new(vec![])),
-            (Some(IntWrapper(2)), Some(IntWrapper(5)), Path::new(vec![Direction::Left])),
-            (Some(IntWrapper(3)), Some(IntWrapper(6)), Path::new(vec![Direction::Right])),
+            (
+                Some(IntWrapper(2)),
+                Some(IntWrapper(5)),
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                Some(IntWrapper(3)),
+                Some(IntWrapper(6)),
+                Path::new(vec![Direction::Right]),
+            ),
         ];
 
         // Since the function uses recursion and pushes nodes in a certain order,
@@ -833,7 +1165,10 @@ mod tests {
         // For this example, we'll sort both vectors for comparison.
 
         // // Assert that the flattened vector matches the expected result
-        assert_eq!(flattened, expected, "The zipped flattened trees do not match the expected output");
+        assert_eq!(
+            flattened, expected,
+            "The zipped flattened trees do not match the expected output"
+        );
     }
 
     #[test]
@@ -848,8 +1183,14 @@ mod tests {
         //    5   6
         let tree2 = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Initialize the flattened vector
@@ -863,12 +1204,13 @@ mod tests {
             &mut flattened,
         );
 
-        let expected = vec![
-            (Some(IntWrapper(-1)), Some(IntWrapper(4)), Path::new(vec![])),
-        ];
+        let expected = [(Some(IntWrapper(-1)), Some(IntWrapper(4)), Path::new(vec![]))];
 
         // Assert that the flattened vector matches the expected result
-        assert_eq!(expected[0].1, flattened[0].1, "The second element of the flattened vector should be the root of tree2");
+        assert_eq!(
+            expected[0].1, flattened[0].1,
+            "The second element of the flattened vector should be the root of tree2"
+        );
     }
 
     // #[test]
@@ -904,9 +1246,15 @@ mod tests {
         //   /
         //  3
         let tree1 = BinaryTree::from_vec_with_paths(vec![
-            (vec![IntWrapper(1)], Path::new(vec![])),                    // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),    // Left child
-            (vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)], Path::new(vec![Direction::Left, Direction::Left])), // Left-Left child
+            (vec![IntWrapper(1)], Path::new(vec![])), // Root
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ), // Left child
+            (
+                vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ), // Left-Left child
         ]);
 
         // Create second BinaryTree instance (tree2)
@@ -917,9 +1265,15 @@ mod tests {
         //         \
         //          6
         let tree2 = BinaryTree::from_vec_with_paths(vec![
-            (vec![IntWrapper(4)], Path::new(vec![])),                             // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Right])),            // Right child
-            (vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)], Path::new(vec![Direction::Right, Direction::Right])), // Right-Right child
+            (vec![IntWrapper(4)], Path::new(vec![])), // Root
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Right]),
+            ), // Right child
+            (
+                vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ), // Right-Right child
         ]);
 
         // Initialize the flattened vector
@@ -937,10 +1291,17 @@ mod tests {
         let expected = vec![
             (Some(IntWrapper(1)), Some(IntWrapper(4)), Path::new(vec![])),
             (Some(IntWrapper(2)), None, Path::new(vec![Direction::Left])),
-            (Some(IntWrapper(3)), None, Path::new(vec![Direction::Left, Direction::Left])),
+            (
+                Some(IntWrapper(3)),
+                None,
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ),
         ];
 
-        assert_eq!(flattened, expected, "The zipped flattened trees with different structures do not match the expected output");
+        assert_eq!(
+            flattened, expected,
+            "The zipped flattened trees with different structures do not match the expected output"
+        );
     }
 
     #[test]
@@ -952,8 +1313,14 @@ mod tests {
         //    2   3
         let mut original = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])), // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Create the other tree to overwrite with
@@ -963,8 +1330,14 @@ mod tests {
         //    5   6
         let other = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Perform the overwrite
@@ -973,12 +1346,21 @@ mod tests {
         // Define the expected tree after overwrite
         let expected = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root overwritten
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])), // Left child overwritten
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])), // Right child overwritten
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ), // Left child overwritten
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ), // Right child overwritten
         ]);
 
         // Assert that the original tree now matches the expected tree
-        assert_eq!(original, expected, "The tree was not correctly overwritten with the other tree");
+        assert_eq!(
+            original, expected,
+            "The tree was not correctly overwritten with the other tree"
+        );
     }
 
     #[test]
@@ -991,12 +1373,17 @@ mod tests {
         //      1
         //     / \
         //    2   3
-        let other= BinaryTree::from_vec_with_paths(vec![
+        let other = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])), // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
-
 
         // Perform the overwrite
         original.overwrite_tree(&other);
@@ -1005,12 +1392,21 @@ mod tests {
         // Since 'other' is empty, original tree should remain unchanged
         let expected = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])), // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Assert that the original tree remains unchanged
-        assert_eq!(original, expected, "Overwriting with an empty tree should not alter the original tree");
+        assert_eq!(
+            original, expected,
+            "Overwriting with an empty tree should not alter the original tree"
+        );
     }
 
     #[test]
@@ -1025,8 +1421,14 @@ mod tests {
         //    5   6
         let other = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Perform the overwrite
@@ -1035,12 +1437,21 @@ mod tests {
         // Define the expected tree after overwrite
         let expected = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(4), IntWrapper(6)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Assert that the original tree now matches the expected tree
-        assert_eq!(original, expected, "Overwriting an empty tree with another tree should result in the other tree");
+        assert_eq!(
+            original, expected,
+            "Overwriting an empty tree with another tree should result in the other tree"
+        );
     }
 
     #[test]
@@ -1054,8 +1465,14 @@ mod tests {
         //  3
         let mut original = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])), // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)], Path::new(vec![Direction::Left, Direction::Left])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ),
         ]);
 
         // Create the other tree to overwrite with
@@ -1067,8 +1484,14 @@ mod tests {
         //          6
         let other = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Right])),
-            (vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)], Path::new(vec![Direction::Right, Direction::Right])),
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ),
         ]);
 
         // Perform the overwrite
@@ -1076,18 +1499,33 @@ mod tests {
 
         // Define the expected tree after overwrite
         let expected = BinaryTree::from_vec_with_paths(vec![
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])), // Existing left child remains as 'other' has no left
-            (vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)], Path::new(vec![Direction::Left, Direction::Left])), // Existing left-left child remains
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ), // Existing left child remains as 'other' has no left
+            (
+                vec![IntWrapper(1), IntWrapper(2), IntWrapper(3)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ), // Existing left-left child remains
             (vec![IntWrapper(4)], Path::new(vec![])), // Root overwritten
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Right])), // Right child added
-            (vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)], Path::new(vec![Direction::Right, Direction::Right])), // Right-Right child added
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Right]),
+            ), // Right child added
+            (
+                vec![IntWrapper(4), IntWrapper(5), IntWrapper(6)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ), // Right-Right child added
         ]);
 
         // Since 'overwrite_tree' only overwrites existing paths and adds new ones from 'other',
         // the left subtree should remain unchanged and the right subtree should be added from 'other'
 
         // Assert that the original tree now matches the expected tree
-        assert_eq!(original, expected, "Overwriting with a tree of a different structure did not result in the expected tree");
+        assert_eq!(
+            original, expected,
+            "Overwriting with a tree of a different structure did not result in the expected tree"
+        );
     }
 
     #[test]
@@ -1099,18 +1537,27 @@ mod tests {
         //    2   3
         let mut original = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(1)], Path::new(vec![])), // Root
-            (vec![IntWrapper(1), IntWrapper(2)], Path::new(vec![Direction::Left])),
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])),
+            (
+                vec![IntWrapper(1), IntWrapper(2)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ),
         ]);
 
         // Create the other tree to overwrite with
         // Structure:
         //      4
-        //     / 
-        //    5   
+        //     /
+        //    5
         let other = BinaryTree::from_vec_with_paths(vec![
             (vec![IntWrapper(4)], Path::new(vec![])), // Root
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])), // Overwrites left child
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ), // Overwrites left child
         ]);
 
         // Perform the overwrite
@@ -1118,13 +1565,22 @@ mod tests {
 
         // Define the expected tree after overwrite
         let expected = BinaryTree::from_vec_with_paths(vec![
-            (vec![IntWrapper(1), IntWrapper(3)], Path::new(vec![Direction::Right])), // Right child remains unchanged
+            (
+                vec![IntWrapper(1), IntWrapper(3)],
+                Path::new(vec![Direction::Right]),
+            ), // Right child remains unchanged
             (vec![IntWrapper(4)], Path::new(vec![])), // Root overwritten
-            (vec![IntWrapper(4), IntWrapper(5)], Path::new(vec![Direction::Left])), // Left child overwritten
+            (
+                vec![IntWrapper(4), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ), // Left child overwritten
         ]);
 
         // Assert that the original tree now matches the expected tree
-        assert_eq!(original, expected, "Overwriting with a tree that partially overlaps did not result in the expected tree");
+        assert_eq!(
+            original, expected,
+            "Overwriting with a tree that partially overlaps did not result in the expected tree"
+        );
     }
 
     #[test]
@@ -1144,9 +1600,12 @@ mod tests {
         tree.left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(6))));
         tree.right.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(10))));
         tree.right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(13))));
-        tree.left.as_mut().unwrap().left.as_mut().unwrap().left = Some(Box::new(BinaryTree::new(IntWrapper(1))));
-        tree.left.as_mut().unwrap().left.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(2))));
-        tree.right.as_mut().unwrap().right.as_mut().unwrap().right = Some(Box::new(BinaryTree::new(IntWrapper(12))));
+        tree.left.as_mut().unwrap().left.as_mut().unwrap().left =
+            Some(Box::new(BinaryTree::new(IntWrapper(1))));
+        tree.left.as_mut().unwrap().left.as_mut().unwrap().right =
+            Some(Box::new(BinaryTree::new(IntWrapper(2))));
+        tree.right.as_mut().unwrap().right.as_mut().unwrap().right =
+            Some(Box::new(BinaryTree::new(IntWrapper(12))));
 
         // Define paths to test
         let test_cases = vec![
@@ -1199,5 +1658,4 @@ mod tests {
             println!("{}", output);
         }
     }
-    
 }

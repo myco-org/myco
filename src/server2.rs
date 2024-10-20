@@ -1,4 +1,4 @@
-use crate::{tree::BinaryTree, Block, Bucket, Key, Path, D, DELTA};
+use crate::{tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
     pub(crate) tree: BinaryTree<Bucket>,
