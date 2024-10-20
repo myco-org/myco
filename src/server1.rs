@@ -1,10 +1,11 @@
 use std::{borrow::BorrowMut, cell::RefCell, cmp::min, path, rc::Rc, sync::{Arc, Mutex}};
-
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, Key, Metadata, Path
 };
-use rand::{seq::SliceRandom, thread_rng, Rng, SeedableRng};
+use rand::{seq::SliceRandom, Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;  // Import ChaCha20Rng
 use rayon::prelude::*; 
+
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
@@ -23,7 +24,7 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients)).map(|_| Path::random(&mut rng)).collect::<Vec<Path>>();
 
@@ -67,7 +68,7 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
         self.p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
@@ -96,8 +97,8 @@ impl Server1 {
             assert_eq!(bucket.len(), Z, "Bucket length is not Z in epoch {}: bucket length={}, expected={}", self.epoch, bucket.len(), Z);            
             assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
 
-            let mut rng1 = rand::rngs::StdRng::from_seed(seed);
-            let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+            let mut rng1 = ChaCha20Rng::from_seed(seed);
+            let mut rng2 = ChaCha20Rng::from_seed(seed);
             bucket.shuffle(&mut rng1);
             metadata_bucket.shuffle(&mut rng2);
         });
@@ -114,16 +115,17 @@ impl Server1 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_chacha::ChaCha20Rng;
 
     #[test]
     fn test_same_shuffle() {
-        let seed: [u8; 32] = [0; 32]; // Use a fixed seed
-        let mut rng1 = rand::rngs::StdRng::from_seed(seed);
-        let mut rng2 = rand::rngs::StdRng::from_seed(seed);
+        let seed: [u8; 32] = [0; 32];
+        let mut rng1 = ChaCha20Rng::from_seed(seed);
+        let mut rng2 = ChaCha20Rng::from_seed(seed);
         let mut v1 = (0..10).collect::<Vec<_>>();
         let mut v2 = v1.clone();
         v1.shuffle(&mut rng1);
-        v2.shuffle(&mut rng2); // Use the same RNG instance
-        assert_eq!(v1, v2); // The vectors should be equal after shuffling with the same RNG
+        v2.shuffle(&mut rng2);
+        assert_eq!(v1, v2);
     }
 }

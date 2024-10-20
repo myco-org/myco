@@ -361,6 +361,7 @@ dependencies = [
  "hex",
  "hkdf",
  "rand",
+ "rand_chacha",
  "rayon",
  "ring",
  "sha2",

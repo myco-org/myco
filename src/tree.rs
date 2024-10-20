@@ -432,6 +432,9 @@ impl<T: fmt::Debug> fmt::Display for BinaryTree<T> {
 
 #[cfg(test)]
 mod tests {
+    use rand::{SeedableRng, Rng};
+    use rand_chacha::ChaCha20Rng;
+
     use super::*;
 
     #[derive(Default, Debug, Clone, PartialEq)]
@@ -439,8 +442,7 @@ mod tests {
 
     impl TreeValue for IntWrapper {
         fn new_random() -> Self {
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = ChaCha20Rng::from_entropy();
             IntWrapper(rng.gen())
         }
     }
