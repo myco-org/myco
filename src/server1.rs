@@ -1,9 +1,5 @@
 use crate::{
-    constants::*,
-    decrypt, encrypt, prf,
-    server2::Server2,
-    tree::{BinaryTree, TreeValue},
-    Block, Bucket, CryptoError, Key, Metadata, Path,
+    constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, EncryptionType, Key, Metadata, Path
 };
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng; // Import ChaCha20Rng
@@ -83,8 +79,8 @@ impl Server1 {
     }
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
-        let c_msg = encrypt(&k_oram_t.0, ct).unwrap();
-        let (bucket, path) = self.pt.lca(l).unwrap();
+        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt).unwrap();
+        let (bucket, path) = self.pt.lca(&l).unwrap();
         let mut metadata_bucket = self.metadata_pt.get(&path).unwrap().clone();
 
         bucket.push(Block::new(c_msg));
