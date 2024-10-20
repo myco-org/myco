@@ -1,6 +1,7 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Aes128Gcm, KeyInit, Nonce};
 use ::hkdf::Hkdf;
-use rand::{thread_rng, Rng, RngCore};
+use rand::{Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
 use sha2::Sha256;
 use std::{collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
@@ -70,7 +71,7 @@ fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::EncryptionFailed)?;
     
     // Step 3: Generate a random nonce
-    let mut rng = rand::thread_rng();
+    let mut rng = ChaCha20Rng::from_entropy();
     let nonce = rng.gen::<[u8; NONCE_SIZE]>();
     let nonce = Nonce::from_slice(&nonce);
     
@@ -191,7 +192,7 @@ impl Client {
     }
 
     fn fake_write(&self) -> Result<(), CryptoError> {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
@@ -201,7 +202,7 @@ impl Client {
 
     fn fake_read(&self) -> Vec<Bucket> {
         // 1: ℓ′ $ ←− {0, 1}^D
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
         self.s2.lock().unwrap().read(&Path::from(l))
@@ -210,6 +211,9 @@ impl Client {
 
 #[cfg(test)]
 mod e2e_tests {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha20Rng;
+
     use super::*;
 
     fn try_to_decrypt_data_on_path(path: Vec<Bucket>, k_oram_t: &Key, k_msg: &Key) -> Result<Vec<u8>, CryptoError> {
@@ -266,8 +270,8 @@ mod e2e_tests {
 
     #[test]
     fn test_encrypt_decrypt_with_random_key() {
-        // Test with random key
-        let random_key = Key::random(&mut thread_rng());
+        let mut rng = ChaCha20Rng::from_entropy();
+        let random_key = Key::random(&mut rng);
         let random_message = b"123987234789234";
 
         let random_ciphertext = encrypt(&random_key.0, random_message).expect("Encryption failed");
@@ -282,7 +286,8 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1, s2);
-        let k = Key::random(&mut thread_rng());
+        let mut rng = ChaCha20Rng::from_entropy(); 
+        let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
         assert!(alice.keys.contains_key(&k));
     }
@@ -292,7 +297,8 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
-        let k = Key::random(&mut thread_rng());
+        let mut rng = ChaCha20Rng::from_entropy(); 
+        let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
 
         s1.lock().unwrap().batch_init(1);
@@ -311,9 +317,11 @@ mod e2e_tests {
             let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
             let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
             let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
-
-            let k1 = Key::random(&mut thread_rng());
-            let k2 = Key::random(&mut thread_rng());
+            
+            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy(); 
+            let k1 = Key::random(&mut rng);
+            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy(); 
+            let k2 = Key::random(&mut rng);
 
             alice.setup(&k1).expect("Setup failed");
             alice.setup(&k2).expect("Setup failed");
@@ -346,7 +354,8 @@ mod e2e_tests {
 
         // Perform multiple writes
         for i in 0..num_operations {
-            let k = Key::random(&mut thread_rng());
+            let mut rng = ChaCha20Rng::from_entropy();
+            let k = Key::random(&mut rng);
             let msg = vec![i as u8, (i + 1) as u8, (i + 2) as u8];
 
             alice.setup(&k).expect("Setup failed");
@@ -367,7 +376,7 @@ mod e2e_tests {
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
         let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
         
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
         
         // Initialize the first epoch
         
@@ -408,8 +417,7 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
 
-        let mut rng = thread_rng();
-
+        let mut rng = ChaCha20Rng::from_entropy();
         let mut clients = Vec::new();
         let mut keys = Vec::new();
         for i in 0..num_clients {
@@ -442,9 +450,9 @@ mod e2e_tests {
     #[test]
     fn test_encrypt_decrypt_different_key_sizes() {
         use crate::{encrypt, decrypt, Key};
-        use rand::{thread_rng, RngCore};
+        use rand::{ RngCore};
 
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
 
         // Test cases with 128-bit and 256-bit key sizes
         let key_sizes = [128, 256]; // AES-128, AES-256

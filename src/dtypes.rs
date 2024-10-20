@@ -1,6 +1,7 @@
 use std::ops::{Index, IndexMut};
 
-use rand::{rngs::{StdRng, ThreadRng}, seq::SliceRandom, thread_rng, Rng, RngCore};
+use rand::{rngs::{StdRng, ThreadRng}, seq::SliceRandom, Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA, Z};
 
@@ -26,14 +27,14 @@ impl Metadata {
         self.0.get(index)
     }
 
-    pub(crate) fn shuffle(&mut self, rng: &mut StdRng) {
+    pub(crate) fn shuffle<R: RngCore + Rng>(&mut self, rng: &mut R) {
         self.0.shuffle(rng);
     }
 }
 
 impl TreeValue for Metadata {
     fn new_random() -> Self {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();  // Use ChaCha20Rng
         let timestamp = rng.gen();
         Metadata(vec![(Path::random(&mut rng), Key::random(&mut rng), timestamp)])
     }
@@ -81,7 +82,7 @@ impl Path {
         self.0.push(direction);
     }
 
-    pub fn random(rng: &mut ThreadRng) -> Self {
+    pub fn random<R: RngCore + Rng>(rng: &mut R) -> Self {
         let directions: Vec<Direction> = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
         Path(directions)
     }
@@ -155,14 +156,12 @@ impl Block {
     }
 
     pub(crate) fn new_random() -> Self {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();  // Use ChaCha20Rng
         let mut block = vec![0u8; BLOCK_SIZE];
         rng.fill_bytes(&mut block);
-
         Block(block)
     }
 }
-
 // impl std::fmt::Debug for Block {
 //     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 //         f.debug_tuple("Block")
@@ -221,7 +220,7 @@ impl Bucket {
         self.0.get(index)
     }
 
-    pub(crate) fn shuffle(&mut self, rng: &mut StdRng) {
+    pub(crate) fn shuffle<R: RngCore + Rng>(&mut self, rng: &mut R) {
         self.0.shuffle(rng);
     }
 }
@@ -235,11 +234,10 @@ impl Key {
         Key(bytes)
     }
 
-    pub(crate) fn random(rng: &mut ThreadRng) -> Key {
+    pub(crate) fn random<R: RngCore + Rng>(rng: &mut R) -> Key {
         Key((0..LAMBDA / 8).map(|_| rng.gen()).collect())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
