@@ -64,7 +64,17 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     result
 }
 
+// Pad a message to the right with zeros
+fn pad_message(message: &[u8], target_length: usize) -> Vec<u8> {
+    let mut padded = message.to_vec();
+    if padded.len() < target_length {
+        padded.resize(target_length, 0);
+    }
+    padded
+}
+
 fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let message = pad_message(message, BLOCK_SIZE);
     // Step 1: Derive a 32-byte key for AES-256 using HKDF
     let hk = Hkdf::<Sha256>::new(None, key);
     let mut aes_key = [0u8; 32];
@@ -81,7 +91,7 @@ fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
 
     // Step 4: Encrypt the data
     let ciphertext = cipher
-        .encrypt(nonce, message)
+        .encrypt(nonce, message.as_slice())
         .map_err(|_| CryptoError::EncryptionFailed)?;
 
     // Concatenate the nonce and ciphertext
@@ -111,7 +121,7 @@ fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
         .decrypt(nonce, ciphertext)
         .map_err(|_| CryptoError::NoMessageFound)?;
 
-    Ok(decrypted)
+    Ok(decrypted.into_iter().take_while(|&x| x != 0).collect())
 }
 
 #[allow(clippy::type_complexity)]
@@ -266,13 +276,22 @@ mod e2e_tests {
     fn test_encrypt_decrypt_with_kdf_key() {
         // Test with KDF-derived key
         let key = kdf(b"encryption key", "enc").expect("KDF failed");
-        let message = b"1234";
+        
+        let messages = vec![
+            b"".to_vec(),
+            b"1".to_vec(),
+            b"1234".to_vec(),
+            b"This is a longer message with multiple words.".to_vec(),
+        ];
 
-        let ciphertext = encrypt(&key, message).expect("Encryption failed");
-        let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
+        for message in messages {
+            let ciphertext = encrypt(&key, &message).expect("Encryption failed");
+            println!("ciphertext.len: {:?}", ciphertext.len());
+            let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
 
-        assert_ne!(ciphertext, message);
-        assert_eq!(decrypted, message);
+            assert_ne!(ciphertext, message);
+            assert_eq!(decrypted, message);
+        }
     }
 
     #[test]
