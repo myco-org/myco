@@ -1,9 +1,21 @@
 use crate::{
-    constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, EncryptionType, Key, Metadata, Path
+    constants::*,
+    decrypt, encrypt, prf,
+    server2::Server2,
+    tree::{BinaryTree, TreeValue},
+    Block, Bucket, CryptoError, EncryptionType, Key, Metadata, Path,
 };
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng; // Import ChaCha20Rng
-use std::sync::{Arc, Mutex};
+use rayon::prelude::*;
+use std::{
+    borrow::BorrowMut,
+    cell::RefCell,
+    cmp::min,
+    path,
+    rc::Rc,
+    sync::{Arc, Mutex},
+};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -41,7 +53,7 @@ impl Server1 {
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
             .iter()
             .map(|path| {
-                let bucket = self.s2.lock().unwrap().read(path);
+                let bucket = self.s2.lock().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
@@ -112,7 +124,7 @@ impl Server1 {
         );
 
         self.pt
-            .zip_flatten_tree(&self.metadata_pt)
+            .zip_flatten_tree(&mut self.metadata_pt)
             .iter_mut()
             .for_each(|(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().expect("Bucket should exist");

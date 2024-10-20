@@ -1,6 +1,10 @@
 use std::ops::{Index, IndexMut};
 
-use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
+use rand::{
+    rngs::{StdRng, ThreadRng},
+    seq::SliceRandom,
+    Rng, RngCore, SeedableRng,
+};
 use rand_chacha::ChaCha20Rng;
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
@@ -116,12 +120,12 @@ impl<'a> IntoIterator for &'a Path {
     }
 }
 
-impl From<Path> for Vec<u8> {
-    fn from(val: Path) -> Self {
-        let num_bytes = (val.0.len() + 7) / 8;
+impl Into<Vec<u8>> for Path {
+    fn into(self) -> Vec<u8> {
+        let num_bytes = (self.0.len() + 7) / 8;
         let mut bytes = vec![0u8; num_bytes];
 
-        for (i, direction) in val.0.iter().enumerate() {
+        for (i, direction) in self.0.iter().enumerate() {
             let byte_index = i / 8;
             let bit_position = i % 8;
             let bit: u8 = (*direction).into();

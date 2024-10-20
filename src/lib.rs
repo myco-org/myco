@@ -1,10 +1,14 @@
+use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::{Aes128Gcm, Nonce}; // AES-GCM with 128-bit key
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
-use std::{collections::HashMap, num::NonZeroU32, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    num::NonZeroU32,
+    sync::{Arc, Mutex},
+};
 use thiserror::Error;
-use aes_gcm::{Aes128Gcm, Nonce}; // AES-GCM with 128-bit key
-use aes_gcm::aead::{AeadInPlace, KeyInit};
 
 // Add module declarations
 mod constants;
@@ -45,7 +49,6 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
     Ok(result[..16].to_vec())
 }
 
-
 // Pseudorandom Function (PRF)
 // Make this an arbitrary-length PRF
 fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
@@ -75,7 +78,11 @@ pub(crate) enum EncryptionType {
 }
 
 // Encrypt a padded message
-fn encrypt(key: &[u8], message: &[u8], encryption_type: EncryptionType) -> Result<Vec<u8>, CryptoError> {
+fn encrypt(
+    key: &[u8],
+    message: &[u8],
+    encryption_type: EncryptionType,
+) -> Result<Vec<u8>, CryptoError> {
     let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| CryptoError::EncryptionFailed)?;
 
     let binding = rand::thread_rng().gen::<[u8; 12]>();
@@ -85,9 +92,10 @@ fn encrypt(key: &[u8], message: &[u8], encryption_type: EncryptionType) -> Resul
         EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE), // Fixed size buffer for message
     };
 
-    cipher.encrypt_in_place(nonce, b"", &mut buffer)
+    cipher
+        .encrypt_in_place(nonce, b"", &mut buffer)
         .map_err(|_| CryptoError::EncryptionFailed)?;
-    
+
     // Prepend the nonce to the ciphertext to use during decryption
     Ok([nonce.as_slice(), buffer.as_slice()].concat())
 }
@@ -103,14 +111,20 @@ fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
     let nonce = Nonce::from_slice(nonce);
     let mut buffer = Vec::from(ciphertext);
 
-    cipher.decrypt_in_place(nonce, b"", &mut buffer)
+    cipher
+        .decrypt_in_place(nonce, b"", &mut buffer)
         .map_err(|_| CryptoError::NoMessageFound)?;
-    
+
     Ok(buffer)
 }
 
 fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
-    let buf: Vec<u8> = buffer.iter().rev().skip_while(|&&x| x == 0).cloned().collect();
+    let buf: Vec<u8> = buffer
+        .iter()
+        .rev()
+        .skip_while(|&&x| x == 0)
+        .cloned()
+        .collect();
     buf.into_iter().rev().collect()
 }
 
@@ -167,10 +181,10 @@ impl Client {
         let cs = cs.into_bytes();
 
         // 1: koram,t = KDF(koram, t)
-        let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
+        let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::NoMessageFound)?;
 
-        let f = prf(k_prf, &epoch.to_be_bytes());
+        let f = prf(&k_prf, &epoch.to_be_bytes());
 
         let keys = self.s2.lock().unwrap().get_prf_keys();
         let k_s1_t = keys.last().unwrap();
@@ -213,8 +227,8 @@ impl Client {
 
 #[cfg(test)]
 mod util_tests {
-    use rand::RngCore;
     use super::*;
+    use rand::RngCore;
 
     #[test]
     fn test_kdf() {
@@ -248,7 +262,7 @@ mod util_tests {
     fn test_encrypt_decrypt_with_kdf_key() {
         // Test with KDF-derived key
         let key = kdf(b"encryption key", "enc").expect("KDF failed");
-        
+
         let messages = vec![
             b"".to_vec(),
             b"1".to_vec(),
@@ -257,7 +271,8 @@ mod util_tests {
         ];
 
         for message in messages {
-            let ciphertext = encrypt(&key, &message, EncryptionType::Encrypt).expect("Encryption failed");
+            let ciphertext =
+                encrypt(&key, &message, EncryptionType::Encrypt).expect("Encryption failed");
             let decrypted = trim_zeros(&decrypt(&key, &ciphertext).expect("Decryption failed"));
 
             assert_ne!(ciphertext, message);
@@ -274,10 +289,15 @@ mod util_tests {
         let message_lengths: Vec<usize> = (0..BLOCK_SIZE).collect();
 
         for &length in &message_lengths {
-            let random_message: Vec<u8> = (0..length).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+            let random_message: Vec<u8> = (0..length)
+                .map(|_| (rng.next_u32() % 255 + 1) as u8)
+                .collect();
 
-            let random_ciphertext = encrypt(&random_key.0, &random_message, EncryptionType::Encrypt).expect("Encryption failed");
-            let random_decrypted = decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
+            let random_ciphertext =
+                encrypt(&random_key.0, &random_message, EncryptionType::Encrypt)
+                    .expect("Encryption failed");
+            let random_decrypted =
+                decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
 
             assert_ne!(random_ciphertext, random_message);
             assert_eq!(trim_zeros(&random_decrypted), random_message);
@@ -286,14 +306,18 @@ mod util_tests {
 }
 
 mod e2e_tests {
+    use super::*;
     use rand::{RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
-    use super::*;
 
-    fn try_to_decrypt_data_on_path(path: Vec<Bucket>, k_oram_t: &Key, k_msg: &Key) -> Result<Vec<u8>, CryptoError> {
+    fn try_to_decrypt_data_on_path(
+        path: Vec<Bucket>,
+        k_oram_t: &Key,
+        k_msg: &Key,
+    ) -> Result<Vec<u8>, CryptoError> {
         for bucket in path {
-            for block in bucket { 
-                if let Ok(c_msg)= decrypt(&k_oram_t.0, &block.0) {
+            for block in bucket {
+                if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
                     return decrypt(&k_msg.0, &c_msg);
                 }
             }
@@ -419,7 +443,9 @@ mod e2e_tests {
 
             let alice_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
             let bob_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-            alice.write(&alice_msg, &k_alice_to_bob).expect("Write failed");
+            alice
+                .write(&alice_msg, &k_alice_to_bob)
+                .expect("Write failed");
             bob.write(&bob_msg, &k_bob_to_alice).expect("Write failed");
 
             // Perform batch write
