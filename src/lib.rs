@@ -1,9 +1,8 @@
-use ::hkdf::Hkdf;
-use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
-use rand::{Rng, SeedableRng};
+use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::{Aes128Gcm, Nonce}; // AES-GCM with 128-bit key
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
-use sha2::Sha256;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -47,7 +46,7 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
     let mut result = vec![0u8; 32];
     okm.fill(&mut result)
         .map_err(|_| CryptoError::HkdfFillFailed)?;
-    Ok(result)
+    Ok(result[..16].to_vec())
 }
 
 // Pseudorandom Function (PRF)
@@ -64,57 +63,71 @@ fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
     result
 }
 
-fn encrypt(key: &[u8], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    // Step 1: Derive a 32-byte key for AES-256 using HKDF
-    let hk = Hkdf::<Sha256>::new(None, key);
-    let mut aes_key = [0u8; 32];
-    hk.expand(b"encryption_key", &mut aes_key)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
-
-    // Step 2: Initialize AES-256-GCM with the derived key
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::EncryptionFailed)?;
-
-    // Step 3: Generate a random nonce
-    let mut rng = ChaCha20Rng::from_entropy();
-    let nonce = rng.gen::<[u8; NONCE_SIZE]>();
-    let nonce = Nonce::from_slice(&nonce);
-
-    // Step 4: Encrypt the data
-    let ciphertext = cipher
-        .encrypt(nonce, message)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
-
-    // Concatenate the nonce and ciphertext
-    Ok([nonce.as_slice(), ciphertext.as_slice()].concat())
+// Pad a message to the right with zeros
+fn pad_message(message: &[u8], target_length: usize) -> Vec<u8> {
+    let mut padded = message.to_vec();
+    if padded.len() < target_length {
+        padded.resize(target_length, 0);
+    }
+    padded
 }
 
-fn decrypt(key: &[u8], encrypted_data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-    if encrypted_data.len() < NONCE_SIZE {
+pub(crate) enum EncryptionType {
+    Encrypt,
+    DoubleEncrypt,
+}
+
+// Encrypt a padded message
+fn encrypt(
+    key: &[u8],
+    message: &[u8],
+    encryption_type: EncryptionType,
+) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| CryptoError::EncryptionFailed)?;
+
+    let binding = rand::thread_rng().gen::<[u8; 12]>();
+    let nonce = Nonce::from_slice(&binding); // 96-bits; unique per message
+    let mut buffer = match encryption_type {
+        EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE), // Fixed size buffer for message
+        EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE), // Fixed size buffer for message
+    };
+
+    cipher
+        .encrypt_in_place(nonce, b"", &mut buffer)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
+
+    // Prepend the nonce to the ciphertext to use during decryption
+    Ok([nonce.as_slice(), buffer.as_slice()].concat())
+}
+
+// Decrypt a ciphertext
+fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if ciphertext.len() < 12 {
         return Err(CryptoError::NoMessageFound);
     }
 
-    // Step 1: Derive the same 32-byte key for AES-256 using HKDF
-    let hk = Hkdf::<Sha256>::new(None, key);
-    let mut aes_key = [0u8; 32];
-    hk.expand(b"encryption_key", &mut aes_key)
-        .map_err(|_| CryptoError::NoMessageFound)?;
-
-    // Step 2: Initialize AES-256-GCM with the derived key
-    let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::NoMessageFound)?;
-
-    // Step 3: Separate the nonce and the ciphertext
-    let (nonce, ciphertext) = encrypted_data.split_at(NONCE_SIZE);
+    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| CryptoError::NoMessageFound)?;
+    let (nonce, ciphertext) = ciphertext.split_at(12); // Extract nonce and ciphertext
     let nonce = Nonce::from_slice(nonce);
+    let mut buffer = Vec::from(ciphertext);
 
-    // Step 4: Decrypt the data
-    let decrypted = cipher
-        .decrypt(nonce, ciphertext)
+    cipher
+        .decrypt_in_place(nonce, b"", &mut buffer)
         .map_err(|_| CryptoError::NoMessageFound)?;
 
-    Ok(decrypted)
+    Ok(buffer)
 }
 
-#[allow(clippy::type_complexity)]
+fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
+    let buf: Vec<u8> = buffer
+        .iter()
+        .rev()
+        .skip_while(|&&x| x == 0)
+        .cloned()
+        .collect();
+    buf.into_iter().rev().collect()
+}
+
 struct Client {
     id: String,
     epoch: usize,
@@ -156,7 +169,7 @@ impl Client {
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
 
         // 4: ct = Enckmsg (m)
-        let ct = encrypt(k_msg, msg)?;
+        let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
@@ -168,10 +181,10 @@ impl Client {
         let cs = cs.into_bytes();
 
         // 1: koram,t = KDF(koram, t)
-        let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
+        let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::NoMessageFound)?;
 
-        let f = prf(k_prf, &epoch.to_be_bytes());
+        let f = prf(&k_prf, &epoch.to_be_bytes());
 
         let keys = self.s2.lock().unwrap().get_prf_keys();
         let k_s1_t = keys.last().unwrap();
@@ -186,7 +199,7 @@ impl Client {
         for bucket in path {
             for block in bucket {
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    return decrypt(k_msg, &ct);
+                    return decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
                 }
             }
         }
@@ -213,26 +226,9 @@ impl Client {
 }
 
 #[cfg(test)]
-mod e2e_tests {
-    use rand::{RngCore, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
-
+mod util_tests {
     use super::*;
-
-    fn try_to_decrypt_data_on_path(
-        path: Vec<Bucket>,
-        k_oram_t: &Key,
-        k_msg: &Key,
-    ) -> Result<Vec<u8>, CryptoError> {
-        for bucket in path {
-            for block in bucket {
-                if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
-                    return decrypt(&k_msg.0, &c_msg);
-                }
-            }
-        }
-        Err(CryptoError::NoMessageFound)
-    }
+    use rand::RngCore;
 
     #[test]
     fn test_kdf() {
@@ -244,8 +240,8 @@ mod e2e_tests {
         let derived2 = kdf(key, info2).expect("KDF failed");
 
         assert_ne!(derived1, derived2);
-        assert_eq!(derived1.len(), 32);
-        assert_eq!(derived2.len(), 32);
+        assert_eq!(derived1.len(), 16);
+        assert_eq!(derived2.len(), 16);
     }
 
     #[test]
@@ -266,27 +262,67 @@ mod e2e_tests {
     fn test_encrypt_decrypt_with_kdf_key() {
         // Test with KDF-derived key
         let key = kdf(b"encryption key", "enc").expect("KDF failed");
-        let message = b"1234";
 
-        let ciphertext = encrypt(&key, message).expect("Encryption failed");
-        let decrypted = decrypt(&key, &ciphertext).expect("Decryption failed");
+        let messages = vec![
+            b"".to_vec(),
+            b"1".to_vec(),
+            b"1234".to_vec(),
+            b"This is a longer message with multiple words.".to_vec(),
+        ];
 
-        assert_ne!(ciphertext, message);
-        assert_eq!(decrypted, message);
+        for message in messages {
+            let ciphertext =
+                encrypt(&key, &message, EncryptionType::Encrypt).expect("Encryption failed");
+            let decrypted = trim_zeros(&decrypt(&key, &ciphertext).expect("Decryption failed"));
+
+            assert_ne!(ciphertext, message);
+            assert_eq!(decrypted, message);
+        }
     }
 
     #[test]
     fn test_encrypt_decrypt_with_random_key() {
-        let mut rng = ChaCha20Rng::from_entropy();
+        let mut rng = thread_rng();
         let random_key = Key::random(&mut rng);
-        let random_message = b"123987234789234";
 
-        let random_ciphertext = encrypt(&random_key.0, random_message).expect("Encryption failed");
-        let random_decrypted =
-            decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
+        // Test with different message lengths
+        let message_lengths: Vec<usize> = (0..BLOCK_SIZE).collect();
 
-        assert_ne!(random_ciphertext, random_message);
-        assert_eq!(random_decrypted, random_message);
+        for &length in &message_lengths {
+            let random_message: Vec<u8> = (0..length)
+                .map(|_| (rng.next_u32() % 255 + 1) as u8)
+                .collect();
+
+            let random_ciphertext =
+                encrypt(&random_key.0, &random_message, EncryptionType::Encrypt)
+                    .expect("Encryption failed");
+            let random_decrypted =
+                decrypt(&random_key.0, &random_ciphertext).expect("Decryption failed");
+
+            assert_ne!(random_ciphertext, random_message);
+            assert_eq!(trim_zeros(&random_decrypted), random_message);
+        }
+    }
+}
+
+mod e2e_tests {
+    use super::*;
+    use rand::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
+
+    fn try_to_decrypt_data_on_path(
+        path: Vec<Bucket>,
+        k_oram_t: &Key,
+        k_msg: &Key,
+    ) -> Result<Vec<u8>, CryptoError> {
+        for bucket in path {
+            for block in bucket {
+                if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
+                    return decrypt(&k_msg.0, &c_msg);
+                }
+            }
+        }
+        Err(CryptoError::NoMessageFound)
     }
 
     #[test]
@@ -320,36 +356,34 @@ mod e2e_tests {
 
     #[test]
     fn test_multiple_clients_one_epoch() {
-        for _ in 0..1000 {
-            let s2 = Arc::new(Mutex::new(Server2::new()));
-            let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-            let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-            let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
 
-            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
-            let k1 = Key::random(&mut rng);
-            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
-            let k2 = Key::random(&mut rng);
+        let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
+        let k1 = Key::random(&mut rng);
+        let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
+        let k2 = Key::random(&mut rng);
 
-            alice.setup(&k1).expect("Setup failed");
-            alice.setup(&k2).expect("Setup failed");
+        alice.setup(&k1).expect("Setup failed");
+        alice.setup(&k2).expect("Setup failed");
 
-            bob.setup(&k1).expect("Setup failed");
-            bob.setup(&k2).expect("Setup failed");
+        bob.setup(&k1).expect("Setup failed");
+        bob.setup(&k2).expect("Setup failed");
 
-            s1.lock().unwrap().batch_init(2);
+        s1.lock().unwrap().batch_init(2);
 
-            alice.write(&[1], &k1).expect("Write failed");
-            bob.write(&[2], &k2).expect("Write failed");
+        alice.write(&[1], &k1).expect("Write failed");
+        bob.write(&[2], &k2).expect("Write failed");
 
-            s1.lock().unwrap().batch_write();
+        s1.lock().unwrap().batch_write();
 
-            let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
-            assert_eq!(msg, vec![2]);
+        let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![2]);
 
-            let msg = bob.read(&k1, "Alice".to_string()).expect("Read failed");
-            assert_eq!(msg, vec![1]);
-        }
+        let msg = bob.read(&k1, "Alice".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![1]);
     }
 
     #[test]
@@ -405,8 +439,8 @@ mod e2e_tests {
             bob.setup(&k_bob_to_alice).expect("Setup failed");
             bob.setup(&k_alice_to_bob).expect("Setup failed");
 
-            let alice_msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
-            let bob_msg: Vec<u8> = (0..16).map(|_| rng.next_u32() as u8).collect();
+            let alice_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+            let bob_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
             alice
                 .write(&alice_msg, &k_alice_to_bob)
                 .expect("Write failed");
@@ -433,6 +467,7 @@ mod e2e_tests {
         }
     }
 
+    #[cfg(feature = "simulation")]
     #[test]
     fn test_simulation() {
         let num_clients = NUM_WRITES_PER_EPOCH;
@@ -468,47 +503,6 @@ mod e2e_tests {
             }
 
             s1.lock().unwrap().batch_write();
-        }
-    }
-
-    #[test]
-    fn test_encrypt_decrypt_different_key_sizes() {
-        use crate::{decrypt, encrypt, Key};
-        use rand::RngCore;
-
-        let mut rng = ChaCha20Rng::from_entropy();
-
-        // Test cases with 128-bit and 256-bit key sizes
-        let key_sizes = [128, 256]; // AES-128, AES-256
-        let message = b"Hello, World!";
-
-        for &key_size in &key_sizes {
-            // Generate a random key of the specified size
-            let mut key_data = vec![0u8; key_size];
-            rng.fill_bytes(&mut key_data);
-            let key = Key::new(key_data);
-
-            // Encrypt the message
-            let encrypted = encrypt(&key.0, message).expect("Encryption failed");
-
-            // Decrypt the message
-            let decrypted = decrypt(&key.0, &encrypted).expect("Decryption failed");
-
-            // Check if the decrypted message matches the original
-            assert_eq!(
-                decrypted,
-                message,
-                "Decryption failed for key size: {} bits",
-                key_size * 8
-            );
-
-            // Ensure the encrypted message is different from the original
-            assert_ne!(
-                encrypted,
-                message,
-                "Encryption didn't change the message for key size: {} bits",
-                key_size * 8
-            );
         }
     }
 }

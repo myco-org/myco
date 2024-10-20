@@ -397,7 +397,7 @@ impl<T: TreeValue> BinaryTree<T> {
             !path.is_empty()
                 && path
                     .into_iter()
-                    .zip(current_path.clone())
+                    .zip(current_path.clone().into_iter())
                     .all(|(a, b)| *a == b)
         });
 
@@ -1204,7 +1204,7 @@ mod tests {
             &mut flattened,
         );
 
-        let expected = [(Some(IntWrapper(-1)), Some(IntWrapper(4)), Path::new(vec![]))];
+        let expected = vec![(Some(IntWrapper(-1)), Some(IntWrapper(4)), Path::new(vec![]))];
 
         // Assert that the flattened vector matches the expected result
         assert_eq!(
