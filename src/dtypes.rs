@@ -1,9 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use rand::{
-    seq::SliceRandom,
-    Rng, RngCore, SeedableRng,
-};
+use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
