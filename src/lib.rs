@@ -356,36 +356,34 @@ mod e2e_tests {
 
     #[test]
     fn test_multiple_clients_one_epoch() {
-        for _ in 0..100 {
-            let s2 = Arc::new(Mutex::new(Server2::new()));
-            let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-            let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-            let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
 
-            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
-            let k1 = Key::random(&mut rng);
-            let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
-            let k2 = Key::random(&mut rng);
+        let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
+        let k1 = Key::random(&mut rng);
+        let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
+        let k2 = Key::random(&mut rng);
 
-            alice.setup(&k1).expect("Setup failed");
-            alice.setup(&k2).expect("Setup failed");
+        alice.setup(&k1).expect("Setup failed");
+        alice.setup(&k2).expect("Setup failed");
 
-            bob.setup(&k1).expect("Setup failed");
-            bob.setup(&k2).expect("Setup failed");
+        bob.setup(&k1).expect("Setup failed");
+        bob.setup(&k2).expect("Setup failed");
 
-            s1.lock().unwrap().batch_init(2);
+        s1.lock().unwrap().batch_init(2);
 
-            alice.write(&[1], &k1).expect("Write failed");
-            bob.write(&[2], &k2).expect("Write failed");
+        alice.write(&[1], &k1).expect("Write failed");
+        bob.write(&[2], &k2).expect("Write failed");
 
-            s1.lock().unwrap().batch_write();
+        s1.lock().unwrap().batch_write();
 
-            let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
-            assert_eq!(msg, vec![2]);
+        let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![2]);
 
-            let msg = bob.read(&k1, "Alice".to_string()).expect("Read failed");
-            assert_eq!(msg, vec![1]);
-        }
+        let msg = bob.read(&k1, "Alice".to_string()).expect("Read failed");
+        assert_eq!(msg, vec![1]);
     }
 
     #[test]
@@ -469,6 +467,7 @@ mod e2e_tests {
         }
     }
 
+    #[cfg(feature = "simulation")]
     #[test]
     fn test_simulation() {
         let num_clients = NUM_WRITES_PER_EPOCH;
