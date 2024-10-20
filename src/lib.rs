@@ -401,6 +401,45 @@ mod e2e_tests {
     }
 
     #[test]
+    fn test_simulation() {
+        let num_clients = NUM_WRITES_PER_EPOCH;
+        let num_epochs = DELTA;
+
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+
+        let mut rng = thread_rng();
+
+        let mut clients = Vec::new();
+        let mut keys = Vec::new();
+        for i in 0..num_clients {
+            let client_name = format!("Client_{}", i);
+            let mut client = Client::new(client_name, s1.clone(), s2.clone());
+
+            let key = Key::random(&mut rng);
+            client.setup(&key).expect("Setup failed");
+
+            clients.push(client);
+            keys.push(key);
+        }
+
+        // Perform multiple epochs
+        for epoch in 0..num_epochs {
+            println!("Starting epoch: {}", epoch);
+            s1.lock().unwrap().batch_init(num_clients);
+
+            for (client, key) in clients.iter_mut().zip(keys.iter()) {
+                let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+                if let Err(e) = client.write(&message, &key) {
+                    panic!("Write failed in epoch {}: {:?}", epoch, e);
+                }
+            }
+
+            s1.lock().unwrap().batch_write();
+        }
+    }
+
+    #[test]
     fn test_encrypt_decrypt_different_key_sizes() {
         use crate::{encrypt, decrypt, Key};
         use rand::{thread_rng, RngCore};
