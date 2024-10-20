@@ -1,10 +1,13 @@
-use std::{borrow::BorrowMut, cell::RefCell, cmp::min, path, rc::Rc, sync::{Arc, Mutex}};
 use crate::{
-    constants::*, decrypt, encrypt, prf, server2::Server2, tree::{BinaryTree, TreeValue}, Block, Bucket, CryptoError, Key, Metadata, Path
+    constants::*,
+    decrypt, encrypt, prf,
+    server2::Server2,
+    tree::{BinaryTree, TreeValue},
+    Block, Bucket, CryptoError, Key, Metadata, Path,
 };
 use rand::{seq::SliceRandom, Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;  // Import ChaCha20Rng
-use rayon::prelude::*; 
+use rand_chacha::ChaCha20Rng; // Import ChaCha20Rng
+use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -13,33 +16,49 @@ pub struct Server1 {
     pub s2: Arc<Mutex<Server2>>,
     pub p: BinaryTree<Bucket>,
     pub pt: BinaryTree<Bucket>,
-    pub metadata_pt: BinaryTree<Metadata>,  
+    pub metadata_pt: BinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
 }
 
 impl Server1 {
     pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
         let metadata = BinaryTree::<Metadata>::new_with_depth(D);
-        Self { epoch: 0, k_s1_t: Key::new(vec![]), num_clients: 0, s2, p: BinaryTree::new_empty(), pt: BinaryTree::new_empty(), metadata_pt: BinaryTree::new_empty(), metadata }
+        Self {
+            epoch: 0,
+            k_s1_t: Key::new(vec![]),
+            num_clients: 0,
+            s2,
+            p: BinaryTree::new_empty(),
+            pt: BinaryTree::new_empty(),
+            metadata_pt: BinaryTree::new_empty(),
+            metadata,
+        }
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = ChaCha20Rng::from_entropy();
 
-        let paths = (0..(NU * num_clients)).map(|_| Path::random(&mut rng)).collect::<Vec<Path>>();
+        let paths = (0..(NU * num_clients))
+            .map(|_| Path::random(&mut rng))
+            .collect::<Vec<Path>>();
 
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths.iter().map(|path| {
-            let bucket = self.s2.lock().unwrap().read(&path);
-            (bucket, path.clone())
-        }).collect();
+        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
+            .iter()
+            .map(|path| {
+                let bucket = self.s2.lock().unwrap().read(path);
+                (bucket, path.clone())
+            })
+            .collect();
 
-        let pt_data: Vec<(Vec<Bucket>, Path)> = paths.iter().map(|path| {
-            (vec![Bucket::default(); D], path.clone())
-        }).collect();
+        let pt_data: Vec<(Vec<Bucket>, Path)> = paths
+            .iter()
+            .map(|path| (vec![Bucket::default(); D], path.clone()))
+            .collect();
 
-        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths.iter().map(|path| {
-            (vec![Metadata::default(); D], path.clone())
-        }).collect();
+        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths
+            .iter()
+            .map(|path| (vec![Metadata::default(); D], path.clone()))
+            .collect();
 
         self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
         self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
@@ -49,8 +68,14 @@ impl Server1 {
         self.k_s1_t = Key::random(&mut rng);
     }
 
-    pub fn write(&mut self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cs: Vec<u8>) -> Result<(), CryptoError> {
-        let t_exp = self.epoch + DELTA; 
+    pub fn write(
+        &mut self,
+        ct: Vec<u8>,
+        f: Vec<u8>,
+        k_oram_t: Key,
+        cs: Vec<u8>,
+    ) -> Result<(), CryptoError> {
+        let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
 
@@ -58,8 +83,8 @@ impl Server1 {
     }
 
     pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
-        let c_msg = encrypt(&k_oram_t.0, &ct).unwrap();
-        let (bucket, path) = self.pt.lca(&l).unwrap();
+        let c_msg = encrypt(&k_oram_t.0, ct).unwrap();
+        let (bucket, path) = self.pt.lca(l).unwrap();
         let mut metadata_bucket = self.metadata_pt.get(&path).unwrap().clone();
 
         bucket.push(Block::new(c_msg));
@@ -71,37 +96,53 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
-        self.p.zip_flatten_tree(&self.metadata).iter().for_each(|(bucket, metadata_bucket, path)| {
-            let bucket = bucket.clone().expect("Bucket should exist");
-            (0..bucket.len()).for_each(|b| {
-                metadata_bucket.as_ref().map(|metadata_bucket| {
-                    let (l, k_oram_t, t_exp) = metadata_bucket.get(b).expect("Failed to get metadata bucket at index {b}");
-                    if self.epoch < *t_exp {
-                        let c_msg = bucket.get(b).expect("Failed to get bucket at index {b}");
-                        if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                            self.insert_message(&ct, l, k_oram_t, *t_exp);
+        self.p.zip_flatten_tree(&self.metadata).iter().for_each(
+            |(bucket, metadata_bucket, path)| {
+                let bucket = bucket.clone().expect("Bucket should exist");
+                (0..bucket.len()).for_each(|b| {
+                    metadata_bucket.as_ref().map(|metadata_bucket| {
+                        let (l, k_oram_t, t_exp) = metadata_bucket
+                            .get(b)
+                            .expect("Failed to get metadata bucket at index {b}");
+                        if self.epoch < *t_exp {
+                            let c_msg = bucket.get(b).expect("Failed to get bucket at index {b}");
+                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                self.insert_message(&ct, l, k_oram_t, *t_exp);
+                            }
                         }
-                    }
+                    });
                 });
+            },
+        );
+
+        self.pt
+            .zip_flatten_tree(&self.metadata_pt)
+            .iter_mut()
+            .for_each(|(bucket, metadata_bucket, path)| {
+                let bucket = bucket.as_mut().expect("Bucket should exist");
+                let metadata_bucket: &mut Metadata = metadata_bucket
+                    .as_mut()
+                    .expect("Metadata bucket should exist");
+                (bucket.len()..Z).for_each(|_| {
+                    bucket.push(Block::new_random());
+                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+                });
+
+                assert_eq!(
+                    bucket.len(),
+                    Z,
+                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                    self.epoch,
+                    bucket.len(),
+                    Z
+                );
+                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+                let mut rng1 = ChaCha20Rng::from_seed(seed);
+                let mut rng2 = ChaCha20Rng::from_seed(seed);
+                bucket.shuffle(&mut rng1);
+                metadata_bucket.shuffle(&mut rng2);
             });
-        });
-
-        self.pt.zip_flatten_tree(&mut self.metadata_pt).iter_mut().for_each(|(bucket, metadata_bucket, path)| {
-            let bucket = bucket.as_mut().expect("Bucket should exist");
-            let metadata_bucket: &mut Metadata = metadata_bucket.as_mut().expect("Metadata bucket should exist");
-            (bucket.len()..Z).for_each(|_| {
-                bucket.push(Block::new_random());
-                metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-            });
-
-            assert_eq!(bucket.len(), Z, "Bucket length is not Z in epoch {}: bucket length={}, expected={}", self.epoch, bucket.len(), Z);            
-            assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-            let mut rng1 = ChaCha20Rng::from_seed(seed);
-            let mut rng2 = ChaCha20Rng::from_seed(seed);
-            bucket.shuffle(&mut rng1);
-            metadata_bucket.shuffle(&mut rng2);
-        });
 
         self.metadata.overwrite_tree(&self.metadata_pt);
         let mut server2 = self.s2.lock().unwrap();
