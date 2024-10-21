@@ -5,6 +5,7 @@ use crate::{
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
@@ -89,16 +90,16 @@ impl Server1 {
     ) -> Result<(), OramError> {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
-        let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
+        let path = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
         let mut metadata_bucket = self
             .metadata_pt
             .get(&path)
             .ok_or(OramError::MetadataBucketNotFound)?
             .clone();
 
-        bucket.push(Block::new(c_msg));
+        self.pt.push_block_to_bucket(&path, Block::new(c_msg));
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
-        self.metadata_pt.write(metadata_bucket, path);
+        self.metadata_pt.write(metadata_bucket, &path);
         Ok(())
     }
 
@@ -106,41 +107,72 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
-        self.p
-            .zip(&self.metadata)
-            .iter()
-            .try_for_each(|(bucket, metadata_bucket, _)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
+        let num_threads = num_cpus::get();
+        let chunk_size = (self.p.value.len() + num_threads - 1) / num_threads;
+
+        let mut handles = vec![];
+        for chunk in self
+            .p
+            .value
+            .chunks(chunk_size)
+            .zip(self.metadata.value.chunks(chunk_size))
+        {
+            let (p_chunk, metadata_chunk) = chunk;
+            let p_chunk = p_chunk.to_vec();
+            let metadata_chunk = metadata_chunk.to_vec();
+            let epoch = self.epoch;
+            let k_s1_t = self.k_s1_t.clone();
+
+            let handle = std::thread::spawn(move || -> Result<(), OramError> {
+                for (bucket, metadata_bucket) in p_chunk.into_iter().zip(metadata_chunk.into_iter())
+                {
+                    let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                    for b in 0..bucket.clone().read().unwrap().len() {
+                        let metadata_bucket = metadata_bucket
+                            .as_ref()
+                            .ok_or(OramError::MetadataBucketNotFound)?;
+                        let metadata_guard = metadata_bucket.read().unwrap();
+                        let (l, k_oram_t, t_exp) = metadata_guard
+                            .get(b)
+                            .ok_or(OramError::MetadataIndexError(b))?;
+                        let (l, k_oram_t, t_exp) = (l.clone(), k_oram_t.clone(), *t_exp);
+                        drop(metadata_guard);
+
+                        if epoch < t_exp {
+                            let c_msg = bucket
+                                .read()
+                                .unwrap()
                                 .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
-                            if self.epoch < *t_exp {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                }
+                                .ok_or(OramError::BucketIndexError(b))?;
+                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                self.insert_message(&ct, &l, &k_oram_t, t_exp)?;
                             }
-                            Ok(())
-                        })
-                })
-            })?;
+                        }
+                    }
+                }
+                Ok(())
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().unwrap()?;
+        }
 
         self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
             |(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
+                let metadata_bucket = metadata_bucket
                     .as_mut()
                     .ok_or(OramError::MetadataBucketNotFound)?;
                 (bucket.len()..Z).for_each(|_| {
                     bucket.push(Block::new_random());
                 });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+                (metadata_bucket.read().unwrap().len()..Z).for_each(|_| {
+                    metadata_bucket
+                        .write()
+                        .unwrap()
+                        .push(path.clone(), Key::new(vec![]), 0);
                 });
 
                 assert_eq!(
@@ -151,12 +183,16 @@ impl Server1 {
                     bucket.len(),
                     Z
                 );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+                assert_eq!(
+                    metadata_bucket.read().unwrap().len(),
+                    Z,
+                    "Metadata bucket length is not Z"
+                );
 
                 let mut rng1 = ChaCha20Rng::from_seed(seed);
                 let mut rng2 = ChaCha20Rng::from_seed(seed);
                 bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
+                metadata_bucket.write().unwrap().shuffle(&mut rng2);
                 Ok(())
             },
         )?;

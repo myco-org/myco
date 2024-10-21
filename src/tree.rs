@@ -1,13 +1,34 @@
 use std::{
     cmp::max,
     fmt::{self, Debug, Write},
+    sync::{Arc, RwLock},
 };
 
-use crate::{Direction, Path};
+use crate::{Block, Bucket, Direction, Path};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct BinaryTree<T> {
-    pub(crate) value: Vec<Option<T>>,
+    pub(crate) value: Vec<Option<Arc<RwLock<T>>>>,
+}
+
+impl<T: PartialEq> PartialEq for BinaryTree<T> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.value.len() != other.value.len() {
+            return false;
+        }
+        self.value
+            .iter()
+            .zip(other.value.iter())
+            .all(|(a, b)| match (a, b) {
+                (Some(a), Some(b)) => {
+                    let a = a.read().unwrap();
+                    let b = b.read().unwrap();
+                    *a == *b
+                }
+                (None, None) => true,
+                _ => false,
+            })
+    }
 }
 
 pub(crate) trait TreeValue: Clone + Debug + PartialEq + Default {
@@ -17,7 +38,7 @@ pub(crate) trait TreeValue: Clone + Debug + PartialEq + Default {
 impl<T: TreeValue> BinaryTree<T> {
     pub(crate) fn new(value: T) -> Self {
         BinaryTree {
-            value: vec![None, Some(value)],
+            value: vec![None, Some(Arc::new(RwLock::new(value)))],
         }
     }
 
@@ -34,23 +55,23 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 
     pub fn fill(&mut self, value: T) {
-        self.value[1..].fill(Some(value));
+        self.value[1..].fill(Some(Arc::new(RwLock::new(value))));
     }
 
     pub fn fill_with_random(&mut self) {
-        self.value = vec![Some(T::new_random()); 1 << self.height()];
+        self.value = vec![Some(Arc::new(RwLock::new(T::new_random()))); 1 << self.height()];
     }
 
     pub fn insert_path(&mut self, path: Path, values: Vec<T>) {
         let mut idx: usize = 1;
-        self.value[1] = Some(values[0].clone());
+        self.value[1] = Some(Arc::new(RwLock::new(values[0].clone())));
 
         for (direction, value) in path.zip(&values[1..]) {
             idx = 2 * idx + u8::from(direction) as usize;
             if idx + 1 >= self.value.len() {
                 self.value.resize((idx + 1).next_power_of_two(), None);
             }
-            self.value[idx] = Some(value.clone());
+            self.value[idx] = Some(Arc::new(RwLock::new(value.clone())));
         }
     }
 
@@ -80,7 +101,7 @@ impl<T: TreeValue> BinaryTree<T> {
             current = self.value[idx].clone();
         }
 
-        current
+        current.map(|value| value.read().unwrap().clone())
     }
 
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
@@ -89,7 +110,7 @@ impl<T: TreeValue> BinaryTree<T> {
 
         // Include the root node if it has a value
         if let Some(value) = &self.value[1] {
-            nodes.push(value.clone());
+            nodes.push(value.read().unwrap().clone());
         }
 
         for &direction in path {
@@ -98,38 +119,39 @@ impl<T: TreeValue> BinaryTree<T> {
             if idx >= self.value.len() || self.value[idx].is_none() {
                 return nodes;
             }
-            nodes.push(self.value[idx].clone().unwrap());
+            nodes.push(self.value[idx].clone().unwrap().read().unwrap().clone());
         }
 
         nodes
     }
 
-    pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
+    /// Return the LCA of the given path and the value at the LCA.
+    pub fn lca(&mut self, path: &Path) -> Option<Path> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1;
 
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if next_idx >= self.value.len() || self.value[next_idx].is_none() {
-                return self.value[idx].as_mut().map(|value| (value, current_path));
+                return Some(current_path);
             }
             idx = next_idx;
             current_path.push(direction);
         }
 
-        self.value[idx].as_mut().map(|value| (value, current_path))
+        Some(current_path)
     }
 
-    pub fn write(&mut self, value: T, path: Path) {
+    pub fn write(&mut self, value: T, path: &Path) {
         let mut idx = 1;
-        for direction in path {
+        for &direction in path {
             idx = 2 * idx + u8::from(direction) as usize;
             if idx >= self.value.len() {
                 self.value.resize((idx + 1).next_power_of_two(), None);
             }
         }
 
-        self.value[idx] = Some(value);
+        self.value[idx] = Some(Arc::new(RwLock::new(value)));
     }
 
     pub fn overwrite(&mut self, other: &BinaryTree<T>) {
@@ -146,7 +168,10 @@ impl<T: TreeValue> BinaryTree<T> {
             });
     }
 
-    pub fn zip<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
+    pub fn zip<S: Clone>(
+        &self,
+        rhs: &BinaryTree<S>,
+    ) -> Vec<(Option<T>, Option<Arc<RwLock<S>>>, Path)> {
         let len = max(self.value.len(), rhs.value.len());
         let mut lhs = self.value.clone();
         let mut rhs = rhs.value.clone();
@@ -159,12 +184,25 @@ impl<T: TreeValue> BinaryTree<T> {
             .enumerate()
             .filter_map(|(i, (a, b))| {
                 if a.is_some() {
-                    Some((a.clone(), b.clone(), Path::from(i)))
+                    Some((
+                        a.clone().map(|value| value.read().unwrap().clone()),
+                        b.clone(),
+                        Path::from(i),
+                    ))
                 } else {
                     None
                 }
             })
             .collect()
+    }
+}
+
+impl BinaryTree<Bucket> {
+    /// This gets the existing bucket at the given path, pushes the block to it, and writes the bucket back to the tree.
+    pub fn push_block_to_bucket(&mut self, path: &Path, block: Block) {
+        let mut bucket = self.get(&path).unwrap();
+        bucket.push(block);
+        self.write(bucket, &path);
     }
 }
 
@@ -264,7 +302,10 @@ mod tests {
 
         // Test creating a tree with IntWrapper
         let tree = BinaryTree::new(IntWrapper(42));
-        assert_eq!(tree.value[1], Some(IntWrapper(42)));
+        assert_eq!(
+            *tree.value[1].clone().unwrap().read().unwrap(),
+            IntWrapper(42)
+        );
 
         // Test creating a tree with depth
         let tree_with_depth = BinaryTree::<IntWrapper>::new_with_depth(2);
@@ -509,33 +550,27 @@ mod tests {
 
         // Test lca with various paths
         let path1 = Path::new(vec![Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path1), Some((&mut IntWrapper(1), path1.clone())));
+        assert_eq!(tree.lca(&path1), Some(path1.clone()));
 
         let path2 = Path::new(vec![Direction::Right, Direction::Right]);
-        assert_eq!(tree.lca(&path2), Some((&mut IntWrapper(4), path2.clone())));
+        assert_eq!(tree.lca(&path2), Some(path2.clone()));
 
         let path3 = Path::new(vec![]);
-        assert_eq!(tree.lca(&path3), Some((&mut IntWrapper(7), path3.clone())));
+        assert_eq!(tree.lca(&path3), Some(path3.clone()));
 
         let path4 = Path::new(vec![Direction::Left]);
-        assert_eq!(tree.lca(&path4), Some((&mut IntWrapper(5), path4.clone())));
+        assert_eq!(tree.lca(&path4), Some(path4.clone()));
 
         let path5 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
         assert_eq!(
             tree.lca(&path5),
-            Some((
-                &mut IntWrapper(2),
-                Path::new(vec![Direction::Left, Direction::Right])
-            ))
+            Some(Path::new(vec![Direction::Left, Direction::Right]))
         );
 
         let path6 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
         assert_eq!(
             tree.lca(&path6),
-            Some((
-                &mut IntWrapper(3),
-                Path::new(vec![Direction::Right, Direction::Left])
-            ))
+            Some(Path::new(vec![Direction::Right, Direction::Left]))
         );
     }
 
