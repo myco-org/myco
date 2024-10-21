@@ -6,8 +6,11 @@ use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
-use std::collections::HashMap;
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefIterator,
+    IntoParallelRefMutIterator, ParallelIterator,
+};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
@@ -78,7 +81,7 @@ impl Server1 {
     ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
-        let lca_path = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
+        let (_, lca_path) = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
         self.insert_message(&ct, &lca_path, &k_oram_t, t_exp)?;
 
         Ok(())
@@ -122,7 +125,7 @@ impl Server1 {
 
         // Store the LCA Path -> (Block, Key, t_exp)
         // Get the ct from decrypt(key, block).
-        let mut lca_path_to_block_key_t_exp: DashMap<Path, Vec<(Block, Key, u64)>> = DashMap::new();
+        let mut lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
 
         self.p
             .zip(&self.metadata)
@@ -145,33 +148,37 @@ impl Server1 {
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
 
-                                let lca = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
-                                lca_path_to_block_key_t_exp.entry(lca).or_default().push((
-                                    c_msg.clone(),
-                                    k_oram_t.clone(),
-                                    *t_exp,
-                                ));
+                                let (lca_idx, _) = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
+                                lca_idx_to_block_key_t_exp
+                                    .entry(lca_idx)
+                                    .or_default()
+                                    .push((c_msg.clone(), k_oram_t.clone(), *t_exp));
                             }
                             Ok(())
                         })
                 })
             })?;
 
-        // Loop through the LCA Path -> (Block, Key, t_exp) map.
-        lca_path_to_block_key_t_exp
-            .iter()
-            .try_for_each(|ref_multi| {
-                let lca_path = ref_multi.key();
-                let block_key_t_exp = ref_multi.value();
-
-                // For each (Block, Key, t_exp), decrypt the block to get the ct.
-                // Insert the ct into the new location at the LCA.
-                for (block, key, t_exp) in block_key_t_exp {
-                    let ct = decrypt(&key.0, &block.0).map_err(|_| OramError::DecryptionFailed)?;
-                    self.insert_message(&ct, lca_path, &key, *t_exp)?;
+        // Loop over all the indices in the metadata tree and the bucket tree.
+        self.p
+            .zip(&self.metadata_pt)
+            .par_iter_mut()
+            .enumerate()
+            .filter(|(idx, _)| !lca_idx_to_block_key_t_exp.contains_key(&idx))
+            .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                if let Some(blocks) = lca_idx_to_block_key_t_exp.get(&idx) {
+                    for (block, key, t_exp) in blocks.iter() {
+                        if let Ok(ct) = decrypt(&key.0, &block.0) {
+                            if let Some(bucket) = bucket.as_mut() {
+                                bucket.push(Block::new(ct));
+                            }
+                            if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                                metadata_bucket.push(path.clone(), key.clone(), *t_exp);
+                            }
+                        }
+                    }
                 }
-                Ok(())
-            })?;
+            });
 
         self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
             |(bucket, metadata_bucket, path)| {

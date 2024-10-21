@@ -115,20 +115,30 @@ impl<T: TreeValue> BinaryTree<T> {
         nodes
     }
 
-    pub fn lca(&self, path: &Path) -> Option<Path> {
+    pub fn get_index(&self, idx: usize) -> Option<&T> {
+        self.value.get(idx).and_then(|v| v.as_ref())
+    }
+
+    pub fn get_index_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.value.get_mut(idx).and_then(|v| v.as_mut())
+    }
+
+    /// Returns the index of the LCA and the path to it.
+    /// Note: The index is the CURRENT index of the LCA in the tree. After a write, this index may change.
+    pub fn lca(&self, path: &Path) -> Option<(usize, Path)> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1;
 
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if next_idx >= self.value.len() || self.value[next_idx].is_none() {
-                return Some(current_path);
+                return Some((idx, current_path));
             }
             idx = next_idx;
             current_path.push(direction);
         }
 
-        Some(current_path)
+        Some((idx, current_path))
     }
 
     pub fn write(&mut self, value: T, path: Path) {
@@ -520,28 +530,22 @@ mod tests {
 
         // Test lca with various paths
         let path1 = Path::new(vec![Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path1), Some(path1.clone()));
+        assert_eq!(tree.lca(&path1), Some((1, path1.clone())));
 
         let path2 = Path::new(vec![Direction::Right, Direction::Right]);
-        assert_eq!(tree.lca(&path2), Some(path2.clone()));
+        assert_eq!(tree.lca(&path2), Some((7, path2.clone())));
 
         let path3 = Path::new(vec![]);
-        assert_eq!(tree.lca(&path3), Some(path3.clone()));
+        assert_eq!(tree.lca(&path3), Some((0, path3.clone())));
 
         let path4 = Path::new(vec![Direction::Left]);
-        assert_eq!(tree.lca(&path4), Some(path4.clone()));
+        assert_eq!(tree.lca(&path4), Some((5, path4.clone())));
 
         let path5 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
-        assert_eq!(
-            tree.lca(&path5),
-            Some(Path::new(vec![Direction::Left, Direction::Right]))
-        );
+        assert_eq!(tree.lca(&path5), Some((2, path5.clone())));
 
         let path6 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
-        assert_eq!(
-            tree.lca(&path6),
-            Some(Path::new(vec![Direction::Right, Direction::Left]))
-        );
+        assert_eq!(tree.lca(&path6), Some((3, path6.clone())));
     }
 
     #[test]
