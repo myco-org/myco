@@ -1,9 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use rand::{
-    seq::SliceRandom,
-    Rng, RngCore, SeedableRng,
-};
+use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
@@ -37,7 +34,7 @@ impl Metadata {
 
 impl TreeValue for Metadata {
     fn new_random() -> Self {
-        let mut rng = ChaCha20Rng::from_entropy(); 
+        let mut rng = ChaCha20Rng::from_entropy();
         let timestamp = rng.gen();
         Metadata(vec![(
             Path::random(&mut rng),

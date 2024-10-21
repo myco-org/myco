@@ -1,5 +1,6 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes128Gcm, Nonce}; use error::OramError;
+use aes_gcm::{Aes128Gcm, Nonce};
+use error::OramError;
 // AES-GCM with 128-bit key
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -14,10 +15,10 @@ use thiserror::Error;
 // Add module declarations
 mod constants;
 mod dtypes;
+mod error;
 mod server1;
 mod server2;
 mod tree;
-mod error;
 
 // Import constants and server modules
 use constants::*;

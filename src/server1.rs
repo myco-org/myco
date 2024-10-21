@@ -1,13 +1,10 @@
 use crate::{
-    constants::*,
-    decrypt, encrypt, prf,
-    server2::Server2,
-    tree::BinaryTree,
-    Block, Bucket, OramError, EncryptionType, Key, Metadata, Path,
+    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
+    EncryptionType, Key, Metadata, OramError, Path,
 };
-use rand::{Rng, SeedableRng};
 use rand::seq::SliceRandom;
-use rand_chacha::ChaCha20Rng; 
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
@@ -83,12 +80,19 @@ impl Server1 {
         Ok(())
     }
 
-    pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) -> Result<(), OramError> {
+    pub fn insert_message(
+        &mut self,
+        ct: &Vec<u8>,
+        l: &Path,
+        k_oram_t: &Key,
+        t_exp: u64,
+    ) -> Result<(), OramError> {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
-        let (bucket, path) = self.pt.lca(&l)
-            .ok_or(OramError::LcaNotFound)?;
-        let mut metadata_bucket = self.metadata_pt.get(&path)
+        let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
+        let mut metadata_bucket = self
+            .metadata_pt
+            .get(&path)
             .ok_or(OramError::MetadataBucketNotFound)?
             .clone();
 
@@ -108,18 +112,21 @@ impl Server1 {
             .try_for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
                 (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket.as_ref().ok_or(OramError::MetadataBucketNotFound).and_then(|metadata_bucket| {
-                        let (l, k_oram_t, t_exp) = metadata_bucket
-                            .get(b)
-                            .ok_or(OramError::MetadataIndexError(b))?;
-                        if self.epoch < *t_exp {
-                            let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+                    metadata_bucket
+                        .as_ref()
+                        .ok_or(OramError::MetadataBucketNotFound)
+                        .and_then(|metadata_bucket| {
+                            let (l, k_oram_t, t_exp) = metadata_bucket
+                                .get(b)
+                                .ok_or(OramError::MetadataIndexError(b))?;
+                            if self.epoch < *t_exp {
+                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+                                }
                             }
-                        }
-                        Ok(())
-                    })
+                            Ok(())
+                        })
                 })
             })?;
 
