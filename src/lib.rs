@@ -1,6 +1,6 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce}; // AES-GCM with 128-bit key
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
 use std::{
@@ -228,7 +228,7 @@ impl Client {
 #[cfg(test)]
 mod util_tests {
     use super::*;
-    use rand::RngCore;
+    use rand::{thread_rng, RngCore};
 
     #[test]
     fn test_kdf() {
@@ -306,9 +306,9 @@ mod util_tests {
 }
 
 mod e2e_tests {
+    use rand::RngCore;
+
     use super::*;
-    use rand::{RngCore, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
@@ -470,6 +470,9 @@ mod e2e_tests {
     #[cfg(feature = "simulation")]
     #[test]
     fn test_simulation() {
+        use rand::{RngCore, SeedableRng};
+        use rand_chacha::ChaCha20Rng;
+
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA;
 
