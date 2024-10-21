@@ -490,6 +490,8 @@ mod e2e_tests {
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
+            let start_time = std::time::Instant::now();
+            
             s1.lock().unwrap().batch_init(num_clients);
 
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
@@ -500,6 +502,9 @@ mod e2e_tests {
             }
 
             s1.lock().unwrap().batch_write();
+
+            let duration = start_time.elapsed();
+            println!("Epoch {} completed in {:?}", epoch, duration);
         }
     }
 }
