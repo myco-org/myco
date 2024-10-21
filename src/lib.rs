@@ -10,7 +10,6 @@ use std::{
     num::NonZeroU32,
     sync::{Arc, Mutex},
 };
-use thiserror::Error;
 
 // Add module declarations
 mod constants;
@@ -339,7 +338,7 @@ mod e2e_tests {
         s1.lock().unwrap().batch_init(1);
 
         alice.write(&[1], &k).expect("Write failed");
-        s1.lock().unwrap().batch_write();
+        s1.lock().unwrap().batch_write().expect("Batch write failed");
 
         let msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
         assert_eq!(msg, vec![1]);
@@ -368,7 +367,7 @@ mod e2e_tests {
         alice.write(&[1], &k1).expect("Write failed");
         bob.write(&[2], &k2).expect("Write failed");
 
-        s1.lock().unwrap().batch_write();
+        s1.lock().unwrap().batch_write().expect("Batch write failed");
 
         let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
         assert_eq!(msg, vec![2]);
@@ -438,7 +437,7 @@ mod e2e_tests {
             bob.write(&bob_msg, &k_bob_to_alice).expect("Write failed");
 
             // Perform batch write
-            s1.lock().unwrap().batch_write();
+            s1.lock().unwrap().batch_write().expect("Batch write failed");
 
             let alice_read = alice
                 .read(&k_bob_to_alice, "Bob".to_string())

@@ -40,27 +40,15 @@ impl Server1 {
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
 
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
-            .iter()
-            .map(|path| {
-                let bucket = self.s2.lock().unwrap().read(&path);
-                (bucket, path.clone())
-            })
-            .collect();
+        let (buckets, idx) = self.s2.lock().unwrap().read_paths(paths.clone());
 
-        let pt_data: Vec<(Vec<Bucket>, Path)> = paths
-            .iter()
-            .map(|path| (vec![Bucket::default(); D], path.clone()))
-            .collect();
-
-        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths
-            .iter()
-            .map(|path| (vec![Metadata::default(); D], path.clone()))
-            .collect();
-
-        self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
-        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
-        self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
+        let bucket_size = buckets.len();
+        self.p = BinaryTree::from_array(buckets, idx.clone());
+        self.pt = BinaryTree::from_array(vec![Bucket::default(); bucket_size], idx.clone());
+        self.metadata_pt = BinaryTree::from_array(
+            vec![Metadata::default(); bucket_size],
+            idx,
+        );
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
