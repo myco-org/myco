@@ -1,5 +1,5 @@
 pub const DELTA: u64 = 1000;
-pub const D: usize = 5;
+pub const D: usize = 20;
 pub const LAMBDA: usize = 128;
 pub const NUM_WRITES_PER_EPOCH: usize = 10;
 pub const NU: usize = 1;
