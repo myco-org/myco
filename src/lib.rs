@@ -487,9 +487,15 @@ mod e2e_tests {
             keys.push(key);
         }
 
+        use std::time::Instant;
+
+        let mut total_duration = std::time::Duration::new(0, 0);
+
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
+            let epoch_start = Instant::now();
+
             s1.lock().unwrap().batch_init(num_clients);
 
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
@@ -500,6 +506,13 @@ mod e2e_tests {
             }
 
             s1.lock().unwrap().batch_write();
+
+            let epoch_duration = epoch_start.elapsed();
+            total_duration += epoch_duration;
+            println!("Epoch {} completed in {:?}", epoch, epoch_duration);
         }
+
+        println!("Total simulation time: {:?}", total_duration);
+        println!("Average epoch time: {:?}", total_duration / num_epochs as u32);
     }
 }
