@@ -1,7 +1,6 @@
 use std::ops::{Index, IndexMut};
 
 use rand::{
-    rngs::{StdRng, ThreadRng},
     seq::SliceRandom,
     Rng, RngCore, SeedableRng,
 };
@@ -38,7 +37,7 @@ impl Metadata {
 
 impl TreeValue for Metadata {
     fn new_random() -> Self {
-        let mut rng = ChaCha20Rng::from_entropy(); // Use ChaCha20Rng
+        let mut rng = ChaCha20Rng::from_entropy(); 
         let timestamp = rng.gen();
         Metadata(vec![(
             Path::random(&mut rng),
@@ -90,8 +89,7 @@ impl Path {
     }
 
     pub fn random<R: RngCore + Rng>(rng: &mut R) -> Self {
-        let directions: Vec<Direction> = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
-        Path(directions)
+        Path((0..D).map(|_| rng.gen_range(0..2).into()).collect())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -161,14 +159,6 @@ impl From<usize> for Path {
     }
 }
 
-impl From<Path> for u8 {
-    fn from(path: Path) -> u8 {
-        path.0
-            .iter()
-            .fold(0, |acc, &direction| acc * 2 + u8::from(direction))
-    }
-}
-
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 
@@ -184,13 +174,6 @@ impl Block {
         Block(block)
     }
 }
-// impl std::fmt::Debug for Block {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_tuple("Block")
-//             .field(&self.0.len())
-//             .finish()
-//     }
-// }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Default)]
 pub(crate) struct Bucket(Vec<Block>);
@@ -257,6 +240,7 @@ impl Key {
         Key((0..LAMBDA / 8).map(|_| rng.gen()).collect())
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
