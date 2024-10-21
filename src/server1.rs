@@ -104,8 +104,10 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
-        self.p.zip(&self.metadata).iter().for_each(
-            |(bucket, metadata_bucket, _)| {
+        self.p
+            .zip(&self.metadata)
+            .iter()
+            .for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().expect("Bucket should exist");
                 (0..bucket.len()).for_each(|b| {
                     metadata_bucket.as_ref().map(|metadata_bucket| {
@@ -120,13 +122,10 @@ impl Server1 {
                         }
                     });
                 });
-            },
-        );
+            });
 
-        self.pt
-            .zip(&mut self.metadata_pt)
-            .iter_mut()
-            .for_each(|(bucket, metadata_bucket, path)| {
+        self.pt.zip(&mut self.metadata_pt).iter_mut().for_each(
+            |(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().expect("Bucket should exist");
                 let metadata_bucket: &mut Metadata = metadata_bucket
                     .as_mut()
@@ -152,7 +151,8 @@ impl Server1 {
                 let mut rng2 = ChaCha20Rng::from_seed(seed);
                 bucket.shuffle(&mut rng1);
                 metadata_bucket.shuffle(&mut rng2);
-            });
+            },
+        );
 
         self.metadata.overwrite(&self.metadata_pt);
 

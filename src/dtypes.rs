@@ -163,7 +163,9 @@ impl From<usize> for Path {
 
 impl From<Path> for u8 {
     fn from(path: Path) -> u8 {
-        path.0.iter().fold(0, |acc, &direction| acc * 2 + u8::from(direction))
+        path.0
+            .iter()
+            .fold(0, |acc, &direction| acc * 2 + u8::from(direction))
     }
 }
 

@@ -1,4 +1,7 @@
-use std::{cmp::max, fmt::{self, Debug, Write}};
+use std::{
+    cmp::max,
+    fmt::{self, Debug, Write},
+};
 
 use crate::{Direction, Path};
 
@@ -133,17 +136,17 @@ impl<T: TreeValue> BinaryTree<T> {
         if self.value.len() < other.value.len() {
             self.value.resize(other.value.len(), None);
         }
-        self.value.iter_mut().zip(other.value.iter()).for_each(|(a, b)| {
-            if b.is_some() {
-                *a = b.clone();
-            }
-        });
+        self.value
+            .iter_mut()
+            .zip(other.value.iter())
+            .for_each(|(a, b)| {
+                if b.is_some() {
+                    *a = b.clone();
+                }
+            });
     }
 
-    pub fn zip<S: Clone>(
-        &self,
-        rhs: &BinaryTree<S>,
-    ) -> Vec<(Option<T>, Option<S>, Path)> {
+    pub fn zip<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
         let len = max(self.value.len(), rhs.value.len());
         let mut lhs = self.value.clone();
         let mut rhs = rhs.value.clone();
@@ -151,13 +154,17 @@ impl<T: TreeValue> BinaryTree<T> {
         lhs.resize(len, None);
         rhs.resize(len, None);
 
-        lhs.iter().zip(rhs.iter()).enumerate().filter_map(|(i, (a, b))| {
-            if a.is_some() {
-                Some((a.clone(), b.clone(), Path::from(i)))
-            } else {
-                None
-            }
-        }).collect()
+        lhs.iter()
+            .zip(rhs.iter())
+            .enumerate()
+            .filter_map(|(i, (a, b))| {
+                if a.is_some() {
+                    Some((a.clone(), b.clone(), Path::from(i)))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
