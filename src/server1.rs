@@ -5,6 +5,7 @@ use crate::{
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::prelude::*;
 use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
@@ -34,38 +35,46 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-        let mut rng = ChaCha20Rng::from_entropy();
-
-        let paths = (0..(NU * num_clients))
-            .map(|_| Path::random(&mut rng))
-            .collect::<Vec<Path>>();
-
+        // Generate seed for each thread to create its own RNG
+        let mut master_rng = ChaCha20Rng::from_entropy();
+        let seeds: Vec<[u8; 32]> = (0..(NU * num_clients))
+            .map(|_| master_rng.gen())  // Generate unique seeds for each thread
+            .collect();
+    
+        let paths: Vec<Path> = seeds
+            .into_par_iter() 
+            .map(|seed| {
+                let mut thread_rng = ChaCha20Rng::from_seed(seed);  // Use a separate RNG for each thread
+                Path::random(&mut thread_rng)
+            })
+            .collect();
+    
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
-            .iter()
+            .par_iter()  // Parallel iterator
             .map(|path| {
                 let bucket = self.s2.lock().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
-
+    
         let pt_data: Vec<(Vec<Bucket>, Path)> = paths
-            .iter()
+            .par_iter()  // Parallel iterator
             .map(|path| (vec![Bucket::default(); D], path.clone()))
             .collect();
-
+    
         let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths
-            .iter()
+            .par_iter()  // Parallel iterator
             .map(|path| (vec![Metadata::default(); D], path.clone()))
             .collect();
-
+    
         self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
         self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
         self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
-
+    
         self.num_clients = num_clients;
-        self.k_s1_t = Key::random(&mut rng);
+        self.k_s1_t = Key::random(&mut master_rng);
     }
-
+    
     pub fn write(
         &mut self,
         ct: Vec<u8>,
