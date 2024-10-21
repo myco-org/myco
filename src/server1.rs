@@ -104,8 +104,8 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
-        self.p.zip_flatten_tree(&self.metadata).iter().for_each(
-            |(bucket, metadata_bucket, path)| {
+        self.p.zip(&self.metadata).iter().for_each(
+            |(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().expect("Bucket should exist");
                 (0..bucket.len()).for_each(|b| {
                     metadata_bucket.as_ref().map(|metadata_bucket| {
@@ -124,7 +124,7 @@ impl Server1 {
         );
 
         self.pt
-            .zip_flatten_tree(&mut self.metadata_pt)
+            .zip(&mut self.metadata_pt)
             .iter_mut()
             .for_each(|(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().expect("Bucket should exist");
@@ -133,6 +133,8 @@ impl Server1 {
                     .expect("Metadata bucket should exist");
                 (bucket.len()..Z).for_each(|_| {
                     bucket.push(Block::new_random());
+                });
+                (metadata_bucket.len()..Z).for_each(|_| {
                     metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
                 });
 
@@ -152,7 +154,8 @@ impl Server1 {
                 metadata_bucket.shuffle(&mut rng2);
             });
 
-        self.metadata.overwrite_tree(&self.metadata_pt);
+        self.metadata.overwrite(&self.metadata_pt);
+
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);

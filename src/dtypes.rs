@@ -128,7 +128,7 @@ impl Into<Vec<u8>> for Path {
         for (i, direction) in self.0.iter().enumerate() {
             let byte_index = i / 8;
             let bit_position = i % 8;
-            let bit: u8 = (*direction).into();
+            let bit: u8 = u8::from(*direction);
 
             bytes[byte_index] |= bit << bit_position;
         }
@@ -146,6 +146,24 @@ impl From<Vec<u8>> for Path {
             .map(Direction::from)
             .collect();
         Path(directions)
+    }
+}
+
+impl From<usize> for Path {
+    fn from(value: usize) -> Self {
+        let mut directions = Vec::new();
+        let mut value = value;
+        while value > 0 {
+            directions.push(Direction::from((value & 1) as u8));
+            value >>= 1;
+        }
+        Path(directions)
+    }
+}
+
+impl From<Path> for u8 {
+    fn from(path: Path) -> u8 {
+        path.0.iter().fold(0, |acc, &direction| acc * 2 + u8::from(direction))
     }
 }
 

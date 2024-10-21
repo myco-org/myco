@@ -8,8 +8,11 @@ pub struct Server2 {
 
 impl Server2 {
     pub fn new() -> Self {
+        let mut tree = BinaryTree::new_with_depth(D);
+        tree.fill(Bucket::default());
+
         Server2 {
-            tree: BinaryTree::new_with_depth(D),
+            tree,
             prf_keys: vec![],
             epoch: 0,
         }
