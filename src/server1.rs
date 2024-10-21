@@ -2,6 +2,7 @@ use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
     EncryptionType, Key, Metadata, OramError, Path,
 };
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -107,10 +108,79 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
+        // If the message is valid, then we re-assign it (e.g. it's not expired).
+        // Everything that's not expired, we need to re-insert into the tree
+        // with the LCA for the new pathset.
+
+        // Store the LCA Path -> (Block, Key, t_exp)
+        // Get the ct from decrypt(key, block).
+        let mut lca_path_to_block_key_t_exp: DashMap<
+            Path,
+            Vec<(&mut Bucket, &mut Metadata, Block, Key, u64)>,
+        > = DashMap::new();
+        self.p
+            .zip(&self.metadata)
+            .par_iter()
+            .try_for_each(|(bucket, metadata_bucket, _)| {
+                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                let metadata_bucket = metadata_bucket
+                    .clone()
+                    .ok_or(OramError::MetadataBucketNotFound)?;
+                (0..bucket.len()).try_for_each(|b| {
+                    // To know whether the real block should be deleted or not, we need to check
+                    // the metadata tree to see if the block is expired. If not, we need
+                    // to re-randomize it. Write it back to new location at the LCA and then also
+                    // update the metadata tree.
+                    metadata_bucket
+                        .write()
+                        .unwrap()
+                        .get(b)
+                        .ok_or(OramError::MetadataIndexError(b))
+                        .and_then(|metadata_bucket| {
+                            let (l, k_oram_t, t_exp) = metadata_bucket;
+                            if self.epoch < *t_exp {
+                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+                                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
+                                let metadata_bucket = metadata_bucket
+                                    .as_mut()
+                                    .ok_or(OramError::MetadataBucketNotFound)?;
+
+                                let lca = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
+                                lca_path_to_block_key_t_exp.entry(lca).or_default().push((
+                                    c_msg.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                    bucket,
+                                    metadata_bucket,
+                                ));
+                            }
+                            Ok(())
+                        })
+                })
+            })?;
+
+        // Loop through the LCA Path -> (Block, Key, t_exp) map.
+        lca_path_to_block_key_t_exp
+            .iter()
+            .try_for_each(|ref_multi| {
+                let lca_path = ref_multi.key();
+                let block_key_t_exp = ref_multi.value();
+
+                // For each (Block, Key, t_exp), decrypt the block to get the ct.
+                // Insert the ct into the new location at the LCA.
+                for (block, key, t_exp) in block_key_t_exp {
+                    let ct = decrypt(&key.0, &block.0).map_err(|_| OramError::DecryptionFailed)?;
+                    self.insert_message(&ct, lca_path, &key, *t_exp)?;
+                }
+                Ok(())
+            })?;
+
         let num_threads = num_cpus::get();
         let chunk_size = (self.p.value.len() + num_threads - 1) / num_threads;
 
         let mut handles = vec![];
+
+        // Loop in chunks based on the number of CPUs.
         for chunk in self
             .p
             .value
@@ -122,6 +192,11 @@ impl Server1 {
             let metadata_chunk = metadata_chunk.to_vec();
             let epoch = self.epoch;
             let k_s1_t = self.k_s1_t.clone();
+
+            // If you decide to lock the entire Vec, you lose a lot of potential parallelism.
+            // 10K writes, then it's going for every single write.
+
+            // If you have inserts,
 
             let handle = std::thread::spawn(move || -> Result<(), OramError> {
                 for (bucket, metadata_bucket) in p_chunk.into_iter().zip(metadata_chunk.into_iter())

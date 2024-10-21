@@ -17,6 +17,7 @@ thiserror = "1.0.63"
 rayon = "1.5"
 rand_chacha = "0.3.1"
 num_cpus = "1.16.0"
+dashmap = "6.1.0"
 
 [features]
 simulation = []

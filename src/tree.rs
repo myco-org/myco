@@ -126,7 +126,7 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 
     /// Return the LCA of the given path and the value at the LCA.
-    pub fn lca(&mut self, path: &Path) -> Option<Path> {
+    pub fn lca(&self, path: &Path) -> Option<Path> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1;
 
