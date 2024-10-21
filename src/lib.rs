@@ -76,8 +76,10 @@ fn encrypt(
 ) -> Result<Vec<u8>, OramError> {
     let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::EncryptionFailed)?;
 
-    let binding = rand::thread_rng().gen::<[u8; 12]>();
+    let mut rng = ChaCha20Rng::from_entropy();
+    let binding = rng.gen::<[u8; 12]>();
     let nonce = Nonce::from_slice(&binding); // 96-bits; unique per message
+
     let mut buffer = match encryption_type {
         EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE), // Fixed size buffer for message
         EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE), // Fixed size buffer for message
@@ -218,8 +220,9 @@ impl Client {
 
 #[cfg(test)]
 mod util_tests {
+    use rand::RngCore;
+
     use super::*;
-    use rand::{thread_rng, RngCore};
 
     #[test]
     fn test_kdf() {
@@ -273,7 +276,7 @@ mod util_tests {
 
     #[test]
     fn test_encrypt_decrypt_with_random_key() {
-        let mut rng = thread_rng();
+        let mut rng = ChaCha20Rng::from_entropy();
         let random_key = Key::random(&mut rng);
 
         // Test with different message lengths
