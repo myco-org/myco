@@ -1,21 +1,11 @@
 use crate::{
-    constants::*,
-    decrypt, encrypt, prf,
-    server2::Server2,
-    tree::{BinaryTree, TreeValue},
-    Block, Bucket, CryptoError, EncryptionType, Key, Metadata, Path,
+    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
+    EncryptionType, Key, Metadata, OramError, Path,
 };
-use rand::{seq::SliceRandom, Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng; // Import ChaCha20Rng
-use rayon::prelude::*;
-use std::{
-    borrow::BorrowMut,
-    cell::RefCell,
-    cmp::min,
-    path,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use rand::seq::SliceRandom;
+use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha20Rng;
+use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -82,7 +72,7 @@ impl Server1 {
         f: Vec<u8>,
         k_oram_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), CryptoError> {
+    ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
@@ -90,49 +80,66 @@ impl Server1 {
         Ok(())
     }
 
-    pub fn insert_message(&mut self, ct: &Vec<u8>, l: &Path, k_oram_t: &Key, t_exp: u64) {
-        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt).unwrap();
-        let (bucket, path) = self.pt.lca(&l).unwrap();
-        let mut metadata_bucket = self.metadata_pt.get(&path).unwrap().clone();
+    pub fn insert_message(
+        &mut self,
+        ct: &Vec<u8>,
+        l: &Path,
+        k_oram_t: &Key,
+        t_exp: u64,
+    ) -> Result<(), OramError> {
+        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
+            .map_err(|_| OramError::EncryptionFailed)?;
+        let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
+        let mut metadata_bucket = self
+            .metadata_pt
+            .get(&path)
+            .ok_or(OramError::MetadataBucketNotFound)?
+            .clone();
 
         bucket.push(Block::new(c_msg));
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
         self.metadata_pt.write(metadata_bucket, path);
+        Ok(())
     }
 
-    pub fn batch_write(&mut self) {
+    pub fn batch_write(&mut self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
-        self.p.zip_flatten_tree(&self.metadata).iter().for_each(
-            |(bucket, metadata_bucket, path)| {
-                let bucket = bucket.clone().expect("Bucket should exist");
-                (0..bucket.len()).for_each(|b| {
-                    metadata_bucket.as_ref().map(|metadata_bucket| {
-                        let (l, k_oram_t, t_exp) = metadata_bucket
-                            .get(b)
-                            .expect("Failed to get metadata bucket at index {b}");
-                        if self.epoch < *t_exp {
-                            let c_msg = bucket.get(b).expect("Failed to get bucket at index {b}");
-                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                self.insert_message(&ct, l, k_oram_t, *t_exp);
+        self.p
+            .zip(&self.metadata)
+            .iter()
+            .try_for_each(|(bucket, metadata_bucket, _)| {
+                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                (0..bucket.len()).try_for_each(|b| {
+                    metadata_bucket
+                        .as_ref()
+                        .ok_or(OramError::MetadataBucketNotFound)
+                        .and_then(|metadata_bucket| {
+                            let (l, k_oram_t, t_exp) = metadata_bucket
+                                .get(b)
+                                .ok_or(OramError::MetadataIndexError(b))?;
+                            if self.epoch < *t_exp {
+                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+                                }
                             }
-                        }
-                    });
-                });
-            },
-        );
+                            Ok(())
+                        })
+                })
+            })?;
 
-        self.pt
-            .zip_flatten_tree(&mut self.metadata_pt)
-            .iter_mut()
-            .for_each(|(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().expect("Bucket should exist");
+        self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
+            |(bucket, metadata_bucket, path)| {
+                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                 let metadata_bucket: &mut Metadata = metadata_bucket
                     .as_mut()
-                    .expect("Metadata bucket should exist");
+                    .ok_or(OramError::MetadataBucketNotFound)?;
                 (bucket.len()..Z).for_each(|_| {
                     bucket.push(Block::new_random());
+                });
+                (metadata_bucket.len()..Z).for_each(|_| {
                     metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
                 });
 
@@ -150,14 +157,18 @@ impl Server1 {
                 let mut rng2 = ChaCha20Rng::from_seed(seed);
                 bucket.shuffle(&mut rng1);
                 metadata_bucket.shuffle(&mut rng2);
-            });
+                Ok(())
+            },
+        )?;
 
-        self.metadata.overwrite_tree(&self.metadata_pt);
+        self.metadata.overwrite(&self.metadata_pt);
+
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
 
         self.epoch += 1;
+        Ok(())
     }
 }
 

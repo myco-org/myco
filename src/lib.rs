@@ -1,6 +1,8 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes128Gcm, Nonce}; // AES-GCM with 128-bit key
-use rand::{thread_rng, Rng, SeedableRng};
+use aes_gcm::{Aes128Gcm, Nonce};
+use error::OramError;
+// AES-GCM with 128-bit key
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
 use std::{
@@ -13,6 +15,7 @@ use thiserror::Error;
 // Add module declarations
 mod constants;
 mod dtypes;
+mod error;
 mod server1;
 mod server2;
 mod tree;
@@ -23,29 +26,17 @@ use dtypes::*;
 use server1::Server1;
 use server2::Server2;
 
-#[derive(Debug, Error)]
-enum CryptoError {
-    #[error("HKDF expansion failed")]
-    HkdfExpansionFailed,
-    #[error("HKDF fill failed")]
-    HkdfFillFailed,
-    #[error("Encryption failed")]
-    EncryptionFailed,
-    #[error("Decryption failed")]
-    NoMessageFound,
-}
-
 // Key Derivation Function (KDF)
-fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, CryptoError> {
+fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, OramError> {
     let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
     let binding = [info.as_bytes()];
     let okm = prk
         .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| CryptoError::HkdfExpansionFailed)?;
+        .map_err(|_| OramError::HkdfExpansionFailed)?;
     let mut result = vec![0u8; 32];
     okm.fill(&mut result)
-        .map_err(|_| CryptoError::HkdfFillFailed)?;
+        .map_err(|_| OramError::HkdfFillFailed)?;
     Ok(result[..16].to_vec())
 }
 
@@ -82,8 +73,8 @@ fn encrypt(
     key: &[u8],
     message: &[u8],
     encryption_type: EncryptionType,
-) -> Result<Vec<u8>, CryptoError> {
-    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| CryptoError::EncryptionFailed)?;
+) -> Result<Vec<u8>, OramError> {
+    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::EncryptionFailed)?;
 
     let binding = rand::thread_rng().gen::<[u8; 12]>();
     let nonce = Nonce::from_slice(&binding); // 96-bits; unique per message
@@ -94,26 +85,26 @@ fn encrypt(
 
     cipher
         .encrypt_in_place(nonce, b"", &mut buffer)
-        .map_err(|_| CryptoError::EncryptionFailed)?;
+        .map_err(|_| OramError::EncryptionFailed)?;
 
     // Prepend the nonce to the ciphertext to use during decryption
     Ok([nonce.as_slice(), buffer.as_slice()].concat())
 }
 
 // Decrypt a ciphertext
-fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, OramError> {
     if ciphertext.len() < 12 {
-        return Err(CryptoError::NoMessageFound);
+        return Err(OramError::NoMessageFound);
     }
 
-    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| CryptoError::NoMessageFound)?;
+    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::NoMessageFound)?;
     let (nonce, ciphertext) = ciphertext.split_at(12); // Extract nonce and ciphertext
     let nonce = Nonce::from_slice(nonce);
     let mut buffer = Vec::from(ciphertext);
 
     cipher
         .decrypt_in_place(nonce, b"", &mut buffer)
-        .map_err(|_| CryptoError::NoMessageFound)?;
+        .map_err(|_| OramError::NoMessageFound)?;
 
     Ok(buffer)
 }
@@ -147,7 +138,7 @@ impl Client {
         }
     }
 
-    fn setup(&mut self, k: &Key) -> Result<(), CryptoError> {
+    fn setup(&mut self, k: &Key) -> Result<(), OramError> {
         let k_msg = kdf(&k.0, "MSG")?;
         let k_oram = kdf(&k.0, "ORAM")?;
         let k_prf = kdf(&k.0, "PRF")?;
@@ -155,7 +146,7 @@ impl Client {
         Ok(())
     }
 
-    fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), CryptoError> {
+    fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
@@ -176,13 +167,13 @@ impl Client {
         self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cs)
     }
 
-    fn read(&self, k: &Key, cs: String) -> Result<Vec<u8>, CryptoError> {
+    fn read(&self, k: &Key, cs: String) -> Result<Vec<u8>, OramError> {
         let epoch = self.epoch - 1;
         let cs = cs.into_bytes();
 
         // 1: koram,t = KDF(koram, t)
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| CryptoError::NoMessageFound)?;
+        let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
@@ -204,10 +195,10 @@ impl Client {
             }
         }
         // 8: end for
-        Err(CryptoError::NoMessageFound)
+        Err(OramError::NoMessageFound)
     }
 
-    fn fake_write(&self) -> Result<(), CryptoError> {
+    fn fake_write(&self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         let k_oram_t = Key::random(&mut rng);
@@ -228,7 +219,7 @@ impl Client {
 #[cfg(test)]
 mod util_tests {
     use super::*;
-    use rand::RngCore;
+    use rand::{thread_rng, RngCore};
 
     #[test]
     fn test_kdf() {
@@ -306,15 +297,15 @@ mod util_tests {
 }
 
 mod e2e_tests {
+    use rand::RngCore;
+
     use super::*;
-    use rand::{RngCore, SeedableRng};
-    use rand_chacha::ChaCha20Rng;
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
         k_oram_t: &Key,
         k_msg: &Key,
-    ) -> Result<Vec<u8>, CryptoError> {
+    ) -> Result<Vec<u8>, OramError> {
         for bucket in path {
             for block in bucket {
                 if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
@@ -322,7 +313,7 @@ mod e2e_tests {
                 }
             }
         }
-        Err(CryptoError::NoMessageFound)
+        Err(OramError::NoMessageFound)
     }
 
     #[test]
@@ -470,6 +461,9 @@ mod e2e_tests {
     #[cfg(feature = "simulation")]
     #[test]
     fn test_simulation() {
+        use rand::{RngCore, SeedableRng};
+        use rand_chacha::ChaCha20Rng;
+
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA;
 

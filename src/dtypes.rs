@@ -1,10 +1,6 @@
 use std::ops::{Index, IndexMut};
 
-use rand::{
-    rngs::{StdRng, ThreadRng},
-    seq::SliceRandom,
-    Rng, RngCore, SeedableRng,
-};
+use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
@@ -38,7 +34,7 @@ impl Metadata {
 
 impl TreeValue for Metadata {
     fn new_random() -> Self {
-        let mut rng = ChaCha20Rng::from_entropy(); // Use ChaCha20Rng
+        let mut rng = ChaCha20Rng::from_entropy();
         let timestamp = rng.gen();
         Metadata(vec![(
             Path::random(&mut rng),
@@ -90,8 +86,7 @@ impl Path {
     }
 
     pub fn random<R: RngCore + Rng>(rng: &mut R) -> Self {
-        let directions: Vec<Direction> = (0..D).map(|_| rng.gen_range(0..2).into()).collect();
-        Path(directions)
+        Path((0..D).map(|_| rng.gen_range(0..2).into()).collect())
     }
 
     pub fn is_empty(&self) -> bool {
@@ -128,7 +123,7 @@ impl Into<Vec<u8>> for Path {
         for (i, direction) in self.0.iter().enumerate() {
             let byte_index = i / 8;
             let bit_position = i % 8;
-            let bit: u8 = (*direction).into();
+            let bit: u8 = u8::from(*direction);
 
             bytes[byte_index] |= bit << bit_position;
         }
@@ -149,6 +144,18 @@ impl From<Vec<u8>> for Path {
     }
 }
 
+impl From<usize> for Path {
+    fn from(value: usize) -> Self {
+        let mut directions = Vec::new();
+        let mut value = value;
+        while value > 0 {
+            directions.push(Direction::from((value & 1) as u8));
+            value >>= 1;
+        }
+        Path(directions)
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 
@@ -164,13 +171,6 @@ impl Block {
         Block(block)
     }
 }
-// impl std::fmt::Debug for Block {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_tuple("Block")
-//             .field(&self.0.len())
-//             .finish()
-//     }
-// }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Default)]
 pub(crate) struct Bucket(Vec<Block>);
@@ -237,6 +237,7 @@ impl Key {
         Key((0..LAMBDA / 8).map(|_| rng.gen()).collect())
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
