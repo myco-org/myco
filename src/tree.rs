@@ -481,94 +481,88 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_lca() {
-    //     // Create a binary tree:
-    //     //         7
-    //     //        / \
-    //     //       5   6
-    //     //      / \ / \
-    //     //     1  2 3 4
-    //     let items = vec![
-    //         (vec![IntWrapper(7)], Path::new(vec![])), // Root node
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(5)],
-    //             Path::new(vec![Direction::Left]),
-    //         ),
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(6)],
-    //             Path::new(vec![Direction::Right]),
-    //         ),
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)],
-    //             Path::new(vec![Direction::Left, Direction::Left]),
-    //         ),
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(5), IntWrapper(2)],
-    //             Path::new(vec![Direction::Left, Direction::Right]),
-    //         ),
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(6), IntWrapper(3)],
-    //             Path::new(vec![Direction::Right, Direction::Left]),
-    //         ),
-    //         (
-    //             vec![IntWrapper(7), IntWrapper(6), IntWrapper(4)],
-    //             Path::new(vec![Direction::Right, Direction::Right]),
-    //         ),
-    //     ];
-    //     let mut tree = BinaryTree::from_vec_with_paths(items);
+    #[test]
+    fn test_lca() {
+        // Create a binary tree:
+        //         7
+        //        / \
+        //       5   6
+        //      / \ / \
+        //     1  2 3 4
+        let items = vec![
+            (vec![IntWrapper(7)], Path::new(vec![])), // Root node
+            (
+                vec![IntWrapper(7), IntWrapper(5)],
+                Path::new(vec![Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6)],
+                Path::new(vec![Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(1)],
+                Path::new(vec![Direction::Left, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(5), IntWrapper(2)],
+                Path::new(vec![Direction::Left, Direction::Right]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6), IntWrapper(3)],
+                Path::new(vec![Direction::Right, Direction::Left]),
+            ),
+            (
+                vec![IntWrapper(7), IntWrapper(6), IntWrapper(4)],
+                Path::new(vec![Direction::Right, Direction::Right]),
+            ),
+        ];
+        let mut tree = BinaryTree::from_vec_with_paths(items);
 
-    //     // Test lca with various paths
-    //     let path1 = Path::new(vec![Direction::Left, Direction::Left]);
-    //     assert_eq!(tree.lca(&path1), Some((&mut IntWrapper(1), path1.clone())));
+        // Test lca with various paths
+        let path1 = Path::new(vec![Direction::Left, Direction::Left]);
+        assert_eq!(tree.lca(&path1), Some(path1.clone()));
 
-    //     let path2 = Path::new(vec![Direction::Right, Direction::Right]);
-    //     assert_eq!(tree.lca(&path2), Some((&mut IntWrapper(4), path2.clone())));
+        let path2 = Path::new(vec![Direction::Right, Direction::Right]);
+        assert_eq!(tree.lca(&path2), Some(path2.clone()));
 
-    //     let path3 = Path::new(vec![]);
-    //     assert_eq!(tree.lca(&path3), Some((&mut IntWrapper(7), path3.clone())));
+        let path3 = Path::new(vec![]);
+        assert_eq!(tree.lca(&path3), Some(path3.clone()));
 
-    //     let path4 = Path::new(vec![Direction::Left]);
-    //     assert_eq!(tree.lca(&path4), Some((&mut IntWrapper(5), path4.clone())));
+        let path4 = Path::new(vec![Direction::Left]);
+        assert_eq!(tree.lca(&path4), Some(path4.clone()));
 
-    //     let path5 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
-    //     assert_eq!(
-    //         tree.lca(&path5),
-    //         Some((
-    //             &mut IntWrapper(2),
-    //             Path::new(vec![Direction::Left, Direction::Right])
-    //         ))
-    //     );
+        let path5 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
+        assert_eq!(
+            tree.lca(&path5),
+            Some(Path::new(vec![Direction::Left, Direction::Right]))
+        );
 
-    //     let path6 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
-    //     assert_eq!(
-    //         tree.lca(&path6),
-    //         Some((
-    //             &mut IntWrapper(3),
-    //             Path::new(vec![Direction::Right, Direction::Left])
-    //         ))
-    //     );
-    // }
+        let path6 = Path::new(vec![Direction::Right, Direction::Left, Direction::Left]);
+        assert_eq!(
+            tree.lca(&path6),
+            Some(Path::new(vec![Direction::Right, Direction::Left]))
+        );
+    }
 
-    // #[test]
-    // fn test_new_with_depth_zero() {
-    //     // Create a binary tree with depth 0
-    //     let tree = BinaryTree::<IntWrapper>::new_with_depth(0);
+    #[test]
+    fn test_new_with_depth_zero() {
+        // Create a binary tree with depth 0
+        let tree = BinaryTree::<IntWrapper>::new_with_depth(0);
 
-    //     // Define the expected tree: a single root node with no children
-    //     let expected = BinaryTree::<IntWrapper>::new_empty();
+        // Define the expected tree: a single root node with no children
+        let expected = BinaryTree::<IntWrapper>::new_empty();
 
-    //     // Assert that the created tree matches the expected tree
-    //     assert_eq!(
-    //         tree.height(),
-    //         expected.height(),
-    //         "A tree with depth 0 should have height 0"
-    //     );
-    //     assert_eq!(
-    //         tree.value, expected.value,
-    //         "A tree with depth 0 should have the same value as an empty tree"
-    //     );
-    // }
+        // Assert that the created tree matches the expected tree
+        assert_eq!(
+            tree.height(),
+            expected.height(),
+            "A tree with depth 0 should have height 0"
+        );
+        assert_eq!(
+            tree.value, expected.value,
+            "A tree with depth 0 should have the same value as an empty tree"
+        );
+    }
 
     #[test]
     fn test_new_with_depth_large() {
