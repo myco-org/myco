@@ -83,6 +83,17 @@ impl<T: TreeValue> BinaryTree<T> {
         current
     }
 
+    pub fn get_mut(&mut self, path: &Path) -> Option<&mut T> {
+        let mut idx = 1;
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+            if idx >= self.value.len() {
+                return None;
+            }
+        }
+        self.value[idx].as_mut()
+    }
+
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
         let mut nodes = vec![];
         let mut idx = 1;
@@ -104,20 +115,20 @@ impl<T: TreeValue> BinaryTree<T> {
         nodes
     }
 
-    pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
+    pub fn lca(&self, path: &Path) -> Option<Path> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1;
 
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if next_idx >= self.value.len() || self.value[next_idx].is_none() {
-                return self.value[idx].as_mut().map(|value| (value, current_path));
+                return Some(current_path);
             }
             idx = next_idx;
             current_path.push(direction);
         }
 
-        self.value[idx].as_mut().map(|value| (value, current_path))
+        Some(current_path)
     }
 
     pub fn write(&mut self, value: T, path: Path) {

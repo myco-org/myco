@@ -2,9 +2,12 @@ use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
     EncryptionType, Key, Metadata, OramError, Path,
 };
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
@@ -75,7 +78,8 @@ impl Server1 {
     ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
-        self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
+        let lca_path = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
+        self.insert_message(&ct, &lca_path, &k_oram_t, t_exp)?;
 
         Ok(())
     }
@@ -83,22 +87,28 @@ impl Server1 {
     pub fn insert_message(
         &mut self,
         ct: &Vec<u8>,
-        l: &Path,
+        lca_path: &Path,
         k_oram_t: &Key,
         t_exp: u64,
     ) -> Result<(), OramError> {
+        // Find the LCA.
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
-        let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
-        let mut metadata_bucket = self
+
+        // Metadata bucket at the LCA.
+        let metadata_bucket = self
             .metadata_pt
-            .get(&path)
-            .ok_or(OramError::MetadataBucketNotFound)?
-            .clone();
+            .get_mut(&lca_path)
+            .ok_or(OramError::MetadataBucketNotFound)?;
+
+        // Bucket at the LCA.
+        let bucket = self
+            .pt
+            .get_mut(&lca_path)
+            .ok_or(OramError::BucketNotFound)?;
 
         bucket.push(Block::new(c_msg));
-        metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
-        self.metadata_pt.write(metadata_bucket, path);
+        metadata_bucket.push(lca_path.clone(), k_oram_t.clone(), t_exp);
         Ok(())
     }
 
@@ -106,28 +116,61 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
+        // If the message is valid, then we re-assign it (e.g. it's not expired).
+        // Everything that's not expired, we need to re-insert into the tree
+        // with the LCA for the new pathset.
+
+        // Store the LCA Path -> (Block, Key, t_exp)
+        // Get the ct from decrypt(key, block).
+        let mut lca_path_to_block_key_t_exp: DashMap<Path, Vec<(Block, Key, u64)>> = DashMap::new();
+
         self.p
             .zip(&self.metadata)
-            .iter()
+            .par_iter()
             .try_for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                let metadata_bucket = metadata_bucket
+                    .clone()
+                    .ok_or(OramError::MetadataBucketNotFound)?;
                 (0..bucket.len()).try_for_each(|b| {
+                    // To know whether the real block should be deleted or not, we need to check
+                    // the metadata tree to see if the block is expired. If not, we need
+                    // to re-randomize it. Write it back to new location at the LCA and then also
+                    // update the metadata tree.
                     metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
+                        .get(b)
+                        .ok_or(OramError::MetadataIndexError(b))
                         .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
+                            let (l, k_oram_t, t_exp) = metadata_bucket;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                }
+
+                                let lca = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
+                                lca_path_to_block_key_t_exp.entry(lca).or_default().push((
+                                    c_msg.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                ));
                             }
                             Ok(())
                         })
                 })
+            })?;
+
+        // Loop through the LCA Path -> (Block, Key, t_exp) map.
+        lca_path_to_block_key_t_exp
+            .iter()
+            .try_for_each(|ref_multi| {
+                let lca_path = ref_multi.key();
+                let block_key_t_exp = ref_multi.value();
+
+                // For each (Block, Key, t_exp), decrypt the block to get the ct.
+                // Insert the ct into the new location at the LCA.
+                for (block, key, t_exp) in block_key_t_exp {
+                    let ct = decrypt(&key.0, &block.0).map_err(|_| OramError::DecryptionFailed)?;
+                    self.insert_message(&ct, lca_path, &key, *t_exp)?;
+                }
+                Ok(())
             })?;
 
         self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
