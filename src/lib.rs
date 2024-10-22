@@ -461,6 +461,8 @@ mod e2e_tests {
     #[cfg(feature = "simulation")]
     #[test]
     fn test_simulation() {
+        use std::time::Duration;
+
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
 
@@ -484,10 +486,20 @@ mod e2e_tests {
             keys.push(key);
         }
 
+        let mut total_duration: Duration = Duration::new(0, 0);
+        let mut successful_epochs = 0;
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
+
+            // Measure batch_init latency
+            let epoch_start_time = std::time::Instant::now();
+            let batch_init_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_init(num_clients);
+            let batch_init_duration = batch_init_start_time.elapsed();
+
+            // Measure write latency
+            let write_start_time = std::time::Instant::now();
 
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
                 let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
@@ -495,8 +507,39 @@ mod e2e_tests {
                     panic!("Write failed in epoch {}: {:?}", epoch, e);
                 }
             }
+            let write_duration = write_start_time.elapsed();
 
+            // Measure batch_write latency
+            let batch_write_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_write();
+            let batch_write_duration = batch_write_start_time.elapsed();
+
+            // Measure total duration
+            let epoch_duration = epoch_start_time.elapsed();
+            total_duration += epoch_duration;
+            successful_epochs += 1;
+
+            // Print the duration of the current epoch and its phases
+            println!(
+                "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?})",
+                epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration
+            );
+
+            // Calculate the average duration so far
+            let average_duration = total_duration / successful_epochs as u32;
+
+            // Print cumulative duration and average duration so far
+            println!(
+                "Total duration so far: {:?}, average duration so far: {:?}",
+                total_duration, average_duration
+            );
         }
+
+        // After all epochs, print the total duration and final average duration
+        let final_average_duration = total_duration / successful_epochs as u32;
+        println!(
+            "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
+            total_duration, final_average_duration
+        );
     }
 }
