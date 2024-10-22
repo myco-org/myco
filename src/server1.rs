@@ -134,8 +134,8 @@ impl Server1 {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
                 (0..bucket.len()).try_for_each(|b| {
                     let metadata_bucket: Metadata = metadata_bucket
-                    .clone()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
+                        .clone()
+                        .ok_or(OramError::MetadataBucketNotFound)?;
                     // To know whether the real block should be deleted or not, we need to check
                     // the metadata tree to see if the block is expired. If not, we need
                     // to re-randomize it. Write it back to new location at the LCA and then also
@@ -179,8 +179,10 @@ impl Server1 {
                     }
                 }
             });
-        self.pt.zip(&mut self.metadata_pt).par_iter_mut().try_for_each(
-            |(bucket, metadata_bucket, path)| {
+        self.pt
+            .zip(&mut self.metadata_pt)
+            .par_iter_mut()
+            .try_for_each(|(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                 let metadata_bucket: &mut Metadata = metadata_bucket
                     .as_mut()
@@ -207,8 +209,7 @@ impl Server1 {
                 bucket.shuffle(&mut rng1);
                 metadata_bucket.shuffle(&mut rng2);
                 Ok(())
-            },
-        )?;
+            })?;
         self.metadata.overwrite(&self.metadata_pt);
 
         let mut server2 = self.s2.lock().unwrap();
