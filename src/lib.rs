@@ -5,7 +5,6 @@ use error::OramError;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
-use std::sync::RwLock;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -125,12 +124,12 @@ struct Client {
     epoch: usize,
     keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
     // s1: Arc<Mutex<Server1>>,
-    s1: Arc<RwLock<Server1>>,
-    s2: Arc<RwLock<Server2>>,
+    s1: Arc<Mutex<Server1>>,
+    s2: Arc<Mutex<Server2>>,
 }
 
 impl Client {
-    fn new(id: String, s1: Arc<RwLock<Server1>>, s2: Arc<RwLock<Server2>>) -> Self {
+    fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
             id,
             epoch: 0,
@@ -168,7 +167,7 @@ impl Client {
 
         // 5: return S1.Write(ct, ℓ, koram,t)
         self.s1
-            .read()
+            .lock()
             .unwrap()
             .queue_write(ct, f, Key::new(k_oram_t), cs)
     }
@@ -183,14 +182,14 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
-        let keys = self.s2.read().unwrap().get_prf_keys();
+        let keys = self.s2.lock().unwrap().get_prf_keys();
         let k_s1_t = keys.last().unwrap();
 
         // 2: ℓ = PRFkprf (t)
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat());
 
         // 3: p ← S2.Read(ℓ)
-        let path = self.s2.read().unwrap().read(&Path::from(l.clone()));
+        let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
         println!("{:?}", path);
         // 4: for block ∈ p do
         for bucket in path {
@@ -210,7 +209,7 @@ impl Client {
         let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs = self.id.clone().into_bytes();
-        self.s1.read().unwrap().queue_write(ct, l, k_oram_t, cs)
+        self.s1.lock().unwrap().queue_write(ct, l, k_oram_t, cs)
     }
 
     fn fake_read(&self) -> Vec<Bucket> {
@@ -218,7 +217,7 @@ impl Client {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        self.s2.read().unwrap().read(&Path::from(l))
+        self.s2.lock().unwrap().read(&Path::from(l))
     }
 }
 
@@ -303,7 +302,7 @@ mod util_tests {
 }
 
 mod e2e_tests {
-    use std::sync::RwLock;
+    use std::sync::Mutex;
 
     use rand::RngCore;
 
@@ -326,8 +325,8 @@ mod e2e_tests {
 
     #[test]
     fn test_client_setup() {
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1, s2);
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
@@ -337,8 +336,8 @@ mod e2e_tests {
 
     #[test]
     fn test_write_and_read() {
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
@@ -349,7 +348,7 @@ mod e2e_tests {
             Err(e) => panic!("Setup failed with error: {:?}", e),
         }
 
-        s1.write().unwrap().batch_init(1);
+        s1.lock().unwrap().batch_init(1);
 
         // Handle write errors explicitly
         match alice.write(&[1], &k) {
@@ -358,7 +357,7 @@ mod e2e_tests {
         }
 
         // Call batch_write and print any errors if they occur
-        match s1.write().unwrap().batch_write() {
+        match s1.lock().unwrap().batch_write() {
             Ok(_) => println!("Batch write successful"),
             Err(e) => panic!("Batch write failed with error: {:?}", e),
         }
@@ -375,8 +374,8 @@ mod e2e_tests {
 
     #[test]
     fn test_multiple_clients_one_epoch() {
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
         let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
 
@@ -391,12 +390,12 @@ mod e2e_tests {
         bob.setup(&k1).expect("Setup failed");
         bob.setup(&k2).expect("Setup failed");
 
-        s1.write().unwrap().batch_init(2);
+        s1.lock().unwrap().batch_init(2);
 
         alice.write(&[1], &k1).expect("Write failed");
         bob.write(&[2], &k2).expect("Write failed");
 
-        s1.write().unwrap().batch_write();
+        s1.lock().unwrap().batch_write();
 
         let msg = alice.read(&k2, "Bob".to_string()).expect("Read failed");
         assert_eq!(msg, vec![2]);
@@ -407,8 +406,8 @@ mod e2e_tests {
 
     #[test]
     fn test_multiple_writes_and_reads() {
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
 
         let num_operations = 5;
@@ -425,7 +424,7 @@ mod e2e_tests {
             }
 
             // Initialize batch
-            s1.write().unwrap().batch_init(1);
+            s1.lock().unwrap().batch_init(1);
 
             // Handle write error explicitly
             if let Err(e) = alice.write(&msg, &k) {
@@ -436,7 +435,7 @@ mod e2e_tests {
             }
 
             // Call batch_write and print any errors if they occur
-            if let Err(e) = s1.write().unwrap().batch_write() {
+            if let Err(e) = s1.lock().unwrap().batch_write() {
                 panic!(
                     "Batch write failed for operation {} with key {:?}: {:?}",
                     i, k, e
@@ -462,8 +461,8 @@ mod e2e_tests {
 
     #[test]
     fn test_multiple_clients_multiple_epochs() {
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
 
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
         let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
@@ -473,7 +472,7 @@ mod e2e_tests {
         // Initialize the first epoch
 
         for _ in 0..5 {
-            s1.write().unwrap().batch_init(2);
+            s1.lock().unwrap().batch_init(2);
 
             // Perform writes for both clients
             let k_alice_to_bob = Key::random(&mut rng);
@@ -493,7 +492,7 @@ mod e2e_tests {
             bob.write(&bob_msg, &k_bob_to_alice).expect("Write failed");
 
             // Perform batch write
-            let _ = s1.write().unwrap().batch_write();
+            let _ = s1.lock().unwrap().batch_write();
 
             let alice_read = alice
                 .read(&k_bob_to_alice, "Bob".to_string())
@@ -527,8 +526,8 @@ mod e2e_tests {
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA * DELTA;
 
-        let s2 = Arc::new(RwLock::new(Server2::new()));
-        let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
 
         let mut rng = ChaCha20Rng::from_entropy();
         let mut clients = Vec::new();
@@ -555,7 +554,7 @@ mod e2e_tests {
             // Measure batch_init latency
             let epoch_start_time = std::time::Instant::now();
             let batch_init_start_time = std::time::Instant::now();
-            s1.write().unwrap().batch_init(num_clients);
+            s1.lock().unwrap().batch_init(num_clients);
             let batch_init_duration = batch_init_start_time.elapsed();
 
             // Measure write latency
@@ -577,7 +576,7 @@ mod e2e_tests {
             let batch_write_start_time = std::time::Instant::now();
             // Batch process the previous messages in the database. Relocate it
             // to the new pathset.
-            s1.write().unwrap().batch_write();
+            s1.lock().unwrap().batch_write();
             let batch_write_duration = batch_write_start_time.elapsed();
 
             // Measure total duration

@@ -11,13 +11,13 @@ use rayon::iter::{
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub num_clients: usize,
-    pub s2: Arc<RwLock<Server2>>,
+    pub s2: Arc<Mutex<Server2>>,
     /// Permanent tree that stores the data.
     pub p: BinaryTree<Bucket>,
     /// Temporary tree used to store the new data in every epoch.
@@ -30,7 +30,7 @@ pub struct Server1 {
 }
 
 impl Server1 {
-    pub fn new(s2: Arc<RwLock<Server2>>) -> Self {
+    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
         let metadata = BinaryTree::<Metadata>::new_with_depth(D);
         Self {
             epoch: 0,
@@ -55,7 +55,7 @@ impl Server1 {
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
             .iter()
             .map(|path| {
-                let bucket = self.s2.read().unwrap().read(&path);
+                let bucket = self.s2.lock().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
@@ -103,34 +103,6 @@ impl Server1 {
         Ok(())
     }
 
-    // pub fn insert_message(
-    //     &mut self,
-    //     ct: &Vec<u8>,
-    //     lca_path: &Path,
-    //     k_oram_t: &Key,
-    //     t_exp: u64,
-    // ) -> Result<(), OramError> {
-    //     // Encrypt the ct.
-    //     let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-    //         .map_err(|_| OramError::EncryptionFailed)?;
-
-    //     // Metadata bucket at the LCA.
-    //     let metadata_bucket = self
-    //         .metadata_pt
-    //         .get_mut(&lca_path)
-    //         .ok_or(OramError::MetadataBucketNotFound)?;
-
-    //     // Bucket at the LCA.
-    //     let bucket = self
-    //         .pt
-    //         .get_mut(&lca_path)
-    //         .ok_or(OramError::BucketNotFound)?;
-
-    //     bucket.push(Block::new(c_msg));
-    //     metadata_bucket.push(lca_path.clone(), k_oram_t.clone(), t_exp);
-    //     Ok(())
-    // }
-    
     pub fn batch_write(&mut self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
@@ -141,18 +113,15 @@ impl Server1 {
             .try_for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
                 (0..bucket.len()).try_for_each(|b| {
-                    let metadata_bucket: Metadata = metadata_bucket
-                        .clone()
-                        .ok_or(OramError::MetadataBucketNotFound)?;
-
                     metadata_bucket
-                        .get(b)
-                        .ok_or(OramError::MetadataIndexError(b))
+                        .as_ref()
+                        .ok_or(OramError::MetadataBucketNotFound)
                         .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket;
+                            let (l, k_oram_t, t_exp) = metadata_bucket
+                                .get(b)
+                                .ok_or(OramError::BucketIndexError(b))?;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-
                                 let ct = decrypt(&k_oram_t.0, &c_msg.0)
                                     .map_err(|_| OramError::DecryptionFailed)?;
                                 let c_msg_new: Vec<u8> = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
@@ -179,12 +148,10 @@ impl Server1 {
                     for (block, key, t_exp) in blocks.iter() {
                         if let Some(bucket) = bucket.as_mut() {
                             bucket.push(Block::new(block.0.clone()));
-
                         }
                         if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                             metadata_bucket.push(path.clone(), key.clone(), *t_exp);
                         }
-
                     }
                 }
                 println!("Data bucket: {:?}", bucket);
@@ -192,40 +159,39 @@ impl Server1 {
                 self.print_non_none_buckets();
             });
 
-        self.pt
-            .zip(&mut self.metadata_pt)
-            .par_iter_mut()
-            .try_for_each(|(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
-                    .as_mut()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
-                (bucket.len()..Z).for_each(|_| {
-                    bucket.push(Block::new_random());
-                });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-                });
-
-                assert_eq!(
-                    bucket.len(),
-                    Z,
-                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                    self.epoch,
-                    bucket.len(),
-                    Z
-                );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-                let mut rng1 = ChaCha20Rng::from_seed(seed);
-                let mut rng2 = ChaCha20Rng::from_seed(seed);
-                bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
-                Ok(())
-            })?;
+            self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
+                |(bucket, metadata_bucket, path)| {
+                    let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
+                    let metadata_bucket: &mut Metadata = metadata_bucket
+                        .as_mut()
+                        .ok_or(OramError::MetadataBucketNotFound)?;
+                    (bucket.len()..Z).for_each(|_| {
+                        bucket.push(Block::new_random());
+                    });
+                    (metadata_bucket.len()..Z).for_each(|_| {
+                        metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+                    });
+    
+                    assert_eq!(
+                        bucket.len(),
+                        Z,
+                        "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                        self.epoch,
+                        bucket.len(),
+                        Z
+                    );
+                    assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+    
+                    let mut rng1 = ChaCha20Rng::from_seed(seed);
+                    let mut rng2 = ChaCha20Rng::from_seed(seed);
+                    bucket.shuffle(&mut rng1);
+                    metadata_bucket.shuffle(&mut rng2);
+                    Ok(())
+                },
+            )?;
         self.metadata.overwrite(&self.metadata_pt);
 
-        let mut server2 = self.s2.write().unwrap();
+        let mut server2 = self.s2.lock().unwrap();
 
 
         server2.write(self.pt.clone());
