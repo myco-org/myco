@@ -146,7 +146,7 @@ impl Client {
         Ok(())
     }
 
-    fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
+    fn write(&mut self, msg: &[u8], k: &Key) -> Result<Path, OramError> {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
@@ -164,7 +164,10 @@ impl Client {
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cs)
+        self.s1
+            .lock()
+            .unwrap()
+            .write(ct, f, Key::new(k_oram_t), cs)
     }
 
     fn read(&self, k: &Key, cs: String) -> Result<Vec<u8>, OramError> {
@@ -204,7 +207,7 @@ impl Client {
         let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs = self.id.clone().into_bytes();
-        self.s1.lock().unwrap().write(ct, l, k_oram_t, cs)
+        self.s1.lock().unwrap().write(ct, l, k_oram_t, cs).map(|_| ())
     }
 
     fn fake_read(&self) -> Vec<Bucket> {
@@ -455,6 +458,38 @@ mod e2e_tests {
                 alice_msg, bob_read,
                 "Read message doesn't match written message for alice"
             );
+        }
+    }
+
+    #[test]
+    fn test_correctness() {
+        for _ in 0..100 {
+            let s2 = Arc::new(Mutex::new(Server2::new()));
+            let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+
+            let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+
+            let mut rng = ChaCha20Rng::from_entropy();
+
+            let k_alice_to_bob = Key::random(&mut rng);
+
+            alice.setup(&k_alice_to_bob).expect("Setup failed");
+
+            s1.lock().unwrap().batch_init(2);
+
+            let alice_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+            let lca_path = alice.write(&alice_msg, &k_alice_to_bob).expect("Write failed");
+            let s1_pathset = s1.lock().unwrap().pt.clone();
+
+            let mut average_bucket_capacity = vec![0; s1_pathset.height() + 1];
+            s1_pathset.value.iter().enumerate().for_each(|(i, bucket)| {
+                let depth = ((i + 1) as f64).log2().ceil() as usize;
+                if let Some(bucket) = bucket {
+                    average_bucket_capacity[depth] += bucket.len();
+                }
+            });
+
+            assert_eq!(average_bucket_capacity[lca_path.len() + 1], 1);
         }
     }
 

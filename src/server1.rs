@@ -72,12 +72,10 @@ impl Server1 {
         f: Vec<u8>,
         k_oram_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<Path, OramError> {
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
-        self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
-
-        Ok(())
+        self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp)
     }
 
     pub fn insert_message(
@@ -86,7 +84,7 @@ impl Server1 {
         l: &Path,
         k_oram_t: &Key,
         t_exp: u64,
-    ) -> Result<(), OramError> {
+    ) -> Result<Path, OramError> {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
         let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
@@ -98,8 +96,9 @@ impl Server1 {
 
         bucket.push(Block::new(c_msg));
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
-        self.metadata_pt.write(metadata_bucket, path);
-        Ok(())
+        self.metadata_pt.write(metadata_bucket, path.clone());
+
+        Ok(path)
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
