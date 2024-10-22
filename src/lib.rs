@@ -463,22 +463,34 @@ mod e2e_tests {
 
     #[test]
     fn test_correctness() {
-        for _ in 0..100 {
-            let s2 = Arc::new(Mutex::new(Server2::new()));
-            let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let num_epochs = 10;
+        let num_clients = 8;
 
-            let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut clients = (0..num_clients)
+            .map(|i| Client::new(format!("Client_{}", i), s1.clone(), s2.clone()))
+            .collect::<Vec<_>>();
 
-            let mut rng = ChaCha20Rng::from_entropy();
+        let mut rng = ChaCha20Rng::from_entropy();
 
-            let k_alice_to_bob = Key::random(&mut rng);
 
-            alice.setup(&k_alice_to_bob).expect("Setup failed");
+        for _ in 0..num_epochs {
+            let keys = (0..num_clients)
+                .map(|_| Key::random(&mut rng))
+                .collect::<Vec<_>>();
 
-            s1.lock().unwrap().batch_init(2);
+            clients.iter_mut().zip(keys.iter()).for_each(|(client, key)| {
+                client.setup(key).expect("Setup failed");
+            });
+            s1.lock().unwrap().batch_init(1);
 
             let alice_msg: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-            let lca_path = alice.write(&alice_msg, &k_alice_to_bob).expect("Write failed");
+            let lca_paths = clients
+                .iter_mut()
+                .zip(keys.iter())
+                .map(|(client, key)| client.write(&alice_msg, key).expect("Write failed"))
+                .collect::<Vec<_>>();
             let s1_pathset = s1.lock().unwrap().pt.clone();
 
             let mut average_bucket_capacity = vec![0; s1_pathset.height() + 1];
@@ -489,11 +501,16 @@ mod e2e_tests {
                 }
             });
 
-            assert_eq!(average_bucket_capacity[lca_path.len() + 1], 1);
+            println!("average_bucket_capacity: {:?}", average_bucket_capacity);
+            lca_paths.iter().for_each(|path| {
+                assert!(average_bucket_capacity[path.len() + 1] > 0);
+            });
 
             s1.lock().unwrap().batch_write().expect("Batch write failed");
 
-            assert!(s2.lock().unwrap().tree.get(&lca_path).is_some());
+            lca_paths.iter().for_each(|path| {
+                assert!(s2.lock().unwrap().tree.get(&path).is_some());
+            });
         }
     }
 
