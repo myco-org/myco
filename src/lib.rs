@@ -190,7 +190,7 @@ impl Client {
 
         // 3: p ← S2.Read(ℓ)
         let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
-        println!("{:?}", path);
+        // println!("{:?}", path);
         // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
