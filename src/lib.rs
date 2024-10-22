@@ -335,7 +335,9 @@ mod e2e_tests {
         let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
 
+        println!("Hello");
         s1.lock().unwrap().batch_init(1);
+        println!("hi");
 
         alice.write(&[1], &k).expect("Write failed");
         s1.lock().unwrap().batch_write();
