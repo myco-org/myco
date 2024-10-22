@@ -11,21 +11,26 @@ use rayon::iter::{
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub num_clients: usize,
-    pub s2: Arc<Mutex<Server2>>,
+    pub s2: Arc<RwLock<Server2>>,
+    /// Permanent tree that stores the data.
     pub p: BinaryTree<Bucket>,
+    /// Temporary tree used to store the new data in every epoch.
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
+    /// LCA index to (Block, Key, t_exp). Used to write in parallel.
+    /// Clear this map after each epoch.
+    pub lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>>,
 }
 
 impl Server1 {
-    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(s2: Arc<RwLock<Server2>>) -> Self {
         let metadata = BinaryTree::<Metadata>::new_with_depth(D);
         Self {
             epoch: 0,
@@ -36,6 +41,7 @@ impl Server1 {
             pt: BinaryTree::new_empty(),
             metadata_pt: BinaryTree::new_empty(),
             metadata,
+            lca_idx_to_block_key_t_exp: DashMap::new(),
         }
     }
 
@@ -49,7 +55,7 @@ impl Server1 {
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
             .iter()
             .map(|path| {
-                let bucket = self.s2.lock().unwrap().read(&path);
+                let bucket = self.s2.read().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
@@ -72,60 +78,62 @@ impl Server1 {
         self.k_s1_t = Key::random(&mut rng);
     }
 
-    pub fn write(
-        &mut self,
+    /// Queues an individual write from a client.
+    pub fn queue_write(
+        &self,
         ct: Vec<u8>,
         f: Vec<u8>,
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
+        
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
-        let (_, lca_path) = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
-        self.insert_message(&ct, &lca_path, &k_oram_t, t_exp)?;
+        let (lca_idx, _) = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
 
-        Ok(())
-    }
-
-    pub fn insert_message(
-        &mut self,
-        ct: &Vec<u8>,
-        lca_path: &Path,
-        k_oram_t: &Key,
-        t_exp: u64,
-    ) -> Result<(), OramError> {
-        // Encrypt the ct.
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
 
-        // Metadata bucket at the LCA.
-        let metadata_bucket = self
-            .metadata_pt
-            .get_mut(&lca_path)
-            .ok_or(OramError::MetadataBucketNotFound)?;
+        // Queue the write.
+        self.lca_idx_to_block_key_t_exp
+            .entry(lca_idx)
+            .or_default()
+            .push((Block::new(c_msg), k_oram_t, t_exp));
 
-        // Bucket at the LCA.
-        let bucket = self
-            .pt
-            .get_mut(&lca_path)
-            .ok_or(OramError::BucketNotFound)?;
-
-        bucket.push(Block::new(c_msg));
-        metadata_bucket.push(lca_path.clone(), k_oram_t.clone(), t_exp);
         Ok(())
     }
 
+    // pub fn insert_message(
+    //     &mut self,
+    //     ct: &Vec<u8>,
+    //     lca_path: &Path,
+    //     k_oram_t: &Key,
+    //     t_exp: u64,
+    // ) -> Result<(), OramError> {
+    //     // Encrypt the ct.
+    //     let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
+    //         .map_err(|_| OramError::EncryptionFailed)?;
+
+    //     // Metadata bucket at the LCA.
+    //     let metadata_bucket = self
+    //         .metadata_pt
+    //         .get_mut(&lca_path)
+    //         .ok_or(OramError::MetadataBucketNotFound)?;
+
+    //     // Bucket at the LCA.
+    //     let bucket = self
+    //         .pt
+    //         .get_mut(&lca_path)
+    //         .ok_or(OramError::BucketNotFound)?;
+
+    //     bucket.push(Block::new(c_msg));
+    //     metadata_bucket.push(lca_path.clone(), k_oram_t.clone(), t_exp);
+    //     Ok(())
+    // }
+    
     pub fn batch_write(&mut self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
-
-        // If the message is valid, then we re-assign it (e.g. it's not expired).
-        // Everything that's not expired, we need to re-insert into the tree
-        // with the LCA for the new pathset.
-
-        // Store the LCA Path -> (Block, Key, t_exp)
-        // Get the ct from decrypt(key, block).
-        let lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
 
         self.p
             .zip(&self.metadata)
@@ -136,10 +144,7 @@ impl Server1 {
                     let metadata_bucket: Metadata = metadata_bucket
                         .clone()
                         .ok_or(OramError::MetadataBucketNotFound)?;
-                    // To know whether the real block should be deleted or not, we need to check
-                    // the metadata tree to see if the block is expired. If not, we need
-                    // to re-randomize it. Write it back to new location at the LCA and then also
-                    // update the metadata tree.
+
                     metadata_bucket
                         .get(b)
                         .ok_or(OramError::MetadataIndexError(b))
@@ -148,37 +153,45 @@ impl Server1 {
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
 
+                                let ct = decrypt(&k_oram_t.0, &c_msg.0)
+                                    .map_err(|_| OramError::DecryptionFailed)?;
+                                let c_msg_new: Vec<u8> = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
+                                    .map_err(|_| OramError::EncryptionFailed)?;
+
                                 let (lca_idx, _) = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
-                                lca_idx_to_block_key_t_exp
+                                self.lca_idx_to_block_key_t_exp
                                     .entry(lca_idx)
                                     .or_default()
-                                    .push((c_msg.clone(), k_oram_t.clone(), *t_exp));
+                                    .push((Block::new(c_msg_new), k_oram_t.clone(), *t_exp));
                             }
                             Ok(())
                         })
                 })
             })?;
 
-        // Loop over all the indices in the metadata tree and the bucket tree.
-        self.p
+        self.pt
             .zip(&self.metadata_pt)
             .par_iter_mut()
             .enumerate()
-            .filter(|(idx, _)| !lca_idx_to_block_key_t_exp.contains_key(&idx))
+            .filter(|(idx, _)| self.lca_idx_to_block_key_t_exp.contains_key(&idx))
             .for_each(|(idx, (bucket, metadata_bucket, path))| {
-                if let Some(blocks) = lca_idx_to_block_key_t_exp.get(&idx) {
+                if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&idx) {
                     for (block, key, t_exp) in blocks.iter() {
-                        if let Ok(ct) = decrypt(&key.0, &block.0) {
-                            if let Some(bucket) = bucket.as_mut() {
-                                bucket.push(Block::new(ct));
-                            }
-                            if let Some(metadata_bucket) = metadata_bucket.as_mut() {
-                                metadata_bucket.push(path.clone(), key.clone(), *t_exp);
-                            }
+                        if let Some(bucket) = bucket.as_mut() {
+                            bucket.push(Block::new(block.0.clone()));
+
                         }
+                        if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                            metadata_bucket.push(path.clone(), key.clone(), *t_exp);
+                        }
+
                     }
                 }
+                println!("Data bucket: {:?}", bucket);
+                println!("Metadata bucket: {:?}", metadata_bucket);
+                self.print_non_none_buckets();
             });
+
         self.pt
             .zip(&mut self.metadata_pt)
             .par_iter_mut()
@@ -212,14 +225,31 @@ impl Server1 {
             })?;
         self.metadata.overwrite(&self.metadata_pt);
 
-        let mut server2 = self.s2.lock().unwrap();
+        let mut server2 = self.s2.write().unwrap();
+
+
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
 
         self.epoch += 1;
         Ok(())
     }
+    
+    pub fn print_non_none_buckets(&self) {
+        for (index, bucket) in self.pt.value.iter().enumerate() {
+            if let Some(ref bucket_value) = bucket {
+                println!("Bucket at index {}: {:?}", index, bucket_value);
+            }
+        }
+        for (index, bucket) in self.metadata_pt.value.iter().enumerate() {
+            if let Some(ref bucket_value) = bucket {
+                println!("Bucket at index {}: {:?}", index, bucket_value);
+            }
+        }
+    }
 }
+
+
 
 #[cfg(test)]
 mod tests {
