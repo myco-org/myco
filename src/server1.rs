@@ -11,21 +11,26 @@ use rayon::iter::{
     IntoParallelRefMutIterator, ParallelIterator,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub num_clients: usize,
-    pub s2: Arc<Mutex<Server2>>,
+    pub s2: Arc<RwLock<Server2>>,
+    /// Permanent tree that stores the data.
     pub p: BinaryTree<Bucket>,
+    /// Temporary tree used to store the new data in every epoch.
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
+    /// LCA index to (Block, Key, t_exp). Used to write in parallel.
+    /// Clear this map after each epoch.
+    pub lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>>,
 }
 
 impl Server1 {
-    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(s2: Arc<RwLock<Server2>>) -> Self {
         let metadata = BinaryTree::<Metadata>::new_with_depth(D);
         Self {
             epoch: 0,
@@ -36,6 +41,7 @@ impl Server1 {
             pt: BinaryTree::new_empty(),
             metadata_pt: BinaryTree::new_empty(),
             metadata,
+            lca_idx_to_block_key_t_exp: DashMap::new(),
         }
     }
 
@@ -49,7 +55,7 @@ impl Server1 {
         let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
             .iter()
             .map(|path| {
-                let bucket = self.s2.lock().unwrap().read(&path);
+                let bucket = self.s2.read().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
@@ -65,6 +71,7 @@ impl Server1 {
             .collect();
 
         self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
+        // The same nodes exist, but they're empty for the _pt trees.
         self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
         self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
 
@@ -72,6 +79,29 @@ impl Server1 {
         self.k_s1_t = Key::random(&mut rng);
     }
 
+    /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
+    /// an epoch, each queued write is written to pt and metadata_pt.
+    pub fn queue_write(
+        &self,
+        ct: Vec<u8>,
+        f: Vec<u8>,
+        k_oram_t: Key,
+        cs: Vec<u8>,
+    ) -> Result<(), OramError> {
+        let t_exp = self.epoch + DELTA;
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
+        let (lca_idx, _) = self.p.lca(&Path::from(l)).ok_or(OramError::LcaNotFound)?;
+
+        // Queue the write.
+        self.lca_idx_to_block_key_t_exp
+            .entry(lca_idx)
+            .or_default()
+            .push((Block::new(ct), k_oram_t, t_exp));
+
+        Ok(())
+    }
+
+    /// Writes a single message to pt and metadata_pt.
     pub fn write(
         &mut self,
         ct: Vec<u8>,
@@ -115,18 +145,19 @@ impl Server1 {
         Ok(())
     }
 
+    /// 1. Queues all of the unexpired messages in the metadata bucket for all nodes in the tree.
+    /// 2. Writes all of the queued messages in self.lca_idx_to_block_key_t_exp to pt and metadata_pt.
+    /// 3. Shuffle the buckets and fill them up with random blocks up to Z.
     pub fn batch_write(&mut self) -> Result<(), OramError> {
-        let mut rng = ChaCha20Rng::from_entropy();
-        let seed: [u8; 32] = rng.gen();
+        self.queue_batch_write()?;
+        self.finalize_batch_write()?;
+        Ok(())
+    }
 
-        // If the message is valid, then we re-assign it (e.g. it's not expired).
-        // Everything that's not expired, we need to re-insert into the tree
-        // with the LCA for the new pathset.
-
-        // Store the LCA Path -> (Block, Key, t_exp)
-        // Get the ct from decrypt(key, block).
-        let lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
-
+    /// Queues all of the unexpired messages in the metadata bucket for all nodes in the tree.
+    pub fn queue_batch_write(&mut self) -> Result<(), OramError> {
+        // Goes through the metadata bucket for all unexpired messages. If it's not expired, then we add
+        // it to the map as it needs to be updated in pt.
         self.p
             .zip(&self.metadata)
             .par_iter()
@@ -149,7 +180,7 @@ impl Server1 {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
 
                                 let (lca_idx, _) = self.pt.lca(l).ok_or(OramError::LcaNotFound)?;
-                                lca_idx_to_block_key_t_exp
+                                self.lca_idx_to_block_key_t_exp
                                     .entry(lca_idx)
                                     .or_default()
                                     .push((c_msg.clone(), k_oram_t.clone(), *t_exp));
@@ -158,15 +189,23 @@ impl Server1 {
                         })
                 })
             })?;
+        Ok(())
+    }
 
-        // Loop over all the indices in the metadata tree and the bucket tree.
-        self.p
+    /// 1. Writes all of the queued messages in self.lca_idx_to_block_key_t_exp to pt and metadata_pt.
+    /// 2. Shuffle the buckets and fill them up with random blocks up to Z.
+    pub fn finalize_batch_write(&mut self) -> Result<(), OramError> {
+        let mut rng = ChaCha20Rng::from_entropy();
+        let seed: [u8; 32] = rng.gen();
+
+        // If the block is unexpired, we push a new block to pt and metadata_pt at that index.
+        self.pt
             .zip(&self.metadata_pt)
             .par_iter_mut()
             .enumerate()
-            .filter(|(idx, _)| !lca_idx_to_block_key_t_exp.contains_key(&idx))
+            .filter(|(idx, _)| !self.lca_idx_to_block_key_t_exp.contains_key(&idx))
             .for_each(|(idx, (bucket, metadata_bucket, path))| {
-                if let Some(blocks) = lca_idx_to_block_key_t_exp.get(&idx) {
+                if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&idx) {
                     for (block, key, t_exp) in blocks.iter() {
                         if let Ok(ct) = decrypt(&key.0, &block.0) {
                             if let Some(bucket) = bucket.as_mut() {
@@ -179,6 +218,9 @@ impl Server1 {
                     }
                 }
             });
+
+        // Takes all of the existing indices and fills them up with random blocks up to Z.
+        // Shuffle the buckets after.
         self.pt
             .zip(&mut self.metadata_pt)
             .par_iter_mut()
@@ -210,11 +252,18 @@ impl Server1 {
                 metadata_bucket.shuffle(&mut rng2);
                 Ok(())
             })?;
+
+        // Overwrites metadata with metadata_pt.
         self.metadata.overwrite(&self.metadata_pt);
 
-        let mut server2 = self.s2.lock().unwrap();
+        let mut server2 = self.s2.write().unwrap();
+
+        // Overwrites p with pt inside of server2.
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
+
+        // Reset the map for the next epoch.
+        self.lca_idx_to_block_key_t_exp.clear();
 
         self.epoch += 1;
         Ok(())
