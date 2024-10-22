@@ -10,7 +10,6 @@ use std::{
     num::NonZeroU32,
     sync::{Arc, Mutex},
 };
-use thiserror::Error;
 
 // Add module declarations
 mod constants;
