@@ -490,6 +490,10 @@ mod e2e_tests {
             });
 
             assert_eq!(average_bucket_capacity[lca_path.len() + 1], 1);
+
+            s1.lock().unwrap().batch_write().expect("Batch write failed");
+
+            assert!(s2.lock().unwrap().tree.get(&lca_path).is_some());
         }
     }
 
