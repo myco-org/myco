@@ -334,16 +334,36 @@ mod e2e_tests {
         let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
-        alice.setup(&k).expect("Setup failed");
+
+        // Handle setup errors explicitly
+        match alice.setup(&k) {
+            Ok(_) => println!("Setup successful"),
+            Err(e) => panic!("Setup failed with error: {:?}", e),
+        }
 
         s1.lock().unwrap().batch_init(1);
 
-        alice.write(&[1], &k).expect("Write failed");
-        s1.lock().unwrap().batch_write();
+        // Handle write errors explicitly
+        match alice.write(&[1], &k) {
+            Ok(_) => println!("Write successful"),
+            Err(e) => panic!("Write failed with error: {:?}", e),
+        }
 
-        let msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
-        assert_eq!(msg, vec![1]);
-    }
+        // Call batch_write and print any errors if they occur
+        match s1.lock().unwrap().batch_write() {
+            Ok(_) => println!("Batch write successful"),
+            Err(e) => panic!("Batch write failed with error: {:?}", e),
+        }
+
+        // Handle read errors explicitly
+        match alice.read(&k, "Alice".to_string()) {
+            Ok(msg) => {
+                println!("Read successful");
+                assert_eq!(msg, vec![1], "Message does not match");
+            }
+            Err(e) => panic!("Read failed with error: {:?}", e),
+        }
+    } 
 
     #[test]
     fn test_multiple_clients_one_epoch() {
@@ -391,17 +411,47 @@ mod e2e_tests {
             let k = Key::random(&mut rng);
             let msg = vec![i as u8, (i + 1) as u8, (i + 2) as u8];
 
-            alice.setup(&k).expect("Setup failed");
-            s1.lock().unwrap().batch_init(1);
-            alice.write(&msg, &k).expect("Write failed");
-            s1.lock().unwrap().batch_write();
-            let read_msg = alice.read(&k, "Alice".to_string()).expect("Read failed");
+            // Handle setup error explicitly
+            if let Err(e) = alice.setup(&k) {
+                panic!("Setup failed for operation {}: {:?}", i, e);
+            }
 
-            assert_eq!(
-                read_msg, msg,
-                "Read message doesn't match written message for key {}",
-                i
-            );
+            // Initialize batch
+            s1.lock().unwrap().batch_init(1);
+
+            // Handle write error explicitly
+            if let Err(e) = alice.write(&msg, &k) {
+                panic!(
+                    "Write failed for operation {} with message {:?} and key {:?}: {:?}",
+                    i, msg, k, e
+                );
+            }
+
+            // Call batch_write and print any errors if they occur
+            if let Err(e) = s1.lock().unwrap().batch_write() {
+                panic!(
+                    "Batch write failed for operation {} with key {:?}: {:?}",
+                    i, k, e
+                );
+            }
+
+            // Handle read error explicitly
+            match alice.read(&k, "Alice".to_string()) {
+                Ok(read_msg) => {
+                    // Compare written message with the read message
+                    assert_eq!(
+                        read_msg, msg,
+                        "Read message doesn't match written message for operation {}: expected {:?}, got {:?}",
+                        i, msg, read_msg
+                    );
+                }
+                Err(e) => {
+                    panic!(
+                        "Read failed for operation {} with key {:?}: {:?}",
+                        i, k, e
+                    );
+                }
+            }
         }
     }
 

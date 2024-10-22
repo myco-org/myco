@@ -125,17 +125,17 @@ impl Server1 {
 
         // Store the LCA Path -> (Block, Key, t_exp)
         // Get the ct from decrypt(key, block).
-        let mut lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        let lca_idx_to_block_key_t_exp: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
 
         self.p
             .zip(&self.metadata)
             .par_iter()
             .try_for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket = metadata_bucket
+                (0..bucket.len()).try_for_each(|b| {
+                    let metadata_bucket: Metadata = metadata_bucket
                     .clone()
                     .ok_or(OramError::MetadataBucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
                     // To know whether the real block should be deleted or not, we need to check
                     // the metadata tree to see if the block is expired. If not, we need
                     // to re-randomize it. Write it back to new location at the LCA and then also
@@ -179,7 +179,6 @@ impl Server1 {
                     }
                 }
             });
-
         self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
             |(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
@@ -210,7 +209,6 @@ impl Server1 {
                 Ok(())
             },
         )?;
-
         self.metadata.overwrite(&self.metadata_pt);
 
         let mut server2 = self.s2.lock().unwrap();
