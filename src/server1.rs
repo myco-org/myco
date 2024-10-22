@@ -179,7 +179,7 @@ impl Server1 {
                     }
                 }
             });
-        self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
+        self.pt.zip(&mut self.metadata_pt).par_iter_mut().try_for_each(
             |(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                 let metadata_bucket: &mut Metadata = metadata_bucket
