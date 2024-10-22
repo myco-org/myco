@@ -44,7 +44,7 @@ impl TreeValue for Metadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
     Left,
     Right,
@@ -69,7 +69,7 @@ impl From<u8> for Direction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Path(Vec<Direction>);
 
 impl Path {

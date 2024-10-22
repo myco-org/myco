@@ -83,6 +83,17 @@ impl<T: TreeValue> BinaryTree<T> {
         current
     }
 
+    pub fn get_mut(&mut self, path: &Path) -> Option<&mut T> {
+        let mut idx = 1;
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+            if idx >= self.value.len() {
+                return None;
+            }
+        }
+        self.value[idx].as_mut()
+    }
+
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
         let mut nodes = vec![];
         let mut idx = 1;
@@ -104,20 +115,29 @@ impl<T: TreeValue> BinaryTree<T> {
         nodes
     }
 
-    pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
+    pub fn get_index(&self, idx: usize) -> Option<&T> {
+        self.value.get(idx).and_then(|v| v.as_ref())
+    }
+
+    pub fn get_index_mut(&mut self, idx: usize) -> Option<&mut T> {
+        self.value.get_mut(idx).and_then(|v| v.as_mut())
+    }
+
+    // Returns the index of the LCA and the path to it.
+    pub fn lca(&self, path: &Path) -> Option<(usize, Path)> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1;
 
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if next_idx >= self.value.len() || self.value[next_idx].is_none() {
-                return self.value[idx].as_mut().map(|value| (value, current_path));
+                return Some((idx, current_path));
             }
             idx = next_idx;
             current_path.push(direction);
         }
 
-        self.value[idx].as_mut().map(|value| (value, current_path))
+        Some((idx, current_path))
     }
 
     pub fn write(&mut self, value: T, path: Path) {
@@ -241,7 +261,7 @@ impl<T: fmt::Debug + TreeValue> fmt::Display for BinaryTree<T> {
 
 #[cfg(test)]
 mod tests {
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, seq::index};
     use rand_chacha::ChaCha20Rng;
 
     use super::*;
@@ -505,26 +525,26 @@ mod tests {
                 Path::new(vec![Direction::Right, Direction::Right]),
             ),
         ];
-        let mut tree = BinaryTree::from_vec_with_paths(items);
+        let tree = BinaryTree::from_vec_with_paths(items);
 
         // Test lca with various paths
         let path1 = Path::new(vec![Direction::Left, Direction::Left]);
-        assert_eq!(tree.lca(&path1), Some((&mut IntWrapper(1), path1.clone())));
+        assert_eq!(tree.lca(&path1), Some((4, path1.clone())));
 
         let path2 = Path::new(vec![Direction::Right, Direction::Right]);
-        assert_eq!(tree.lca(&path2), Some((&mut IntWrapper(4), path2.clone())));
+        assert_eq!(tree.lca(&path2), Some((7, path2.clone())));
 
         let path3 = Path::new(vec![]);
-        assert_eq!(tree.lca(&path3), Some((&mut IntWrapper(7), path3.clone())));
+        assert_eq!(tree.lca(&path3), Some((1, path3.clone())));
 
         let path4 = Path::new(vec![Direction::Left]);
-        assert_eq!(tree.lca(&path4), Some((&mut IntWrapper(5), path4.clone())));
+        assert_eq!(tree.lca(&path4), Some((2, path4.clone())));
 
         let path5 = Path::new(vec![Direction::Left, Direction::Right, Direction::Left]);
         assert_eq!(
             tree.lca(&path5),
             Some((
-                &mut IntWrapper(2),
+                5,
                 Path::new(vec![Direction::Left, Direction::Right])
             ))
         );
@@ -533,7 +553,7 @@ mod tests {
         assert_eq!(
             tree.lca(&path6),
             Some((
-                &mut IntWrapper(3),
+                6,
                 Path::new(vec![Direction::Right, Direction::Left])
             ))
         );

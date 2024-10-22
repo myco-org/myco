@@ -492,29 +492,46 @@ mod e2e_tests {
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
-            let start_time = std::time::Instant::now();
-            s1.lock().unwrap().batch_init(num_clients);
     
+            // Measure batch_init latency
+            let epoch_start_time = std::time::Instant::now();
+            let batch_init_start_time = std::time::Instant::now();
+            s1.lock().unwrap().batch_init(num_clients);
+            let batch_init_duration = batch_init_start_time.elapsed();
+    
+            // Measure write latency
+            let write_start_time = std::time::Instant::now();
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
                 let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
                 if let Err(e) = client.write(&message, key) {
                     panic!("Write failed in epoch {}: {:?}", epoch, e);
                 }
             }
+            let write_duration = write_start_time.elapsed();
     
+            // Measure batch_write latency
+            let batch_write_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_write();
+            let batch_write_duration = batch_write_start_time.elapsed();
     
-            let duration = start_time.elapsed();
-            total_duration += duration;
+            // Measure total duration
+            let epoch_duration = epoch_start_time.elapsed();
+            total_duration += epoch_duration;
             successful_epochs += 1;
+    
+            // Print the duration of the current epoch and its phases
+            println!(
+                "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?})",
+                epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration
+            );
     
             // Calculate the average duration so far
             let average_duration = total_duration / successful_epochs as u32;
-            
-            // Print the duration of the current epoch, the cumulative duration so far, and the average duration
+    
+            // Print cumulative duration and average duration so far
             println!(
-                "Epoch {} completed in {:?}, total duration so far: {:?}, average duration so far: {:?}",
-                epoch, duration, total_duration, average_duration
+                "Total duration so far: {:?}, average duration so far: {:?}",
+                total_duration, average_duration
             );
         }
     
@@ -524,5 +541,6 @@ mod e2e_tests {
             "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
             total_duration, final_average_duration
         );
-    }               
+    }
+         
 }
