@@ -107,6 +107,7 @@ impl Server1 {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
+        let t1 = std::time::Instant::now();
         self.p
             .zip(&self.metadata)
             .par_iter()
@@ -137,13 +138,16 @@ impl Server1 {
                         })
                 })
             })?;
+            let t2 = std::time::Instant::now();
+            println!("Time taken for batch_write: {:?}", t2.duration_since(t1));
 
             self.pt
                 .zip_mut(&mut self.metadata_pt)
                 .par_iter_mut()
-                .filter(|(_, _, path)| self.lca_idx_to_block_key_t_exp.contains_key(&path.clone().into()))
-                .for_each(|(bucket, metadata_bucket, path)| {
-                    if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&path.clone().into()) {
+                .enumerate()
+                .filter(|(idx, _)| self.lca_idx_to_block_key_t_exp.contains_key(&idx))
+                .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                    if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&idx) {
                         for (block, key, t_exp) in blocks.iter() {
                             if let Some(bucket) = bucket.as_mut() {
                                 bucket.push(Block::new(block.0.clone()));
@@ -154,10 +158,12 @@ impl Server1 {
                         }
                     }
                 });
+            let t3 = std::time::Instant::now();
+            println!("Time taken for batch_write_2: {:?}", t3.duration_since(t2));
                 
             // self.print_non_none_buckets();
 
-            self.pt.zip_mut(&mut self.metadata_pt).iter_mut().try_for_each(
+            self.pt.zip_mut(&mut self.metadata_pt).iter_mut().filter(|(bucket, _, _)| bucket.is_some()).try_for_each(
                 |(bucket, metadata_bucket, path)| {
                     let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                     let metadata_bucket: &mut Metadata = metadata_bucket
@@ -187,13 +193,23 @@ impl Server1 {
                     Ok(())
                 },
             )?;
+        let t4 = std::time::Instant::now();
+
         self.metadata.overwrite(&self.metadata_pt);
+        println!("Time taken for metadata overwrite: {:?}", t4.duration_since(t3));
 
+        let t5 = std::time::Instant::now();
         let mut server2 = self.s2.lock().unwrap();
+        println!("Time taken for server2 lock: {:?}", t5.duration_since(t4));
 
 
+        let t6 = std::time::Instant::now();
         server2.write(self.pt.clone());
+        println!("Time taken for server2 write: {:?}", t6.duration_since(t5));
+
+        let t7 = std::time::Instant::now();
         server2.add_prf_keys(&self.k_s1_t);
+        println!("Time taken for server2 add_prf_keys: {:?}", t7.duration_since(t6));
 
         self.epoch += 1;
         Ok(())

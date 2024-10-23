@@ -562,8 +562,8 @@ mod e2e_tests {
 
             // New messages being introduced into the system.
             clients
-                .par_iter_mut()
-                .zip(keys.par_iter())
+                .iter_mut()
+                .zip(keys.iter())
                 .for_each(|(client, key)| {
                     let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
                     if let Err(e) = client.write(&message, key) {

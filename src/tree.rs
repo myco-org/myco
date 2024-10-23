@@ -202,13 +202,14 @@ impl<T: TreeValue> BinaryTree<T> {
             .iter_mut()
             .zip(rhs.value.iter_mut())
             .enumerate()
-            .filter_map(|(i, (a, b))| {
-                if a.is_some() {
-                    Some((a.as_mut(), b.as_mut(), Path::from(i)))
-                } else {
-                    None
-                }
-            })
+            // .filter_map(|(i, (a, b))| {
+            //     if a.is_some() {
+            //         Some((a.as_mut(), b.as_mut(), Path::from(i)))
+            //     } else {
+            //         None
+            //     }
+            // })
+            .map(|(i, (a, b))| (a.as_mut(), b.as_mut(), Path::from(i)))
             .collect()
     }
 }
