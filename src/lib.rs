@@ -179,20 +179,20 @@ impl Client {
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
         let keys: Vec<Key> = self.s2.lock().unwrap().get_prf_keys();
-        let k_s1_t = keys.get(keys.len()-1-epoch_past).unwrap();
+        let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
 
         // 2: ℓ = PRFkprf (t)
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat());
 
+        let l_path = Path::from(l);
+
         // 3: p ← S2.Read(ℓ)
-        let path = self.s2.lock().unwrap().read(&Path::from(l.clone()));
+        let path = self.s2.lock().unwrap().read(&l_path);
 
         // 4: for block ∈ p do
         for bucket in path {
             for block in bucket {
-                // println!("is it this one");
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    // println!("is it this one inner, decrypted outer");
                     return decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
                 }
             }
@@ -466,101 +466,94 @@ mod e2e_tests {
     fn test_read_old_message_single_client() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-    
+
         let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-    
+
         let mut rng = ChaCha20Rng::from_entropy();
-    
+
         let key = Key::random(&mut rng);
-    
+
         // Epoch 1: Alice writes, but no one reads
         s1.lock().unwrap().batch_init(1);
-    
+
         alice.setup(&key).expect("Setup failed");
-    
+
         let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-    
-        alice
-            .write(&alice_msg_epoch1, &key)
-            .expect("Write failed");
-    
-        s1.lock().unwrap().batch_write(); 
+
+        alice.write(&alice_msg_epoch1, &key).expect("Write failed");
+
+        s1.lock().unwrap().batch_write();
 
         let alice_read_epoch1: Vec<u8> = alice
-        .read(&key, "Alice".to_string(), 0) // Read from epoch 1
-        .expect("Read failed");
-    
+            .read(&key, "Alice".to_string(), 0) // Read from epoch 1
+            .expect("Read failed");
+
         assert_eq!(
             alice_msg_epoch1, alice_read_epoch1,
             "Read message doesn't match the written message from this epoch"
         );
 
-        println!("Pt after epoch 1 {:?}", s1.lock().unwrap().pt);
 
         // Epoch 2: Alice writes again but reads the message from epoch 1
         s1.lock().unwrap().batch_init(1);
-            
+
         let alice_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
 
-        alice
-            .write(&alice_msg_epoch2, &key)
-            .expect("Write failed");
-    
+        alice.write(&alice_msg_epoch2, &key).expect("Write failed");
+
         s1.lock().unwrap().batch_write();
 
-        println!("Pt after epoch 2 {:?}", s1.lock().unwrap().pt);
-    
         // Alice reads from epoch 1
         let alice_read_epoch1: Vec<u8> = alice
             .read(&key, "Alice".to_string(), 1) // Read from epoch 1
             .expect("Read failed");
-    
+
         assert_eq!(
             alice_msg_epoch1, alice_read_epoch1,
             "Read message doesn't match the written message from epoch 1"
         );
-    }    
+    }
 
     #[test]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
         use std::time::Duration;
-    
+
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA * DELTA;
-    
+
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-    
+
         let mut rng = ChaCha20Rng::from_entropy();
         let mut clients = Vec::new();
         let mut keys = Vec::new();
-    
+
         let mut total_duration: Duration = Duration::new(0, 0);
         let mut successful_epochs = 0;
-    
+
         for i in 0..num_clients {
             let client_name = format!("Client_{}", i);
             let mut client = Client::new(client_name, s1.clone(), s2.clone());
-    
+
             let key = Key::random(&mut rng);
             client.setup(&key).expect("Setup failed");
-    
+
             clients.push(client);
             keys.push(key);
         }
-    
+
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
-    
+
             // Measure batch_init latency
             let epoch_start_time = std::time::Instant::now();
             let batch_init_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_init(num_clients);
             let batch_init_duration = batch_init_start_time.elapsed();
-    
+
             // Measure write latency
             let write_start_time = std::time::Instant::now();
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
@@ -570,33 +563,33 @@ mod e2e_tests {
                 }
             }
             let write_duration = write_start_time.elapsed();
-    
+
             // Measure batch_write latency
             let batch_write_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_write();
             let batch_write_duration = batch_write_start_time.elapsed();
-    
+
             // Measure total duration
             let epoch_duration = epoch_start_time.elapsed();
             total_duration += epoch_duration;
             successful_epochs += 1;
-    
+
             // Print the duration of the current epoch and its phases
             println!(
                 "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?})",
                 epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration
             );
-    
+
             // Calculate the average duration so far
             let average_duration = total_duration / successful_epochs as u32;
-    
+
             // Print cumulative duration and average duration so far
             println!(
                 "Total duration so far: {:?}, average duration so far: {:?}",
                 total_duration, average_duration
             );
         }
-    
+
         // After all epochs, print the total duration and final average duration
         let final_average_duration = total_duration / successful_epochs as u32;
         println!(

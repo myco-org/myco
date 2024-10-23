@@ -3,7 +3,9 @@ use std::{
     fmt::{self, Debug, Write},
 };
 
-use crate::{Direction, Path};
+use aes_gcm::aead::Buffer;
+
+use crate::{Bucket, Direction, Path};
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct BinaryTree<T> {
@@ -29,7 +31,10 @@ impl<T: TreeValue> BinaryTree<T> {
 
     pub fn new_with_depth(depth: usize) -> Self {
         BinaryTree {
-            value: vec![None; (1 << depth) + 1],
+            // Prev 1 << depth + 1
+            // For a binary tree of depth d, the number of nodes is 2^(d+1) - 1. However, we ignore the zero index, and instead represent the root node as index 1.
+            // This is for simpler calculation.
+            value: vec![None; 1 << (depth + 1)],
         }
     }
 
@@ -66,7 +71,7 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 
     pub fn height(&self) -> usize {
-        ((self.value.len() - 1) as f64).log2().ceil() as usize
+        ((self.value.len() as f64).log2().ceil() as usize) - 1
     }
 
     pub fn get(&self, path: &Path) -> Option<T> {
@@ -169,14 +174,14 @@ impl<T: TreeValue> BinaryTree<T> {
 
     pub fn zip_mut<'a, 'b, S>(
         &'a mut self,
-        rhs: &'b mut BinaryTree<S>
+        rhs: &'b mut BinaryTree<S>,
     ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
         let len = std::cmp::max(self.value.len(), rhs.value.len());
-    
+
         // Ensure both trees have the same size by resizing them
         self.value.resize_with(len, || None);
         rhs.value.resize_with(len, || None);
-    
+
         // Iterate over both trees, returning mutable references
         self.value
             .iter_mut()
@@ -194,14 +199,14 @@ impl<T: TreeValue> BinaryTree<T> {
 
     pub fn zip_mut_other<'a, 'b, S>(
         &'a mut self,
-        rhs: &'b mut BinaryTree<S>
+        rhs: &'b mut BinaryTree<S>,
     ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
         let len = std::cmp::max(self.value.len(), rhs.value.len());
-    
+
         // Ensure both trees have the same size by resizing them
         self.value.resize_with(len, || None);
         rhs.value.resize_with(len, || None);
-    
+
         // Iterate over both trees, returning mutable references
         self.value
             .iter_mut()
@@ -219,74 +224,18 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 }
 
-impl<T: fmt::Debug + TreeValue> fmt::Display for BinaryTree<T> {
+impl fmt::Display for BinaryTree<Bucket> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut output = String::new();
-        let height = self.height() as u32;
-        let mut level_start = 0;
-        let mut level_end = 1;
-
-        for level in 0..height {
-            let spacing = 2usize.pow(height - level as u32) - 1;
-            let between = 2usize.pow(height - level as u32 + 1) - 1;
-
-            // Print leading spaces
-            for _ in 0..spacing {
-                output.push(' ');
+        writeln!(f, "Binary Tree:")?;
+        write!(f, "[")?;
+        for (i, bucket) in self.value.iter().enumerate() {
+            let bucket_len = bucket.as_ref().map_or(0, |b| b.len());
+            write!(f, "{}", bucket_len)?;
+            if i < self.value.len() - 1 {
+                write!(f, ", ")?;
             }
-
-            // Print nodes and connections
-            for i in level_start..level_end {
-                if i < self.value.len() {
-                    match &self.value[i] {
-                        Some(val) => write!(output, "{:?}", val)?,
-                        None => write!(output, " ")?,
-                    }
-                } else {
-                    write!(output, " ")?;
-                }
-
-                // Print spaces and connections between nodes
-                if i < level_end - 1 {
-                    let mut connection = String::new();
-                    for _ in 0..between {
-                        connection.push('─');
-                    }
-                    write!(output, "{}", connection)?;
-                }
-            }
-
-            output.push('\n');
-
-            // Print connections to next level
-            if level < height - 1 {
-                for _ in 0..spacing - 1 {
-                    output.push(' ');
-                }
-                for i in level_start..level_end {
-                    if i < self.value.len() && self.value[i].is_some() {
-                        output.push('/');
-                        for _ in 0..between / 2 {
-                            output.push(' ');
-                        }
-                        output.push('\\');
-                        for _ in 0..between / 2 {
-                            output.push(' ');
-                        }
-                    } else {
-                        for _ in 0..between + 2 {
-                            output.push(' ');
-                        }
-                    }
-                }
-                output.push('\n');
-            }
-
-            level_start = level_end;
-            level_end = level_end * 2 + 1;
         }
-
-        write!(f, "{}", output)
+        write!(f, "]")
     }
 }
 
@@ -617,7 +566,7 @@ mod tests {
         let tree = BinaryTree::<IntWrapper>::new_with_depth(depth);
 
         // The expected number of nodes for a binary tree of depth d is 2^(d) - 1
-        let expected_nodes = (2_usize.pow((depth) as u32)) + 1;
+        let expected_nodes = (2_usize.pow((depth + 1) as u32));
         let actual_nodes = tree.value.len();
 
         // Assert that the number of nodes matches the expected count
