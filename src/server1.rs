@@ -6,6 +6,7 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub struct Server1 {
     pub epoch: u64,
@@ -103,9 +104,17 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
+        let start_time = Instant::now();
+        
+        // Measure RNG generation time
+        let rng_start = Instant::now();
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
-
+        // let rng_duration = rng_start.elapsed();
+        // println!("RNG generation time: {:?}", rng_duration);
+    
+        // Measure processing of buckets and metadata
+        let bucket_processing_start = Instant::now();
         self.p
             .zip(&self.metadata)
             .iter()
@@ -119,6 +128,7 @@ impl Server1 {
                             let (l, k_oram_t, t_exp) = metadata_bucket
                                 .get(b)
                                 .ok_or(OramError::MetadataIndexError(b))?;
+                                println!("Epoch {:?}, Path {:?}")
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
                                 if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
@@ -129,45 +139,64 @@ impl Server1 {
                         })
                 })
             })?;
-
-        self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
-            |(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
-                    .as_mut()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
-                (bucket.len()..Z).for_each(|_| {
-                    bucket.push(Block::new_random());
-                });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-                });
-
-                assert_eq!(
-                    bucket.len(),
-                    Z,
-                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                    self.epoch,
-                    bucket.len(),
-                    Z
-                );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-                let mut rng1 = ChaCha20Rng::from_seed(seed);
-                let mut rng2 = ChaCha20Rng::from_seed(seed);
-                bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
-                Ok(())
-            },
-        )?;
-
+        let bucket_processing_duration = bucket_processing_start.elapsed();
+        // println!("Bucket processing time: {:?}", bucket_processing_duration);
+    
+        // Measure processing of pt and metadata_pt
+        // let pt_processing_start = Instant::now();
+        // self.pt.zip_mut(&mut self.metadata_pt).iter_mut().try_for_each(
+        //     |(bucket, metadata_bucket, path)| {
+        //         let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
+        //         let metadata_bucket: &mut Metadata = metadata_bucket
+        //             .as_mut()
+        //             .ok_or(OramError::MetadataBucketNotFound)?;
+        //         (bucket.len()..Z).for_each(|_| {
+        //             bucket.push(Block::new_random());
+        //         });
+        //         (metadata_bucket.len()..Z).for_each(|_| {
+        //             metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+        //         });
+    
+        //         assert_eq!(
+        //             bucket.len(),
+        //             Z,
+        //             "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+        //             self.epoch,
+        //             bucket.len(),
+        //             Z
+        //         );
+        //         assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+    
+        //         let mut rng1 = ChaCha20Rng::from_seed(seed);
+        //         let mut rng2 = ChaCha20Rng::from_seed(seed);
+        //         bucket.shuffle(&mut rng1);
+        //         metadata_bucket.shuffle(&mut rng2);
+        //         Ok(())
+        //     },
+        // )?;
+        // let pt_processing_duration = pt_processing_start.elapsed();
+        // println!("PT and metadata_pt processing time: {:?}", pt_processing_duration);
+    
+        // Measure metadata overwrite time
+        let metadata_overwrite_start = Instant::now();
         self.metadata.overwrite(&self.metadata_pt);
-
+        let metadata_overwrite_duration = metadata_overwrite_start.elapsed();
+        // println!("Metadata overwrite time: {:?}", metadata_overwrite_duration);
+    
+        // Measure server lock and write time
+        let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
-
+        // let server_write_duration = server_write_start.elapsed();
+        // println!("Server write and add PRF keys time: {:?}", server_write_duration);
+    
+        // Increment epoch
         self.epoch += 1;
+    
+        // let total_duration = start_time.elapsed();
+        // println!("Total batch_write time: {:?}", total_duration);
+    
         Ok(())
     }
 }
