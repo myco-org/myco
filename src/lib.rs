@@ -1,7 +1,6 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use error::OramError;
-// AES-GCM with 128-bit key
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
@@ -473,7 +472,7 @@ mod e2e_tests {
 
         let key = Key::random(&mut rng);
 
-        // Epoch 1: Alice writes, but no one reads
+        // Epoch 1: Alice writes
         s1.lock().unwrap().batch_init(1);
 
         alice.setup(&key).expect("Setup failed");
@@ -515,6 +514,65 @@ mod e2e_tests {
     }
 
     #[test]
+    fn test_read_old_message_two_clients() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+
+        let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let mut bob: Client = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+
+        let mut rng = ChaCha20Rng::from_entropy();
+
+        let key_alice_to_bob = Key::random(&mut rng);
+        let key_bob_to_alice = Key::random(&mut rng);
+
+        // Epoch 1: Alice and Bob write
+        s1.lock().unwrap().batch_init(2);
+
+        alice.setup(&key_alice_to_bob).expect("Alice setup failed");
+        bob.setup(&key_alice_to_bob).expect("Bob setup failed");
+        alice.setup(&key_bob_to_alice).expect("Alice setup failed");
+        bob.setup(&key_bob_to_alice).expect("Bob setup failed");
+
+        let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch1, &key_alice_to_bob).expect("Alice write failed");
+
+        let bob_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        bob.write(&bob_msg_epoch1, &key_bob_to_alice).expect("Bob write failed");
+
+        s1.lock().unwrap().batch_write();
+
+        // Epoch 2: Alice and Bob write again
+        s1.lock().unwrap().batch_init(2);
+
+        let alice_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch2, &key_alice_to_bob).expect("Alice write failed in epoch 2");
+
+        let bob_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        bob.write(&bob_msg_epoch2, &key_bob_to_alice).expect("Bob write failed in epoch 2");
+
+        s1.lock().unwrap().batch_write();
+
+        let alice_read_epoch1: Vec<u8> = alice
+            .read(&key_bob_to_alice, "Bob".to_string(), 1) // Read from epoch 1
+            .expect("Alice read failed from epoch 1");
+
+        let bob_read_epoch1: Vec<u8> = bob
+            .read(&key_alice_to_bob, "Alice".to_string(), 1) // Bob reads Alice's message from epoch 1
+            .expect("Bob read failed from epoch 1");
+
+        assert_eq!(
+            bob_msg_epoch1, alice_read_epoch1,
+            "Alice: Read message doesn't match the written message from epoch 1"
+        );
+
+        assert_eq!(
+            alice_msg_epoch1, bob_read_epoch1,
+            "Bob: Read message doesn't match Alice's written message from epoch 1"
+        );
+    }
+
+    // #[test]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;

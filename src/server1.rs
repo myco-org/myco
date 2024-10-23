@@ -37,6 +37,7 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
+    println!("=== Starting Epoch {:?} ===", self.epoch);
         let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients))
@@ -115,11 +116,8 @@ impl Server1 {
     pub fn batch_write(&mut self) -> Result<(), OramError> {
         let start_time = Instant::now();
 
-        // Measure RNG generation time
-        let rng_start = Instant::now();
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
-        // let rng_duration = rng_start.elapsed();
 
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
@@ -201,15 +199,13 @@ impl Server1 {
         server2.add_prf_keys(&self.k_s1_t);
         let server_write_duration = server_write_start.elapsed();
         println!(
-            "Server write and add PRF keys time: {:?}",
+            "Server2 overwrite time: {:?}",
             server_write_duration
         );
 
         // Increment epoch
         self.epoch += 1;
         self.epoch_pathset.clear();
-
-        let total_duration = start_time.elapsed();
 
         Ok(())
     }
