@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
@@ -18,13 +20,24 @@ impl Server2 {
         }
     }
 
-    /// l is the leaf block
-    pub fn read(&self, l: &Path) -> Vec<Bucket> {
+    /// l is the leaf block.
+    pub fn read(&mut self, l: &Path) -> Vec<Bucket> {
         self.tree.get_all_nodes_along_path(l)
     }
 
-    pub fn write(&mut self, pathset: BinaryTree<Bucket>) {
-        self.tree = pathset;
+    /// Update the tree in S2 with the pt from S1 for epoch.
+    pub fn write(&mut self, pt: BinaryTree<Bucket>, pathset: Vec<Path>) {
+        // Get the unique indices of all nodes in the pathset.
+        let pathset_indices_set: HashSet<usize> =
+            pathset.iter().flat_map(|path| path.get_indices()).collect();
+
+        // If the index is in the pathset, insert the bucket from pt into self.tree
+        for (i, bucket) in pt.value.iter().enumerate() {
+            if pathset_indices_set.contains(&i) {
+                self.tree.value[i] = bucket.clone();
+            }
+        }
+
         self.epoch += 1;
     }
 

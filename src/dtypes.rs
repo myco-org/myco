@@ -1,4 +1,7 @@
-use std::ops::{Index, IndexMut};
+use std::{
+    fmt::{self, Display},
+    ops::{Index, IndexMut},
+};
 
 use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -91,6 +94,18 @@ impl Path {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Get the indices of all nodes in the path.
+    /// TODO: In the future, we can just get the shared indices from a list of paths.
+    pub fn get_indices(&self) -> Vec<usize> {
+        let mut indices = vec![1];
+        let mut index = 1;
+        indices.extend(self.0.iter().map(|&d| {
+            index = 2 * index + u8::from(d) as usize;
+            index
+        }));
+        indices
     }
 }
 

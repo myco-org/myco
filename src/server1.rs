@@ -6,6 +6,7 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub struct Server1 {
     pub epoch: u64,
@@ -16,6 +17,7 @@ pub struct Server1 {
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
+    epoch_pathset: Vec<Path>,
 }
 
 impl Server1 {
@@ -26,36 +28,44 @@ impl Server1 {
             k_s1_t: Key::new(vec![]),
             num_clients: 0,
             s2,
-            p: BinaryTree::new_empty(),
-            pt: BinaryTree::new_empty(),
-            metadata_pt: BinaryTree::new_empty(),
+            p: BinaryTree::new_with_depth(D),
+            pt: BinaryTree::new_with_depth(D),
+            metadata_pt: BinaryTree::new_with_depth(D),
             metadata,
+            epoch_pathset: vec![],
         }
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
+    println!("=== Starting Epoch {:?} ===", self.epoch);
         let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
 
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = paths
+        self.epoch_pathset = paths;
+
+        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = self
+            .epoch_pathset
             .iter()
             .map(|path| {
+                // Every epoch, S2 reads the values from the pathset.
                 let bucket = self.s2.lock().unwrap().read(&path);
                 (bucket, path.clone())
             })
             .collect();
 
-        let pt_data: Vec<(Vec<Bucket>, Path)> = paths
+        let pt_data: Vec<(Vec<Bucket>, Path)> = self
+            .epoch_pathset
             .iter()
-            .map(|path| (vec![Bucket::default(); D], path.clone()))
+            .map(|path| (vec![Bucket::default(); D + 1], path.clone()))
             .collect();
 
-        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = paths
+        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = self
+            .epoch_pathset
             .iter()
-            .map(|path| (vec![Metadata::default(); D], path.clone()))
+            .map(|path| (vec![Metadata::default(); D + 1], path.clone()))
             .collect();
 
         self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
@@ -75,7 +85,8 @@ impl Server1 {
     ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
-        self.insert_message(&ct, &Path::from(l), &k_oram_t, t_exp);
+        let l_path = Path::from(l);
+        self.insert_message(&ct, &l_path, &k_oram_t, t_exp);
 
         Ok(())
     }
@@ -103,9 +114,13 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
+        let start_time = Instant::now();
+
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
+        // Measure processing of buckets and metadata
+        let bucket_processing_start = Instant::now();
         self.p
             .zip(&self.metadata)
             .iter()
@@ -129,9 +144,15 @@ impl Server1 {
                         })
                 })
             })?;
+        let bucket_processing_duration = bucket_processing_start.elapsed();
+        println!("Bucket processing time: {:?}", bucket_processing_duration);
 
-        self.pt.zip(&mut self.metadata_pt).iter_mut().try_for_each(
-            |(bucket, metadata_bucket, path)| {
+        // Measure processing of pt and metadata_pt
+        let pt_processing_start = Instant::now();
+        self.pt
+            .zip_mut(&mut self.metadata_pt)
+            .iter_mut()
+            .try_for_each(|(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                 let metadata_bucket: &mut Metadata = metadata_bucket
                     .as_mut()
@@ -158,16 +179,34 @@ impl Server1 {
                 bucket.shuffle(&mut rng1);
                 metadata_bucket.shuffle(&mut rng2);
                 Ok(())
-            },
-        )?;
+            })?;
+        let pt_processing_duration = pt_processing_start.elapsed();
+        println!(
+            "PT and metadata_pt processing time: {:?}",
+            pt_processing_duration
+        );
 
+        // Measure metadata overwrite time
+        let metadata_overwrite_start = Instant::now();
         self.metadata.overwrite(&self.metadata_pt);
+        let metadata_overwrite_duration = metadata_overwrite_start.elapsed();
+        println!("Metadata overwrite time: {:?}", metadata_overwrite_duration);
 
+        // Measure server lock and write time
+        let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
-        server2.write(self.pt.clone());
+        server2.write(self.pt.clone(), self.epoch_pathset.clone());
         server2.add_prf_keys(&self.k_s1_t);
+        let server_write_duration = server_write_start.elapsed();
+        println!(
+            "Server2 overwrite time: {:?}",
+            server_write_duration
+        );
 
+        // Increment epoch
         self.epoch += 1;
+        self.epoch_pathset.clear();
+
         Ok(())
     }
 }
