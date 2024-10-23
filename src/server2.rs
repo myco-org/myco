@@ -52,4 +52,25 @@ impl Server2 {
             self.prf_keys.remove(0);
         }
     }
+
+    pub fn read_paths(&self, paths: Vec<Path>) -> (Vec<Bucket>, Vec<usize>) {
+        let mut pathset: HashSet<usize> = HashSet::new();
+        pathset.insert(1);
+        paths.iter().for_each(|p| {
+            p.clone().into_iter().fold(1, |acc, d| {
+                let idx = 2 * acc + u8::from(d) as usize;
+                if idx >= self.tree.value.len() || self.tree.value[idx].is_none() {
+                    return acc;
+                }
+                pathset.insert(idx);
+                idx
+            });
+        });
+        let buckets = pathset
+            .iter()
+            .map(|i| self.tree.value[*i].clone().unwrap())
+            .collect();
+        let idx = pathset.iter().map(|i| *i).collect();
+        (buckets, idx)
+    }
 }

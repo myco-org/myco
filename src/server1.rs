@@ -44,33 +44,44 @@ impl Server1 {
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
 
+        // println!("Paths !!! {:?}", paths);
+
+        let (buckets, idx) = self.s2.lock().unwrap().read_paths(paths.clone());
+        let bucket_size = buckets.len();
+        self.p = BinaryTree::from_array(buckets, idx.clone());
+        self.pt = BinaryTree::from_array(vec![Bucket::default(); bucket_size], idx.clone());
+        self.metadata_pt = BinaryTree::from_array(
+            vec![Metadata::default(); bucket_size],
+            idx,
+        );
+
         self.epoch_pathset = paths;
 
-        let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = self
-            .epoch_pathset
-            .iter()
-            .map(|path| {
-                // Every epoch, S2 reads the values from the pathset.
-                let bucket = self.s2.lock().unwrap().read(&path);
-                (bucket, path.clone())
-            })
-            .collect();
+        // let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = self
+        //     .epoch_pathset
+        //     .iter()
+        //     .map(|path| {
+        //         // Every epoch, S2 reads the values from the pathset.
+        //         let bucket = self.s2.lock().unwrap().read(&path);
+        //         (bucket, path.clone())
+        //     })
+        //     .collect();
 
-        let pt_data: Vec<(Vec<Bucket>, Path)> = self
-            .epoch_pathset
-            .iter()
-            .map(|path| (vec![Bucket::default(); D + 1], path.clone()))
-            .collect();
+        // let pt_data: Vec<(Vec<Bucket>, Path)> = self
+        //     .epoch_pathset
+        //     .iter()
+        //     .map(|path| (vec![Bucket::default(); D + 1], path.clone()))
+        //     .collect();
 
-        let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = self
-            .epoch_pathset
-            .iter()
-            .map(|path| (vec![Metadata::default(); D + 1], path.clone()))
-            .collect();
+        // let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = self
+        //     .epoch_pathset
+        //     .iter()
+        //     .map(|path| (vec![Metadata::default(); D + 1], path.clone()))
+        //     .collect();
 
-        self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
-        self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
-        self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
+        // self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
+        // self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
+        // self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
