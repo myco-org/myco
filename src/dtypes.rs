@@ -156,6 +156,12 @@ impl From<usize> for Path {
     }
 }
 
+impl Into<usize> for Path {
+    fn into(self) -> usize {
+        self.0.into_iter().fold(1, |acc, direction| (acc << 1) | u8::from(direction) as usize)
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 

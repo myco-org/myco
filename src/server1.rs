@@ -141,10 +141,9 @@ impl Server1 {
             self.pt
                 .zip_mut(&mut self.metadata_pt)
                 .par_iter_mut()
-                .enumerate()
-                .filter(|(idx, _)| self.lca_idx_to_block_key_t_exp.contains_key(&idx))
-                .for_each(|(idx, (bucket, metadata_bucket, path))| {
-                    if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&idx) {
+                .filter(|(_, _, path)| self.lca_idx_to_block_key_t_exp.contains_key(&path.clone().into()))
+                .for_each(|(bucket, metadata_bucket, path)| {
+                    if let Some(blocks) = self.lca_idx_to_block_key_t_exp.get(&path.clone().into()) {
                         for (block, key, t_exp) in blocks.iter() {
                             if let Some(bucket) = bucket.as_mut() {
                                 bucket.push(Block::new(block.0.clone()));
