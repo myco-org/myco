@@ -572,6 +572,82 @@ mod e2e_tests {
         );
     }
 
+    #[test]
+    fn test_read_old_message_single_client_multiple_epochs() {
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+
+        let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+
+        let mut rng = ChaCha20Rng::from_entropy();
+
+        let key = Key::random(&mut rng);
+
+        // Epoch 1: Alice writes
+        s1.lock().unwrap().batch_init(1);
+
+        alice.setup(&key).expect("Setup failed");
+
+        let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch1, &key).expect("Write failed");
+
+        s1.lock().unwrap().batch_write();
+
+        // Epoch 2: Alice writes again
+        s1.lock().unwrap().batch_init(1);
+
+        let alice_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch2, &key).expect("Write failed");
+
+        s1.lock().unwrap().batch_write();
+
+        // Alice reads from epoch 1
+        let alice_read_epoch1_epoch2: Vec<u8> = alice
+            .read(&key, "Alice".to_string(), 1) // Read from epoch 1
+            .expect("Read failed in epoch 2");
+
+        assert_eq!(
+            alice_msg_epoch1, alice_read_epoch1_epoch2,
+            "Read message doesn't match the written message from epoch 1 in epoch 2"
+        );
+
+        // Epoch 3: Alice writes again
+        s1.lock().unwrap().batch_init(1);
+
+        let alice_msg_epoch3: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch3, &key).expect("Write failed");
+
+        s1.lock().unwrap().batch_write();
+
+        // Alice reads from epoch 1 again
+        let alice_read_epoch1_epoch3: Vec<u8> = alice
+            .read(&key, "Alice".to_string(), 2) // Read from epoch 1
+            .expect("Read failed in epoch 3");
+
+        assert_eq!(
+            alice_msg_epoch1, alice_read_epoch1_epoch3,
+            "Read message doesn't match the written message from epoch 1 in epoch 3"
+        );
+
+        // Epoch 4: Alice writes again and reads from epoch 1
+        s1.lock().unwrap().batch_init(1);
+
+        let alice_msg_epoch4: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
+        alice.write(&alice_msg_epoch4, &key).expect("Write failed");
+
+        s1.lock().unwrap().batch_write();
+
+        // Alice reads from epoch 1 again in epoch 4
+        let alice_read_epoch1_epoch4: Vec<u8> = alice
+            .read(&key, "Alice".to_string(), 3) // Read from epoch 1 in epoch 4
+            .expect("Read failed in epoch 4");
+
+        assert_eq!(
+            alice_msg_epoch1, alice_read_epoch1_epoch4,
+            "Read message doesn't match the written message from epoch 1 in epoch 4"
+        );
+    }
+
     // #[test]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
