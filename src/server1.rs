@@ -45,10 +45,8 @@ impl Server1 {
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
-        // println!("Pathset {:?}", paths);
         self.pathset_indices = self.get_path_indices(paths);
 
-        // println!("Pathset indices {:?}", self.pathset_indices);
         let buckets = self.s2.lock().unwrap().read_paths(self.pathset_indices.clone());
         
         let bucket_size = buckets.len();
@@ -59,10 +57,6 @@ impl Server1 {
             vec![Metadata::default(); bucket_size],
             self.pathset_indices.clone(),
         );
-
-        // println!("P before {:?}", self.p);
-        // println!("Metadata pt before {:?}", self.metadata_pt);
-        // println!("Metadata before {:?}", self.metadata);
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
@@ -93,7 +87,6 @@ impl Server1 {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
 
-        // println!("Message intended path: {:?}", l);
         let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
         let mut metadata_bucket = self
             .metadata_pt
@@ -187,9 +180,6 @@ impl Server1 {
         // Measure server lock and write time
         let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
-        // println!("Pt after {:?}", self.pt);
-        // println!("Metadata pt after {:?}", self.metadata_pt);
-        // println!("Metadata after {:?}", self.metadata);
 
         server2.write(self.pt.packed_buckets.clone());
         server2.add_prf_keys(&self.k_s1_t);

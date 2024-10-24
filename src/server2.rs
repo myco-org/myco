@@ -24,7 +24,6 @@ impl Server2 {
 
     /// l is the leaf block.
     pub fn read(&mut self, l: &Path) -> Vec<Bucket> {
-        // println!("Reading S2 tree: {:?}", self.tree);
         self.tree.get_all_nodes_along_path(l)
     }
 
