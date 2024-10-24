@@ -98,8 +98,6 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
-        let start_time = Instant::now();
-
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -179,6 +177,7 @@ impl Server1 {
         // Measure server lock and write time
         let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
+        println!("Pt {:?}", self.pt);
         server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
         let server_write_duration = server_write_start.elapsed();
