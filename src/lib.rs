@@ -653,41 +653,41 @@ mod e2e_tests {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
         use std::time::Duration;
-
+    
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA * DELTA;
-
+    
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-
+    
         let mut rng = ChaCha20Rng::from_entropy();
         let mut clients = Vec::new();
         let mut keys = Vec::new();
-
+    
         let mut total_duration: Duration = Duration::new(0, 0);
         let mut successful_epochs = 0;
-
+    
         for i in 0..num_clients {
             let client_name = format!("Client_{}", i);
             let mut client = Client::new(client_name, s1.clone(), s2.clone());
-
+    
             let key = Key::random(&mut rng);
             client.setup(&key).expect("Setup failed");
-
+    
             clients.push(client);
             keys.push(key);
         }
-
+    
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
-
+    
             // Measure batch_init latency
             let epoch_start_time = std::time::Instant::now();
             let batch_init_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_init(num_clients);
             let batch_init_duration = batch_init_start_time.elapsed();
-
+    
             // Measure write latency
             let write_start_time = std::time::Instant::now();
             for (client, key) in clients.iter_mut().zip(keys.iter()) {
@@ -697,33 +697,47 @@ mod e2e_tests {
                 }
             }
             let write_duration = write_start_time.elapsed();
-
+    
             // Measure batch_write latency
             let batch_write_start_time = std::time::Instant::now();
             s1.lock().unwrap().batch_write();
             let batch_write_duration = batch_write_start_time.elapsed();
-
+    
+            // Measure read latency for each client
+            let mut total_read_duration = Duration::new(0, 0);
+            for (client, key) in clients.iter().zip(keys.iter()) {
+                let read_start_time = std::time::Instant::now();
+                let read_result: Vec<u8> = client
+                    .read(&key, client.id.clone(), 0)
+                    .expect(&format!("Read failed in epoch {}", epoch));
+                let client_read_duration = read_start_time.elapsed();
+                total_read_duration += client_read_duration;
+            }
+    
+            // Calculate average read duration across all clients in this epoch
+            let average_read_duration = total_read_duration / num_clients as u32;
+    
             // Measure total duration
             let epoch_duration = epoch_start_time.elapsed();
             total_duration += epoch_duration;
             successful_epochs += 1;
-
+    
             // Print the duration of the current epoch and its phases
             println!(
-                "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?})",
-                epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration
+                "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?}, avg client read: {:?})",
+                epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration, average_read_duration
             );
-
+    
             // Calculate the average duration so far
             let average_duration = total_duration / successful_epochs as u32;
-
+    
             // Print cumulative duration and average duration so far
             println!(
                 "Total duration so far: {:?}, average duration so far: {:?}",
                 total_duration, average_duration
             );
         }
-
+    
         // After all epochs, print the total duration and final average duration
         let final_average_duration = total_duration / successful_epochs as u32;
         println!(
@@ -731,4 +745,5 @@ mod e2e_tests {
             total_duration, final_average_duration
         );
     }
+        
 }
