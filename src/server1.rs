@@ -7,6 +7,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::collections::HashSet;
 
 pub struct Server1 {
     pub epoch: u64,
@@ -17,7 +18,7 @@ pub struct Server1 {
     pub pt: BinaryTree<Bucket>,
     pub metadata_pt: BinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
-    epoch_pathset: Vec<Path>,
+    pathset_indices: Vec<usize>,
 }
 
 impl Server1 {
@@ -32,7 +33,7 @@ impl Server1 {
             pt: BinaryTree::new_with_depth(D),
             metadata_pt: BinaryTree::new_with_depth(D),
             metadata,
-            epoch_pathset: vec![],
+            pathset_indices: vec![],
         }
     }
 
@@ -44,44 +45,16 @@ impl Server1 {
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
 
-        // println!("Paths !!! {:?}", paths);
-
-        let (buckets, idx) = self.s2.lock().unwrap().read_paths(paths.clone());
+        self.pathset_indices = self.get_path_indices(paths);
+        let buckets = self.s2.lock().unwrap().read_paths(self.pathset_indices.clone());
+        
         let bucket_size = buckets.len();
-        self.p = BinaryTree::from_array(buckets, idx.clone());
-        self.pt = BinaryTree::from_array(vec![Bucket::default(); bucket_size], idx.clone());
+        self.p = BinaryTree::from_array(buckets, self.pathset_indices.clone());
+        self.pt = BinaryTree::from_array(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
         self.metadata_pt = BinaryTree::from_array(
             vec![Metadata::default(); bucket_size],
-            idx,
+            self.pathset_indices.clone(),
         );
-
-        self.epoch_pathset = paths;
-
-        // let buckets_and_paths: Vec<(Vec<Bucket>, Path)> = self
-        //     .epoch_pathset
-        //     .iter()
-        //     .map(|path| {
-        //         // Every epoch, S2 reads the values from the pathset.
-        //         let bucket = self.s2.lock().unwrap().read(&path);
-        //         (bucket, path.clone())
-        //     })
-        //     .collect();
-
-        // let pt_data: Vec<(Vec<Bucket>, Path)> = self
-        //     .epoch_pathset
-        //     .iter()
-        //     .map(|path| (vec![Bucket::default(); D + 1], path.clone()))
-        //     .collect();
-
-        // let metadata_pt_data: Vec<(Vec<Metadata>, Path)> = self
-        //     .epoch_pathset
-        //     .iter()
-        //     .map(|path| (vec![Metadata::default(); D + 1], path.clone()))
-        //     .collect();
-
-        // self.p = BinaryTree::<Bucket>::from_vec_with_paths(buckets_and_paths.clone());
-        // self.pt = BinaryTree::<Bucket>::from_vec_with_paths(pt_data);
-        // self.metadata_pt = BinaryTree::<Metadata>::from_vec_with_paths(metadata_pt_data);
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
@@ -206,7 +179,7 @@ impl Server1 {
         // Measure server lock and write time
         let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
-        server2.write(self.pt.clone(), self.epoch_pathset.clone());
+        server2.write(self.pt.clone());
         server2.add_prf_keys(&self.k_s1_t);
         let server_write_duration = server_write_start.elapsed();
         println!(
@@ -216,10 +189,22 @@ impl Server1 {
 
         // Increment epoch
         self.epoch += 1;
-        self.epoch_pathset.clear();
 
         Ok(())
     }
+
+    pub fn get_path_indices(&self, paths: Vec<Path>) -> Vec<usize> {
+        let mut pathset: HashSet<usize> = HashSet::new();
+        pathset.insert(1);
+        paths.iter().for_each(|p| {
+            p.clone().into_iter().fold(1, |acc, d| {
+                let idx = 2 * acc + u8::from(d) as usize;
+                pathset.insert(idx);
+                idx
+            });
+        });
+        pathset.into_iter().collect()
+    }    
 }
 
 #[cfg(test)]

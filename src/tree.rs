@@ -74,9 +74,9 @@ impl<T: TreeValue> BinaryTree<T> {
         ((self.value.len() as f64).log2().ceil() as usize) - 1
     }
 
-    pub fn from_array(values: Vec<T>, indexes: Vec<usize>) -> Self {
+    pub fn from_array(values: Vec<T>, indices: Vec<usize>) -> Self {
         let mut tree = BinaryTree::new_empty();
-        for (value, index) in values.iter().zip(indexes) {
+        for (value, index) in values.iter().zip(indices) {
             if index >= tree.value.len() {
                 tree.value.resize((index + 1).next_power_of_two(), None);
             }

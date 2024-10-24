@@ -6,6 +6,7 @@ pub struct Server2 {
     pub(crate) tree: BinaryTree<Bucket>,
     pub(crate) prf_keys: Vec<Key>,
     pub(crate) epoch: u64,
+    pathset_indices: Vec<usize>
 }
 
 impl Server2 {
@@ -17,6 +18,7 @@ impl Server2 {
             tree,
             prf_keys: vec![],
             epoch: 0,
+            pathset_indices: vec![]
         }
     }
 
@@ -25,22 +27,17 @@ impl Server2 {
         self.tree.get_all_nodes_along_path(l)
     }
 
-    /// Update the tree in S2 with the pt from S1 for epoch.
-    pub fn write(&mut self, pt: BinaryTree<Bucket>, pathset: Vec<Path>) {
-        // Get the unique indices of all nodes in the pathset.
-        let pathset_indices_set: HashSet<usize> =
-            pathset.iter().flat_map(|path| path.get_indices()).collect();
-
-        // If the index is in the pathset, insert the bucket from pt into self.tree
-        for (i, bucket) in pt.value.iter().enumerate() {
-            if pathset_indices_set.contains(&i) {
-                self.tree.value[i] = bucket.clone();
+    pub fn write(&mut self, pt: BinaryTree<Bucket>) {
+        // Iterate over the indices in self.pathset_indices and use them to overwrite corresponding values in self.tree
+        for &index in self.pathset_indices.iter() {
+            if let Some(bucket) = pt.value.get(index) {
+                self.tree.value[index] = bucket.clone();
             }
         }
-
+    
         self.epoch += 1;
-    }
-
+    }    
+    
     pub fn get_prf_keys(&self) -> Vec<Key> {
         self.prf_keys.clone()
     }
@@ -53,24 +50,13 @@ impl Server2 {
         }
     }
 
-    pub fn read_paths(&self, paths: Vec<Path>) -> (Vec<Bucket>, Vec<usize>) {
-        let mut pathset: HashSet<usize> = HashSet::new();
-        pathset.insert(1);
-        paths.iter().for_each(|p| {
-            p.clone().into_iter().fold(1, |acc, d| {
-                let idx = 2 * acc + u8::from(d) as usize;
-                if idx >= self.tree.value.len() || self.tree.value[idx].is_none() {
-                    return acc;
-                }
-                pathset.insert(idx);
-                idx
-            });
-        });
+    pub fn read_paths(&mut self, pathset: Vec<usize>) -> (Vec<Bucket>) {
+        self.pathset_indices = pathset.clone();
+
         let buckets = pathset
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
             .collect();
-        let idx = pathset.iter().map(|i| *i).collect();
-        (buckets, idx)
+        buckets
     }
 }
