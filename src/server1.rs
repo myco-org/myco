@@ -1,3 +1,4 @@
+use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
     EncryptionType, Key, Metadata, OramError, Path,
@@ -14,9 +15,9 @@ pub struct Server1 {
     pub k_s1_t: Key,
     pub num_clients: usize,
     pub s2: Arc<Mutex<Server2>>,
-    pub p: BinaryTree<Bucket>,
-    pub pt: BinaryTree<Bucket>,
-    pub metadata_pt: BinaryTree<Metadata>,
+    pub p: SparseBinaryTree<Bucket>,
+    pub pt: SparseBinaryTree<Bucket>,
+    pub metadata_pt: SparseBinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
     pathset_indices: Vec<usize>,
 }
@@ -29,9 +30,9 @@ impl Server1 {
             k_s1_t: Key::new(vec![]),
             num_clients: 0,
             s2,
-            p: BinaryTree::new_with_depth(D),
-            pt: BinaryTree::new_with_depth(D),
-            metadata_pt: BinaryTree::new_with_depth(D),
+            p: SparseBinaryTree::new(),
+            pt: SparseBinaryTree::new(),
+            metadata_pt: SparseBinaryTree::new(),
             metadata,
             pathset_indices: vec![],
         }
@@ -40,18 +41,19 @@ impl Server1 {
     pub fn batch_init(&mut self, num_clients: usize) {
     println!("=== Starting Epoch {:?} ===", self.epoch);
         let mut rng = ChaCha20Rng::from_entropy();
-
+        
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
-
         self.pathset_indices = self.get_path_indices(paths);
+
         let buckets = self.s2.lock().unwrap().read_paths(self.pathset_indices.clone());
         
         let bucket_size = buckets.len();
-        self.p = BinaryTree::from_array(buckets, self.pathset_indices.clone());
-        self.pt = BinaryTree::from_array(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
-        self.metadata_pt = BinaryTree::from_array(
+        self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
+        self.pt = SparseBinaryTree::new_with_data(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
+        
+        self.metadata_pt = SparseBinaryTree::new_with_data(
             vec![Metadata::default(); bucket_size],
             self.pathset_indices.clone(),
         );
@@ -84,6 +86,7 @@ impl Server1 {
     ) -> Result<(), OramError> {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
+
         let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
         let mut metadata_bucket = self
             .metadata_pt
@@ -104,7 +107,7 @@ impl Server1 {
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
         self.p
-            .zip(&self.metadata)
+            .zip_with_binary_tree(&self.metadata)
             .iter()
             .try_for_each(|(bucket, metadata_bucket, _)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
@@ -170,15 +173,15 @@ impl Server1 {
 
         // Measure metadata overwrite time
         let metadata_overwrite_start = Instant::now();
-        self.metadata.overwrite(&self.metadata_pt);
+        self.metadata.overwrite_from_sparse(&self.metadata_pt);
         let metadata_overwrite_duration = metadata_overwrite_start.elapsed();
         println!("Metadata overwrite time: {:?}", metadata_overwrite_duration);
 
         // Measure server lock and write time
         let server_write_start = Instant::now();
         let mut server2 = self.s2.lock().unwrap();
-        println!("Pt {:?}", self.pt);
-        server2.write(self.pt.clone());
+
+        server2.write(self.pt.packed_buckets.clone());
         server2.add_prf_keys(&self.k_s1_t);
         let server_write_duration = server_write_start.elapsed();
         println!(
