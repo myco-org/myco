@@ -24,17 +24,20 @@ impl Server2 {
 
     /// l is the leaf block.
     pub fn read(&mut self, l: &Path) -> Vec<Bucket> {
+        // println!("Reading S2 tree: {:?}", self.tree);
         self.tree.get_all_nodes_along_path(l)
     }
 
-    pub fn write(&mut self, pt: BinaryTree<Bucket>) {
-        // Iterate over the indices in self.pathset_indices and use them to overwrite corresponding values in self.tree
-        for &index in self.pathset_indices.iter() {
-            if let Some(bucket) = pt.value.get(index) {
-                self.tree.value[index] = bucket.clone();
-            }
+    pub fn write(&mut self, packed_buckets: Vec<Bucket>) {
+        // Ensure the number of elements in packed_buckets matches the number of pathset_indices
+        assert_eq!(self.pathset_indices.len(), packed_buckets.len(), "Mismatched number of indices and buckets");
+    
+        // Iterate over self.pathset_indices and packed_buckets, and overwrite corresponding values in self.tree
+        for (index, bucket) in self.pathset_indices.iter().zip(packed_buckets.iter()) {
+            self.tree.value[*index] = Some(bucket.clone());
         }
     
+        // Increment the epoch
         self.epoch += 1;
     }    
     

@@ -42,10 +42,6 @@ impl<T: TreeValue> BinaryTree<T> {
         self.value[1..].fill(Some(value));
     }
 
-    pub fn fill_with_random(&mut self) {
-        self.value = vec![Some(T::new_random()); 1 << self.height()];
-    }
-
     pub fn insert_path(&mut self, path: Path, values: Vec<T>) {
         let mut idx: usize = 1;
         self.value[1] = Some(values[0].clone());
@@ -162,6 +158,21 @@ impl<T: TreeValue> BinaryTree<T> {
             });
     }
 
+    pub fn overwrite_from_sparse(&mut self, sparse_tree: &SparseBinaryTree<T>) {
+        // Ensure that the binary tree has enough capacity to hold the elements from the sparse tree
+        if let Some(&max_index) = sparse_tree.packed_indices.iter().max() {
+            if max_index >= self.value.len() {
+                self.value.resize(max_index + 1, None);
+            }
+        }
+
+        // Iterate over the sparse tree and copy its values into the binary tree at the corresponding indices
+        for (bucket, &index) in sparse_tree.packed_buckets.iter().zip(&sparse_tree.packed_indices) {
+            self.value[index] = Some(bucket.clone());
+        }
+    }
+    
+
     pub fn zip<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
         let len = max(self.value.len(), rhs.value.len());
         let mut lhs = self.value.clone();
@@ -208,31 +219,6 @@ impl<T: TreeValue> BinaryTree<T> {
             .collect()
     }
 
-    pub fn zip_mut_other<'a, 'b, S>(
-        &'a mut self,
-        rhs: &'b mut BinaryTree<S>,
-    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
-        let len = std::cmp::max(self.value.len(), rhs.value.len());
-
-        // Ensure both trees have the same size by resizing them
-        self.value.resize_with(len, || None);
-        rhs.value.resize_with(len, || None);
-
-        // Iterate over both trees, returning mutable references
-        self.value
-            .iter_mut()
-            .zip(rhs.value.iter_mut())
-            .enumerate()
-            // .filter_map(|(i, (a, b))| {
-            //     if a.is_some() {
-            //         Some((a.as_mut(), b.as_mut(), Path::from(i)))
-            //     } else {
-            //         None
-            //     }
-            // })
-            .map(|(i, (a, b))| (a.as_mut(), b.as_mut(), Path::from(i)))
-            .collect()
-    }
 }
 
 impl fmt::Display for BinaryTree<Bucket> {
@@ -248,6 +234,197 @@ impl fmt::Display for BinaryTree<Bucket> {
         }
         write!(f, "]")
     }
+}
+
+// Sparse binary tree
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SparseBinaryTree<T> {
+    pub packed_buckets: Vec<T>,  // List of non-None buckets
+    packed_indices: Vec<usize>,     // Indices corresponding to these buckets
+}
+
+impl<T> SparseBinaryTree<T>
+where
+    T: Clone + Debug + PartialEq + Default,
+{
+    // Creates a new empty sparse binary tree
+    pub fn new() -> Self {
+        SparseBinaryTree {
+            packed_buckets: Vec::new(),
+            packed_indices: Vec::new(),
+        }
+    }
+
+    // Creates a new sparse binary tree with provided packed_buckets and packed_indices
+    pub fn new_with_data(packed_buckets: Vec<T>, packed_indices: Vec<usize>) -> Self {
+        SparseBinaryTree {
+            packed_buckets,
+            packed_indices,
+        }
+    }
+
+    // Helper function to add a bucket and its index
+    fn add_bucket(&mut self, index: usize, value: T) {
+        // Check if the index already exists
+        if let Some(pos) = self.packed_indices.iter().position(|&i| i == index) {
+            // If it exists, replace the corresponding value in packed_buckets
+            self.packed_buckets[pos] = value;
+        } else {
+            // Otherwise, add the new value and index
+            self.packed_buckets.push(value);
+            self.packed_indices.push(index);
+        }
+    }
+
+    // Retrieve the value at the given path in a sparse binary tree
+    pub fn get(&self, path: &Path) -> Option<&T> {
+        let mut idx = 1; // Start at the root
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+        }
+        self.get_by_index(idx)
+    }
+
+    // Retrieves value by index
+    pub fn get_by_index(&self, index: usize) -> Option<&T> {
+        self.packed_indices
+            .iter()
+            .position(|&i| i == index)
+            .map(|pos| &self.packed_buckets[pos])
+    }
+
+    // Retreives a reference to the bucket by index
+    pub fn get_by_index_mut(&mut self, index: usize) -> Option<&mut T> {
+        self.packed_indices
+            .iter()
+            .position(|&i| i == index)
+            .map(move |pos| &mut self.packed_buckets[pos])  // Returns mutable reference
+    }
+
+    // Write a value into the sparse tree at the specified path
+    pub fn write(&mut self, value: T, path: Path) {
+        let mut idx = 1; // Start at the root
+
+        for direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+        }
+
+        self.add_bucket(idx, value);
+    }
+
+    // Find the lowest common ancestor (LCA) of a given path
+    pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
+        let mut current_path = Path::new(Vec::new());
+        let mut idx = 1; // Start at the root
+    
+        for &direction in path {
+            let next_idx = 2 * idx + u8::from(direction) as usize;
+            if self.get_by_index(next_idx).is_none() {
+                return self
+                    .get_by_index_mut(idx) // Get mutable reference here
+                    .map(|value| (value, current_path.clone()));
+            }
+            idx = next_idx;
+            current_path.push(direction);
+        }
+    
+        self.get_by_index_mut(idx) // Get mutable reference at the end
+            .map(|value| (value, current_path.clone()))
+    }    
+
+    // // Overwrite the sparse binary tree with another one
+    // pub fn overwrite(&mut self, other: &SparseBinaryTree<T>) {
+    //     for (index, bucket) in other.indices.iter().zip(&other.packed_buckets) {
+    //         self.add_bucket(*index, bucket.clone());
+    //     }
+    // }
+
+    // Zips two sparse binary trees together
+    pub fn zip<S: Clone>(
+        &self,
+        rhs: &SparseBinaryTree<S>,
+    ) -> Vec<(Option<T>, Option<S>, Path)> {
+        let mut results = Vec::new();
+
+        let max_len = self.packed_indices.len().max(rhs.packed_indices.len());
+
+        for i in 0..max_len {
+            let lhs_bucket = self.packed_buckets.get(i).cloned();
+            let rhs_bucket = rhs.packed_buckets.get(i).cloned();
+
+            if let Some(lhs_index) = self.packed_indices.get(i) {
+                let path = Path::from(*lhs_index);
+                results.push((lhs_bucket, rhs_bucket, path));
+            }
+        }
+
+        results
+    }
+
+    pub fn zip_mut<'a, 'b, S>(
+        &'a mut self,
+        rhs: &'b mut SparseBinaryTree<S>,
+    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
+        // Ensure both trees have the same number of elements
+        if self.packed_indices.len() != rhs.packed_indices.len() {
+            panic!("Trees must have the same number of elements to zip.");
+        }
+    
+        let mut result = Vec::new();
+    
+        for i in 0..self.packed_indices.len() {
+            let lhs_idx = self.packed_indices[i];
+            let rhs_idx = rhs.packed_indices[i];
+    
+            if lhs_idx == rhs_idx {
+                // SAFETY: We know `i` is in bounds due to the length check above.
+                let lhs_value = &mut self.packed_buckets[i] as *mut T;
+                let rhs_value = &mut rhs.packed_buckets[i] as *mut S;
+    
+                unsafe {
+                    result.push((
+                        Some(&mut *lhs_value),
+                        Some(&mut *rhs_value),
+                        Path::from(lhs_idx),
+                    ));
+                }
+            } else {
+                // The indices don't match, this case shouldn't happen given the assumption
+                panic!("Indices don't match in the same-length trees.");
+            }
+        }
+    
+        result
+    }    
+
+    pub fn zip_with_binary_tree<S: Clone>(
+        &self,
+        rhs: &BinaryTree<S>,
+    ) -> Vec<(Option<T>, Option<S>, Path)> {
+        let mut results = Vec::new();
+    
+        // Iterate only over the indices in the sparse binary tree
+        for (i, &index) in self.packed_indices.iter().enumerate() {
+            let lhs_bucket = self.packed_buckets.get(i).cloned();  // Get the value from the sparse tree
+    
+            // Get the corresponding value from the normal binary tree
+            let rhs_bucket = if index < rhs.value.len() {
+                rhs.value[index].clone()
+            } else {
+                None
+            };
+    
+            // Create a Path from the current index
+            let path = Path::from(index);
+    
+            // Add the zipped result to the results vector
+            results.push((lhs_bucket, rhs_bucket, path));
+        }
+    
+        results
+    }
+
 }
 
 #[cfg(test)]
