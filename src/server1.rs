@@ -206,7 +206,7 @@ impl Server1 {
             });
         });
         pathset.into_iter().collect()
-    }    
+    }
 }
 
 #[cfg(test)]

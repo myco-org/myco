@@ -745,5 +745,72 @@ mod e2e_tests {
             total_duration, final_average_duration
         );
     }
+
+    #[test]
+    fn test_message_persistence() {
+        let server2 = Arc::new(Mutex::new(Server2::new()));
+        let mut server1 = Server1::new(server2.clone());
+
+        let num_epochs = 20;
+        let num_clients = 1;
         
+        // Create a vector of unique messages
+        let messages: Vec<Vec<u8>> = (0..num_epochs)
+            .map(|i| vec![i as u8, (i + 1) as u8, (i + 2) as u8, (i + 3) as u8])
+            .collect();
+
+        for (_epoch, message) in messages.iter().enumerate() {
+            server1.batch_init(num_clients);
+
+            // Simulate a client writing a message
+            let ct = encrypt(&server1.k_s1_t.0, message, EncryptionType::DoubleEncrypt).unwrap();
+            let f = vec![0; 16]; // Example file identifier
+            let cs = vec![0; 16]; // Example client state
+            server1.write(ct, f, server1.k_s1_t.clone(), cs).unwrap();
+
+            server1.batch_write().unwrap();
+        }
+
+        // Verify the messages
+        let mut decrypted_messages = Vec::new();
+
+        let _ = server2.lock().unwrap().tree
+            .zip(&server1.metadata)
+            .into_iter()
+            .try_for_each(|(bucket, metadata_bucket, _path)| {
+                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                (0..bucket.len()).try_for_each(|b| {
+                    metadata_bucket
+                        .as_ref()
+                        .ok_or(OramError::MetadataBucketNotFound)
+                        .and_then(|metadata_bucket| {
+                            let (_l, k_oram_t, t_exp) = metadata_bucket
+                                .get(b)
+                                .ok_or(OramError::MetadataIndexError(b))?;
+                            if num_clients < (*t_exp as usize) {
+                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                    if let Ok(decrypted) = decrypt(&k_oram_t.0, &ct) {
+                                        decrypted_messages.push(trim_zeros(&decrypted));
+                                    }
+                                }
+                            }
+                            Ok(())
+                        })
+                })
+            });
+
+        // Verify that all original messages are present in the decrypted messages
+        let mut found_messages = 0;
+        for original_msg in &messages {
+            if decrypted_messages.contains(original_msg) {
+                found_messages += 1;
+            }
+        }
+
+        assert_eq!(found_messages, num_epochs * num_clients, 
+            "Not all original messages were found in the decrypted messages");
+        assert_eq!(decrypted_messages.len(), num_epochs * num_clients, 
+            "Number of decrypted messages doesn't match the expected count");
+    }
 }
