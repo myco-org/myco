@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{tree::BinaryTree, Bucket, Key, Path, D, DELTA};
+use crate::{error::OramError, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
     pub(crate) tree: BinaryTree<Bucket>,
@@ -23,8 +23,9 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    pub fn read(&mut self, l: &Path) -> Vec<Bucket> {
-        self.tree.get_all_nodes_along_path(l)
+    pub fn read(&mut self, l: &Path) -> Result<Vec<u8>, OramError> {
+        bincode::serialize(&self.tree.get_all_nodes_along_path(l))
+            .map_err(|_| OramError::SerializationFailed)
     }
 
     /// Get a reference to the tree
@@ -45,11 +46,12 @@ impl Server2 {
         self.epoch += 1;
     }    
     
-    pub fn get_prf_keys(&self) -> Vec<Key> {
-        self.prf_keys.clone()
+    pub fn get_prf_keys(&self) -> Result<Vec<u8>, OramError> {
+        bincode::serialize(&self.prf_keys)
+            .map_err(|_| OramError::SerializationFailed)
     }
 
-    pub fn add_prf_keys(&mut self, key: &Key) {
+    pub fn add_prf_key(&mut self, key: &Key) {
         self.prf_keys.push(key.clone());
 
         if self.epoch >= DELTA {
@@ -57,13 +59,14 @@ impl Server2 {
         }
     }
 
-    pub fn read_paths(&mut self, pathset: Vec<usize>) -> (Vec<Bucket>) {
+    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<u8>, OramError> {
         self.pathset_indices = pathset.clone();
 
-        let buckets = pathset
+        let buckets: Vec<Bucket> = pathset
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
             .collect();
-        buckets
+
+        bincode::serialize(&buckets).map_err(|_| OramError::SerializationFailed)
     }
 }

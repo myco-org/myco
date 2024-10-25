@@ -1,6 +1,8 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
+use bincode::{deserialize, serialize};
 use error::OramError;
+use network::{Command, Local};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
@@ -9,7 +11,6 @@ use std::{
     num::NonZeroU32,
     sync::{Arc, Mutex},
 };
-use thiserror::Error;
 
 // Add module declarations
 mod constants;
@@ -18,6 +19,7 @@ mod error;
 mod server1;
 mod server2;
 mod tree;
+mod network;
 
 // Import constants and server modules
 use constants::*;
@@ -126,6 +128,35 @@ struct Client {
     s2: Arc<Mutex<Server2>>,
 }
 
+impl Local for Client {
+    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
+        match bincode::deserialize::<Command>(command).unwrap() {
+            Command::Server1Write(ct, f, k_oram_t, cs) => {
+                self.s1.lock().unwrap().write(ct, f, k_oram_t, cs)?;
+                Ok(vec![])
+            }
+            Command::Server2Write(buckets) => {
+                self.s2.lock().unwrap().write(buckets);
+                Ok(vec![])
+            }
+            Command::Server2Read(path) => {
+                self.s2.lock().unwrap().read(&path)
+            }
+            Command::Server2AddPrfKey(key) => {
+                self.s2.lock().unwrap().add_prf_key(&key);
+                Ok(vec![])
+            }
+            Command::Server2GetPrfKeys => {
+                self.s2.lock().unwrap().get_prf_keys()
+            }
+            Command::Server2ReadPaths(pathset) => {
+                self.s2.lock().unwrap().read_paths(pathset)
+            }
+        }
+    }
+}
+
+
 impl Client {
     fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
@@ -163,7 +194,8 @@ impl Client {
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.s1.lock().unwrap().write(ct, f, Key::new(k_oram_t), cs)
+        self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap()).unwrap();
+        Ok(())
     }
 
     fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
@@ -177,7 +209,8 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
-        let keys: Vec<Key> = self.s2.lock().unwrap().get_prf_keys();
+        let keys: Vec<Key> = deserialize(&self.send(&serialize(&Command::Server2GetPrfKeys).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
+
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
 
         // 2: ℓ = PRFkprf (t)
@@ -186,7 +219,7 @@ impl Client {
         let l_path = Path::from(l);
 
         // 3: p ← S2.Read(ℓ)
-        let path = self.s2.lock().unwrap().read(&l_path);
+        let path: Vec<Bucket> = deserialize(&self.send(&serialize(&Command::Server2Read(l_path)).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
 
         // 4: for block ∈ p do
         for bucket in path {
@@ -207,7 +240,8 @@ impl Client {
         let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs = self.id.clone().into_bytes();
-        self.s1.lock().unwrap().write(ct, l, k_oram_t, cs)
+        self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap()).unwrap();
+        Ok(())
     }
 
     fn fake_read(&self) -> Vec<Bucket> {
@@ -215,7 +249,8 @@ impl Client {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        self.s2.lock().unwrap().read(&Path::from(l))
+        let bytes = self.send(&serialize(&Command::Server2Read(Path::from(l))).unwrap()).unwrap();
+        deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap()
     }
 }
 
