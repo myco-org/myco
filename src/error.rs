@@ -22,4 +22,8 @@ pub enum OramError {
     MetadataIndexError(usize),
     #[error("LCA not found")]
     LcaNotFound,
+    #[error("Serialization failed")]
+    SerializationFailed,
+    #[error("Invalid command")]
+    InvalidCommand,
 }

@@ -5,6 +5,7 @@ use std::{
 
 use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
 
@@ -47,7 +48,7 @@ impl TreeValue for Metadata {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Direction {
     Left,
     Right,
@@ -72,7 +73,7 @@ impl From<u8> for Direction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Path(Vec<Direction>);
 
 impl Path {
@@ -159,7 +160,7 @@ impl From<usize> for Path {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Block(pub(crate) Vec<u8>);
 
 impl Block {
@@ -175,7 +176,7 @@ impl Block {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Default, Serialize, Deserialize)]
 pub(crate) struct Bucket(Vec<Block>);
 
 impl TreeValue for Bucket {
@@ -228,7 +229,7 @@ impl Bucket {
     }
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Key(pub(crate) Vec<u8>);
 
 impl Key {
