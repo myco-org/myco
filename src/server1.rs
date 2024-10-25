@@ -134,43 +134,43 @@ impl Server1 {
         println!("Bucket processing time: {:?}", bucket_processing_duration);
 
         // Measure processing of pt and metadata_pt
-        // let pt_processing_start = Instant::now();
-        // self.pt
-        //     .zip_mut(&mut self.metadata_pt)
-        //     .iter_mut()
-        //     .try_for_each(|(bucket, metadata_bucket, path)| {
-        //         let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-        //         let metadata_bucket: &mut Metadata = metadata_bucket
-        //             .as_mut()
-        //             .ok_or(OramError::MetadataBucketNotFound)?;
-        //         (bucket.len()..Z).for_each(|_| {
-        //             bucket.push(Block::new_random());
-        //         });
-        //         (metadata_bucket.len()..Z).for_each(|_| {
-        //             metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-        //         });
+        let pt_processing_start = Instant::now();
+        self.pt
+            .zip_mut(&mut self.metadata_pt)
+            .iter_mut()
+            .try_for_each(|(bucket, metadata_bucket, path)| {
+                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
+                let metadata_bucket: &mut Metadata = metadata_bucket
+                    .as_mut()
+                    .ok_or(OramError::MetadataBucketNotFound)?;
+                (bucket.len()..Z).for_each(|_| {
+                    bucket.push(Block::new_random());
+                });
+                (metadata_bucket.len()..Z).for_each(|_| {
+                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+                });
 
-        //         assert_eq!(
-        //             bucket.len(),
-        //             Z,
-        //             "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-        //             self.epoch,
-        //             bucket.len(),
-        //             Z
-        //         );
-        //         assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+                assert_eq!(
+                    bucket.len(),
+                    Z,
+                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                    self.epoch,
+                    bucket.len(),
+                    Z
+                );
+                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
 
-        //         let mut rng1 = ChaCha20Rng::from_seed(seed);
-        //         let mut rng2 = ChaCha20Rng::from_seed(seed);
-        //         bucket.shuffle(&mut rng1);
-        //         metadata_bucket.shuffle(&mut rng2);
-        //         Ok(())
-        //     })?;
-        // let pt_processing_duration = pt_processing_start.elapsed();
-        // println!(
-        //     "PT and metadata_pt processing time: {:?}",
-        //     pt_processing_duration
-        // );
+                let mut rng1 = ChaCha20Rng::from_seed(seed);
+                let mut rng2 = ChaCha20Rng::from_seed(seed);
+                bucket.shuffle(&mut rng1);
+                metadata_bucket.shuffle(&mut rng2);
+                Ok(())
+            })?;
+        let pt_processing_duration = pt_processing_start.elapsed();
+        println!(
+            "PT and metadata_pt processing time: {:?}",
+            pt_processing_duration
+        );
 
         // Measure metadata overwrite time
         let metadata_overwrite_start = Instant::now();

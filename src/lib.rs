@@ -825,7 +825,7 @@ mod e2e_tests {
         let server2 = Arc::new(Mutex::new(Server2::new()));
         let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
 
-        let num_epochs = 20;
+        let num_epochs = 500;
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
         let message = vec![1, 2, 3, 4]; // Simple test message
@@ -855,11 +855,9 @@ mod e2e_tests {
 
         // Function to verify message at LCA
         let verify_message_at_lca = |lca_bucket: &Bucket, lca_path: &Path| {
-            // println!("Metadata: {:?}", server1.lock().unwrap().metadata);
             let metadata_bucket = server1.lock().unwrap().metadata.get(lca_path)
                 .expect("Metadata not found at LCA");
             let mut found = false;
-            // println!("lca_bucket length: {:?}", lca_bucket.len());
             for b in 0..lca_bucket.len() {
                 let (l, k_oram_t, t_exp) = metadata_bucket
                     .get(b)
@@ -868,11 +866,9 @@ mod e2e_tests {
                 let c_msg = lca_bucket.get(b)
                     .ok_or(OramError::BucketIndexError(b))
                     .expect("Failed to get bucket item");
-                println!("About to decrypt");
                 if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
                     if let Some((k_msg, _, _)) = client.keys.get(&key) {
                         if let Ok(decrypted) = decrypt(k_msg, &ct) {
-                            println!("Decrypted message INNER");
                             let trimmed = trim_zeros(&decrypted);
                             if trimmed == message {
                                 found = true;
@@ -883,24 +879,20 @@ mod e2e_tests {
             }
             found
         };
-        println!("intended_path: {:?}", intended_path);
-        println!("pathset: {:?}", pathset);          
+
         let (lca_bucket, lca_path) = pathset.lca(&intended_path)
         .expect("LCA not found");
-
-        println!("lca_bucket: {:?}", lca_bucket);
-        println!("lca_path: {:?}", lca_path);
 
         // Verify message at LCA
         assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
         "Message not found at LCA in epoch {}", epoch);
 
         let mut latest_index = server2.lock().unwrap().tree.get_index(&lca_path);
-        println!("latest_index: {:?}", latest_index);
+        let mut times_relocated = 0;
+        let mut lca_path_lengths = Vec::new();
 
         // Trace message movement over epochs
         for epoch in 1..num_epochs {
-            println!("Epoch {}", epoch);
 
             // Perform batch_init
             server1.lock().unwrap().batch_init(1);
@@ -909,20 +901,24 @@ mod e2e_tests {
             server1.lock().unwrap().batch_write().expect("Batch write failed");
 
             let mut new_pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
-
-
             if new_pathset.packed_indices.contains(&latest_index) {
-                println!("pathset: {:?}", new_pathset);          
                 let (lca_bucket, lca_path) = new_pathset.lca(&intended_path)
                 .expect("LCA not found");
+
+                let lca_path_length = lca_path.len();
+                lca_path_lengths.push(lca_path_length);
 
                 // Verify message at LCA
                 assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
                 "Message not found at LCA in epoch {}", epoch);
 
                 latest_index = new_pathset.get_index(&lca_path);
+                times_relocated += 1;
             }
         }
+
+        println!("Times relocated: {:?}", times_relocated);
+        println!("LCA path lengths: {:?}", lca_path_lengths);
     }
 
 }
