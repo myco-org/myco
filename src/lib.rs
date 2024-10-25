@@ -648,7 +648,8 @@ mod e2e_tests {
         );
     }
 
-    // #[test]
+    #[test]
+    #[cfg(feature = "simulation")]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
