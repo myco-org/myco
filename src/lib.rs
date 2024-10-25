@@ -2,7 +2,7 @@ use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use bincode::{deserialize, serialize};
 use error::OramError;
-use network::{Command, Local};
+use network::{Command, Local, ReadType, WriteType};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
@@ -135,22 +135,24 @@ impl Local for Client {
                 self.s1.lock().unwrap().write(ct, f, k_oram_t, cs)?;
                 Ok(vec![])
             }
-            Command::Server2Write(buckets) => {
-                self.s2.lock().unwrap().write(buckets);
-                Ok(vec![])
+            Command::Server2Write(write_type) => {
+                match write_type {
+                    WriteType::Write(buckets) => {
+                        self.s2.lock().unwrap().write(buckets);
+                        Ok(vec![])
+                    }
+                    WriteType::AddPrfKey(key) => {
+                        self.s2.lock().unwrap().add_prf_key(&key);
+                        Ok(vec![])
+                    }
+                }
             }
-            Command::Server2Read(path) => {
-                self.s2.lock().unwrap().read(&path)
-            }
-            Command::Server2AddPrfKey(key) => {
-                self.s2.lock().unwrap().add_prf_key(&key);
-                Ok(vec![])
-            }
-            Command::Server2GetPrfKeys => {
-                self.s2.lock().unwrap().get_prf_keys()
-            }
-            Command::Server2ReadPaths(pathset) => {
-                self.s2.lock().unwrap().read_paths(pathset)
+            Command::Server2Read(read_type) => {
+                match read_type {
+                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
+                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
+                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+                }
             }
         }
     }
@@ -209,7 +211,7 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
-        let keys: Vec<Key> = deserialize(&self.send(&serialize(&Command::Server2GetPrfKeys).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
+        let keys: Vec<Key> = deserialize(&self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
 
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
 
@@ -219,7 +221,7 @@ impl Client {
         let l_path = Path::from(l);
 
         // 3: p ← S2.Read(ℓ)
-        let path: Vec<Bucket> = deserialize(&self.send(&serialize(&Command::Server2Read(l_path)).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
+        let path: Vec<Bucket> = deserialize(&self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
 
         // 4: for block ∈ p do
         for bucket in path {
@@ -249,7 +251,7 @@ impl Client {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        let bytes = self.send(&serialize(&Command::Server2Read(Path::from(l))).unwrap()).unwrap();
+        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap()).unwrap();
         deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap()
     }
 }

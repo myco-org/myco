@@ -1,4 +1,4 @@
-use crate::network::{Command, Local};
+use crate::network::{Command, Local, ReadType, WriteType};
 use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
@@ -27,21 +27,21 @@ pub struct Server1 {
 impl Local for Server1 {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match deserialize::<Command>(command).unwrap() {
-            Command::Server2AddPrfKey(key) => {
-                self.s2.lock().unwrap().add_prf_key(&key);
+            Command::Server2Write(write_type) => {
+                match write_type {
+                    WriteType::Write(buckets) => self.s2.lock().unwrap().write(buckets),
+                    WriteType::AddPrfKey(key) => self.s2.lock().unwrap().add_prf_key(&key),
+                }
                 Ok(vec![])
             }
-            Command::Server2ReadPaths(vec) => {
-                self.s2.lock().unwrap().read_paths(vec)
+            Command::Server2Read(read_type) => {
+                match read_type {
+                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
+                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
+                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+                }
             }
-            Command::Server2Write(vec) => {
-                self.s2.lock().unwrap().write(vec);
-                Ok(vec![])
-            }
-            Command::Server2Read(path) => {
-                self.s2.lock().unwrap().read(&path)
-            }
-            Command::Server2GetPrfKeys | Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
+            Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
         }
     }
 }
@@ -71,7 +71,7 @@ impl Server1 {
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(paths);
 
-        let bytes = self.send(&serialize(&Command::Server2ReadPaths(self.pathset_indices.clone())).unwrap()).unwrap();
+        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::ReadPaths(self.pathset_indices.clone()))).unwrap()).unwrap();
         let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
         
         let bucket_size = buckets.len();
@@ -202,8 +202,8 @@ impl Server1 {
 
         // Measure server lock and write time
         let server_write_start = Instant::now();
-        self.send(&serialize(&Command::Server2Write(self.pt.packed_buckets.clone())).unwrap()).unwrap();
-        self.send(&serialize(&Command::Server2AddPrfKey(self.k_s1_t.clone())).unwrap()).unwrap();
+        self.send(&serialize(&Command::Server2Write(WriteType::Write(self.pt.packed_buckets.clone()))).unwrap()).unwrap();
+        self.send(&serialize(&Command::Server2Write(WriteType::AddPrfKey(self.k_s1_t.clone()))).unwrap()).unwrap();
         let server_write_duration = server_write_start.elapsed();
         println!(
             "Server2 overwrite time: {:?}",

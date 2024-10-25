@@ -3,13 +3,23 @@ use serde::{Deserialize, Serialize};
 use crate::{error::OramError, Bucket, Key, Path};
 
 #[derive(Serialize, Deserialize)]
+pub(crate) enum ReadType {
+    Read(Path),
+    ReadPaths(Vec<usize>),
+    GetPrfKeys,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) enum WriteType {
+    Write(Vec<Bucket>),
+    AddPrfKey(Key),
+}
+
+#[derive(Serialize, Deserialize)]
 pub(crate) enum Command {
     Server1Write(Vec<u8>, Vec<u8>, Key, Vec<u8>),
-    Server2Write(Vec<Bucket>),
-    Server2Read(Path),
-    Server2AddPrfKey(Key),
-    Server2GetPrfKeys,
-    Server2ReadPaths(Vec<usize>),
+    Server2Write(WriteType),
+    Server2Read(ReadType),
 }
 
 
