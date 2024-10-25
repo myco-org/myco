@@ -819,4 +819,110 @@ mod e2e_tests {
         assert_eq!(decrypted_messages.len(), num_epochs * num_clients, 
             "Number of decrypted messages doesn't match the expected count");
     }
+
+    #[test]
+    fn test_message_movement() {
+        let server2 = Arc::new(Mutex::new(Server2::new()));
+        let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
+
+        let num_epochs = 20;
+        let mut rng = ChaCha20Rng::from_entropy();
+        let key = Key::random(&mut rng);
+        let message = vec![1, 2, 3, 4]; // Simple test message
+
+        let mut client = Client::new("Client".to_string(), server1.clone(), server2.clone());
+        client.setup(&key).expect("Client setup failed");
+
+        // Initial write
+        server1.lock().unwrap().batch_init(1);
+
+        // Doing a client write manually and extracting the intended path of this message
+        let epoch = client.epoch;
+        let cs = client.id.clone().into_bytes();
+        let (k_msg, k_oram, k_prf) = client.keys.get(&key).unwrap();
+        let f: Vec<u8> = prf(k_prf, &epoch.to_be_bytes());
+        let k_oram_t = kdf(k_oram, &epoch.to_string()).unwrap();
+        let ct = encrypt(k_msg, &message, EncryptionType::Encrypt).unwrap();
+        client.epoch += 1;
+        client.s1.lock().unwrap().write(ct, f.clone(), Key::new(k_oram_t), cs.clone()).expect("Initial write failed");
+        let k_s1_t = server1.lock().unwrap().k_s1_t.0.clone();
+        let l = prf(k_s1_t.as_slice(), &[f.clone().as_slice(), cs.clone().as_slice()].concat());
+        let intended_path = Path::from(l);
+
+        server1.lock().unwrap().batch_write().expect("Initial batch write failed");
+
+        let mut pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
+
+        // Function to verify message at LCA
+        let verify_message_at_lca = |lca_bucket: &Bucket, lca_path: &Path| {
+            // println!("Metadata: {:?}", server1.lock().unwrap().metadata);
+            let metadata_bucket = server1.lock().unwrap().metadata.get(lca_path)
+                .expect("Metadata not found at LCA");
+            let mut found = false;
+            // println!("lca_bucket length: {:?}", lca_bucket.len());
+            for b in 0..lca_bucket.len() {
+                let (l, k_oram_t, t_exp) = metadata_bucket
+                    .get(b)
+                    .ok_or(OramError::MetadataIndexError(b))
+                    .expect("Failed to get metadata");
+                let c_msg = lca_bucket.get(b)
+                    .ok_or(OramError::BucketIndexError(b))
+                    .expect("Failed to get bucket item");
+                println!("About to decrypt");
+                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                    if let Some((k_msg, _, _)) = client.keys.get(&key) {
+                        if let Ok(decrypted) = decrypt(k_msg, &ct) {
+                            println!("Decrypted message INNER");
+                            let trimmed = trim_zeros(&decrypted);
+                            if trimmed == message {
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            found
+        };
+        println!("intended_path: {:?}", intended_path);
+        println!("pathset: {:?}", pathset);          
+        let (lca_bucket, lca_path) = pathset.lca(&intended_path)
+        .expect("LCA not found");
+
+        println!("lca_bucket: {:?}", lca_bucket);
+        println!("lca_path: {:?}", lca_path);
+
+        // Verify message at LCA
+        assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
+        "Message not found at LCA in epoch {}", epoch);
+
+        let mut latest_index = server2.lock().unwrap().tree.get_index(&lca_path);
+        println!("latest_index: {:?}", latest_index);
+
+        // Trace message movement over epochs
+        for epoch in 1..num_epochs {
+            println!("Epoch {}", epoch);
+
+            // Perform batch_init
+            server1.lock().unwrap().batch_init(1);
+
+            // Perform batch_write
+            server1.lock().unwrap().batch_write().expect("Batch write failed");
+
+            let mut new_pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
+
+
+            if new_pathset.packed_indices.contains(&latest_index) {
+                println!("pathset: {:?}", new_pathset);          
+                let (lca_bucket, lca_path) = new_pathset.lca(&intended_path)
+                .expect("LCA not found");
+
+                // Verify message at LCA
+                assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
+                "Message not found at LCA in epoch {}", epoch);
+
+                latest_index = new_pathset.get_index(&lca_path);
+            }
+        }
+    }
+
 }
