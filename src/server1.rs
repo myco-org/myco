@@ -19,12 +19,11 @@ pub struct Server1 {
     pub pt: SparseBinaryTree<Bucket>,
     pub metadata_pt: SparseBinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
-    pathset_indices: Vec<usize>,
+    pub pathset_indices: Vec<usize>,
 }
 
 impl Server1 {
     pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
-        let metadata = BinaryTree::<Metadata>::new_with_depth(D);
         Self {
             epoch: 0,
             k_s1_t: Key::new(vec![]),
@@ -33,13 +32,14 @@ impl Server1 {
             p: SparseBinaryTree::new(),
             pt: SparseBinaryTree::new(),
             metadata_pt: SparseBinaryTree::new(),
-            metadata,
+            metadata: BinaryTree::new_with_depth(D),
             pathset_indices: vec![],
         }
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-    println!("=== Starting Epoch {:?} ===", self.epoch);
+        println!("=== Starting Epoch {:?} ===", self.epoch);
+
         let mut rng = ChaCha20Rng::from_entropy();
         
         let paths = (0..(NU * num_clients))
@@ -206,7 +206,7 @@ impl Server1 {
             });
         });
         pathset.into_iter().collect()
-    }    
+    }
 }
 
 #[cfg(test)]

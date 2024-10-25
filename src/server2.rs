@@ -27,6 +27,11 @@ impl Server2 {
         self.tree.get_all_nodes_along_path(l)
     }
 
+    /// Get a reference to the tree
+    pub fn get_tree(&self) -> &BinaryTree<Bucket> {
+        &self.tree
+    }
+
     pub fn write(&mut self, packed_buckets: Vec<Bucket>) {
         // Ensure the number of elements in packed_buckets matches the number of pathset_indices
         assert_eq!(self.pathset_indices.len(), packed_buckets.len(), "Mismatched number of indices and buckets");

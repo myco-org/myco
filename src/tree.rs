@@ -91,8 +91,20 @@ impl<T: TreeValue> BinaryTree<T> {
             }
             current = self.value[idx].clone();
         }
-
         current
+    }
+
+    pub fn get_index(&self, path: &Path) -> usize {
+        let mut current = 1;
+        let mut idx = 1;
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+            if idx >= self.value.len() {
+                return 1;
+            }
+            current = idx;
+        }
+        idx
     }
 
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
@@ -241,7 +253,7 @@ impl fmt::Display for BinaryTree<Bucket> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SparseBinaryTree<T> {
     pub packed_buckets: Vec<T>,  // List of non-None buckets
-    packed_indices: Vec<usize>,     // Indices corresponding to these buckets
+    pub packed_indices: Vec<usize>,     // Indices corresponding to these buckets
 }
 
 impl<T> SparseBinaryTree<T>
@@ -285,6 +297,16 @@ where
         }
         self.get_by_index(idx)
     }
+    
+    // Retrieve the value at the given path in a sparse binary tree
+    pub fn get_index(&self, path: &Path) -> usize {
+        let mut idx = 1; // Start at the root
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+        }
+        idx
+    }
+    
 
     // Retrieves value by index
     pub fn get_by_index(&self, index: usize) -> Option<&T> {
