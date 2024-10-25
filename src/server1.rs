@@ -39,7 +39,6 @@ impl Server1 {
 
     pub fn batch_init(&mut self, num_clients: usize) {
         println!("=== Starting Epoch {:?} ===", self.epoch);
-    // println!("Metadata at the beginning of batch_init: {:?}", self.metadata);
 
         let mut rng = ChaCha20Rng::from_entropy();
         
@@ -192,9 +191,6 @@ impl Server1 {
 
         // Increment epoch
         self.epoch += 1;
-
-        // println!("Metadata at the end of batch_write: {:?}", self.metadata);
-        // println!("Length of metadata: {:?}", self.metadata.value.len());
 
         Ok(())
     }

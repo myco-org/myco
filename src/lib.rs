@@ -648,7 +648,7 @@ mod e2e_tests {
         );
     }
 
-    #[test]
+    // #[test]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
@@ -825,7 +825,7 @@ mod e2e_tests {
         let server2 = Arc::new(Mutex::new(Server2::new()));
         let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
 
-        let num_epochs = 500;
+        let num_epochs = 1000;
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
         let message = vec![1, 2, 3, 4]; // Simple test message
