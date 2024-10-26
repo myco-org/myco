@@ -8,6 +8,7 @@ use bincode::{deserialize, serialize};
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use std::collections::HashSet;
@@ -143,10 +144,10 @@ impl Server1 {
             .zip_with_binary_tree(&self.metadata)
             .iter()
             .try_for_each(|(bucket, metadata_bucket, _)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
+                let res = if let Some(bucket) = bucket {
+                    (0..bucket.len()).try_for_each(|b| {
+                        metadata_bucket
+                            .as_ref()
                         .ok_or(OramError::MetadataBucketNotFound)
                         .and_then(|metadata_bucket| {
                             let (l, k_oram_t, t_exp) = metadata_bucket
@@ -160,13 +161,44 @@ impl Server1 {
                             }
                             Ok(())
                         })
-                })
+                    })
+                } else {
+                    Ok(())
+                };
+                res
             })?;
         let bucket_processing_duration = bucket_processing_start.elapsed();
         println!("Bucket processing time: {:?}", bucket_processing_duration);
 
         // Measure processing of pt and metadata_pt
         let pt_processing_start = Instant::now();
+        // // Adds dummy blocks to fill out buckets that are not filled and then reshuffles the blocks inside of a bucket.
+        
+        // self.pt.packed_buckets.par_iter_mut().zip(self.metadata_pt.packed_buckets.par_iter_mut()).try_for_each(|(bucket, metadata_bucket)| {
+        //     (bucket.len()..Z).for_each(|_| {
+        //         bucket.push(Block::new_random());
+        //     });
+        //     (metadata_bucket.len()..Z).for_each(|_| {
+        //         metadata_bucket.push(Path::default(), Key::new(vec![]), 0);
+        //     });
+
+        //     assert_eq!(
+        //         bucket.len(),
+        //         Z,
+        //         "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+        //         self.epoch,
+        //         bucket.len(),
+        //         Z
+        //     );
+        //     assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+        //     let mut rng1 = ChaCha20Rng::from_seed(seed);
+        //     let mut rng2 = ChaCha20Rng::from_seed(seed);
+        //     bucket.shuffle(&mut rng1);
+        //     metadata_bucket.shuffle(&mut rng2);
+        //     Ok(())
+        // })?;
+
         self.pt
             .zip_mut(&mut self.metadata_pt)
             .iter_mut()

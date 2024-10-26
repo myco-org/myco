@@ -750,26 +750,25 @@ mod e2e_tests {
         let server2 = Arc::new(Mutex::new(Server2::new()));
         let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
 
-        let num_epochs = DELTA as usize;
+        let num_epochs = 20 as usize;
         let num_clients = 1;
         
         // Create a vector of unique messages and keys
         let mut rng = ChaCha20Rng::from_entropy();
-        let messages: Vec<Vec<u8>> = (0..num_epochs)
-            .map(|i| vec![i as u8, (i + 1) as u8, (i + 2) as u8, (i + 3) as u8])
-            .collect();
-        let keys: Vec<Key> = (0..num_epochs).map(|_| Key::random(&mut rng)).collect();
+        // let keys: Vec<Key> = (0..num_epochs).map(|_| Key::random(&mut rng)).collect();
+        let key = Key::random(&mut rng);
         let mut client = Client::new("Client".to_string(), server1.clone(), server2.clone());
-        
-        // Write messages
-        for (epoch, (message, key)) in messages.iter().zip(keys.iter()).enumerate() {
+        client.setup(&key).unwrap();
+        let k_msg = client.keys.get(&key).unwrap().0.clone();
+        let mut messages: Vec<Vec<u8>> = Vec::new();        
+
+        for epoch in 0..num_epochs {
             server1.lock().unwrap().batch_init(num_clients);
-
-            client.setup(key).unwrap();
-            client.write(message, key).unwrap();
-
+            let message: Vec<u8> = (0..16).map(|_| rng.gen::<u8>()).collect();           
+            client.write(&message, &key).unwrap();
             server1.lock().unwrap().batch_write().unwrap();
-        }
+            messages.push(message);
+        } 
 
         // Verify the messages
         let mut decrypted_messages = Vec::new();
@@ -777,32 +776,35 @@ mod e2e_tests {
             .zip(&server1.lock().unwrap().metadata)
             .into_iter()
             .try_for_each(|(bucket, metadata_bucket, _path)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (_l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
-                            if num_clients < (*t_exp as usize) {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    // Use the correct k_msg for inner decryption
-                                    for key in &keys {
-                                        if let Some((k_msg, _, _)) = client.keys.get(key) {
-                                            if let Ok(decrypted) = decrypt(k_msg, &ct) {
-                                                decrypted_messages.push(trim_zeros(&decrypted));
-                                                break;
-                                            }
-                                        }
-                                    }
+                if bucket.is_none() {
+                    return Err(OramError::BucketNotFound);
+                }
+                if metadata_bucket.is_none() {
+                    return Err(OramError::MetadataBucketNotFound);
+                }
+                let bucket = bucket.unwrap();
+                let metadata_bucket = metadata_bucket.unwrap();
+
+                for b in 0..bucket.len() {
+                    if let Some((_l, k_oram_t, t_exp)) = metadata_bucket.get(b) {
+                        if let Some(c_msg) = bucket.get(b) {
+                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                if let Ok(decrypted) = decrypt(&k_msg, &ct) {
+                                    decrypted_messages.push(trim_zeros(&decrypted));
+                                } else {
+                                    println!("Second layer decryption failed");
                                 }
                             }
-                            Ok(())
-                        })
-                })
+                        } else {
+                            println!("Bucket index error: {}", b);
+                            return Err(OramError::BucketIndexError(b));
+                        }
+                    } else {
+                        println!("Metadata bucket not found");
+                        return Err(OramError::MetadataBucketNotFound);
+                    }
+                }
+                Ok(())
             });
 
         // Verify that all original messages are present in the decrypted messages

@@ -116,8 +116,6 @@ fn main() {
             "Total duration so far: {:?}, average duration so far: {:?}",
             total_duration, average_duration
         );
-
-        calculate_bucket_usage(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &k_msg);
     }
 
     // After all epochs, print the total duration and final average duration

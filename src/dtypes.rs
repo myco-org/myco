@@ -73,7 +73,7 @@ impl From<u8> for Direction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Path(Vec<Direction>);
 
 impl Path {
