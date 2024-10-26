@@ -338,6 +338,7 @@ mod util_tests {
 
 mod e2e_tests {
     use rand::RngCore;
+    use tree::BinaryTree;
 
     use super::*;
 
@@ -687,35 +688,36 @@ mod e2e_tests {
 
     #[test]
     #[cfg(feature = "simulation")]
+    #[test]
     fn test_simulation() {
         use rand::{RngCore, SeedableRng};
         use rand_chacha::ChaCha20Rng;
         use std::time::Duration;
+        use super::*;
     
         let num_clients = NUM_WRITES_PER_EPOCH;
-        let num_epochs = DELTA * DELTA;
+        let num_epochs = DELTA;
     
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
     
         let mut rng = ChaCha20Rng::from_entropy();
         let mut clients = Vec::new();
-        let mut keys = Vec::new();
     
         let mut total_duration: Duration = Duration::new(0, 0);
         let mut successful_epochs = 0;
-    
+        let mut k_msg: Vec<u8> = Vec::new();
+        let key = Key::random(&mut rng);
         for i in 0..num_clients {
             let client_name = format!("Client_{}", i);
             let mut client = Client::new(client_name, s1.clone(), s2.clone());
     
-            let key = Key::random(&mut rng);
             client.setup(&key).expect("Setup failed");
     
             clients.push(client);
-            keys.push(key);
         }
-    
+        k_msg = clients[0].keys.get(&key).unwrap().0.clone();
+
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
@@ -728,9 +730,9 @@ mod e2e_tests {
     
             // Measure write latency
             let write_start_time = std::time::Instant::now();
-            for (client, key) in clients.iter_mut().zip(keys.iter()) {
+            for client in clients.iter_mut() {
                 let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
-                if let Err(e) = client.write(&message, key) {
+                if let Err(e) = client.write(&message, &key) {
                     panic!("Write failed in epoch {}: {:?}", epoch, e);
                 }
             }
@@ -743,7 +745,7 @@ mod e2e_tests {
     
             // Measure read latency for each client
             let mut total_read_duration = Duration::new(0, 0);
-            for (client, key) in clients.iter().zip(keys.iter()) {
+            for client in clients.iter() {
                 let read_start_time = std::time::Instant::now();
                 let read_result: Vec<u8> = client
                     .read(&key, client.id.clone(), 0)
@@ -774,6 +776,8 @@ mod e2e_tests {
                 "Total duration so far: {:?}, average duration so far: {:?}",
                 total_duration, average_duration
             );
+
+            calculate_bucket_usage(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &k_msg);
         }
     
         // After all epochs, print the total duration and final average duration
@@ -957,6 +961,60 @@ mod e2e_tests {
 
         println!("Times relocated: {:?}", times_relocated);
         println!("LCA path lengths: {:?}", lca_path_lengths);
+    }
+
+    fn calculate_bucket_usage(server2_tree: &BinaryTree<Bucket>, metadata_tree: &BinaryTree<Metadata>, k_msg: &[u8]) -> (usize, usize, f64, f64, f64) {
+        let mut bucket_usage = Vec::new();
+        let mut total_messages = 0;
+        let mut max_usage = 0;
+        let mut max_depth = 0;
+
+        server2_tree.zip(metadata_tree)
+            .into_iter()
+            .for_each(|(bucket, metadata_bucket, path)| {
+                if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                    let mut decryptable_messages = 0;
+                    for b in 0..bucket.len() {
+                        if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
+                            if let Some(c_msg) = bucket.get(b) {
+                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                    if decrypt(k_msg, &ct).is_ok() {
+                                        decryptable_messages += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    bucket_usage.push(decryptable_messages);
+                    total_messages += decryptable_messages;
+                    if decryptable_messages > max_usage {
+                        max_usage = decryptable_messages;
+                        max_depth = path.len();
+                    }
+                }
+            });
+
+        let total_buckets = bucket_usage.len();
+        let average_usage = total_messages as f64 / total_buckets as f64;
+
+        // Calculate median
+        bucket_usage.sort_unstable();
+        let median_usage = if total_buckets % 2 == 0 {
+            (bucket_usage[total_buckets / 2 - 1] + bucket_usage[total_buckets / 2]) as f64 / 2.0
+        } else {
+            bucket_usage[total_buckets / 2] as f64
+        };
+
+        // Calculate standard deviation
+        let variance = bucket_usage.iter()
+            .map(|&x| {
+                let diff = x as f64 - average_usage;
+                diff * diff
+            })
+            .sum::<f64>() / total_buckets as f64;
+        let std_dev = variance.sqrt();
+        println!("Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}", max_usage, max_depth, average_usage, median_usage, std_dev);
+        (max_usage, max_depth, average_usage, median_usage, std_dev)
     }
 
 }
