@@ -19,7 +19,7 @@ pub mod dtypes;
 mod error;
 pub mod server1;
 pub mod server2;
-mod tree;
+pub mod tree;
 mod network;
 
 // Import constants and server modules
@@ -397,7 +397,7 @@ mod e2e_tests {
     use std::{fs::File, io::{Read, Write}};
 
     use rand::RngCore;
-    use tree::{deserialize_trees, serialize_trees, BinaryTree, DBStateParams};
+    use tree::{desave_trees, save_trees, BinaryTree, DBStateParams};
 
     use super::*;
 
@@ -1001,9 +1001,9 @@ mod e2e_tests {
                 .as_secs(),
         };
 
-        serialize_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &state_params);
+        save_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &state_params);
 
-        let (server2_tree_deserialized, server1_metadata_deserialized) = deserialize_trees(&state_params);
+        let (server2_tree_deserialized, server1_metadata_deserialized) = desave_trees(&state_params);
 
         // Assert that the deserialized server 1 metadata and the server 2 tree are the same as the original ones.
         assert_eq!(s1.lock().unwrap().metadata, server1_metadata_deserialized);

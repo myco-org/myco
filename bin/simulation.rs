@@ -1,15 +1,42 @@
 use std::{process::Command, sync::{Arc, Mutex}};
-use myco_rs::{server2::Server2, server1::Server1, constants::{DELTA, NUM_WRITES_PER_EPOCH}, dtypes::Key};
+use clap::Parser;
+use myco_rs::{constants::{D, DELTA, NUM_WRITES_PER_EPOCH, Z}, dtypes::Key, server1::Server1, server2::Server2};
 use rand::{Rng, SeedableRng};
 
+use rand_chacha::ChaCha20Rng;
+use rayon::iter::IntoParallelRefIterator;
+use tree::{save_trees, DBStateParams};
+
+use std::time::Duration;
+use myco_rs::*;
+
+
+#[derive(Debug, Clone, Parser)]
+struct Args {
+    #[clap(default_value_t = Z)]
+    bucket_size: usize,
+    #[clap(default_value_t = DELTA)]
+    iters: usize,
+    #[clap(default_value_t = D)]
+    depth: usize,
+    #[clap(default_value_t = NUM_WRITES_PER_EPOCH)]
+    num_clients: usize,
+}
+
+impl Into<DBStateParams> for Args {
+    fn into(self) -> DBStateParams {
+        DBStateParams { bucket_size: self.bucket_size, num_iters: self.iters, depth: self.depth, num_clients: self.num_clients, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
+    }
+}
+
+/// Runs the Myco protocol simulation.
 fn main() {
-    use rand_chacha::ChaCha20Rng;
 
-    use std::time::Duration;
-    use myco_rs::*;
+    // Arguments for parametetrizing the protocol.
+    let simulation_args = Args::parse();
 
-    let num_clients = NUM_WRITES_PER_EPOCH;
-    let num_epochs = DELTA;
+    let num_clients = simulation_args.num_clients;
+    let num_epochs = simulation_args.iters;
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
@@ -99,4 +126,6 @@ fn main() {
         "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
         total_duration, final_average_duration
     );
+
+    save_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &simulation_args.into());
 }

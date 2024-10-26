@@ -270,10 +270,10 @@ where
     }
 
     // Creates a new sparse binary tree with provided packed_buckets and packed_indices
-    pub fn new_with_data(packed_buckets: Vec<T>, packed_indices: Vec<usize>) -> Self {
+    pub fn new_with_data(packed_buckets: &[T], packed_indices: &[usize]) -> Self {
         SparseBinaryTree {
-            packed_buckets,
-            packed_indices,
+            packed_buckets: packed_buckets.to_vec(),
+            packed_indices: packed_indices.to_vec(),
         }
     }
 
@@ -469,7 +469,7 @@ pub struct DBStateParams {
 /// Serialize the trees into a file.
 /// 
 /// State is saved in the format state_{bucket_size}_{num_iters}_{depth}_{num_clients}.bin to db/
-pub fn serialize_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata>, params: &DBStateParams) {
+pub fn save_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata>, params: &DBStateParams) {
     let db_state = DBState {
         tree: tree.clone(),
         metadata: metadata.clone(),
@@ -484,7 +484,7 @@ pub fn serialize_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata
 }
 
 /// Deserialize the trees from a file.
-pub fn deserialize_trees(params: &DBStateParams) -> (BinaryTree<Bucket>, BinaryTree<Metadata>) {
+pub fn desave_trees(params: &DBStateParams) -> (BinaryTree<Bucket>, BinaryTree<Metadata>) {
     let mut file = File::open(format!("db/state_{}_{}_{}_{}/{}.bin", params.bucket_size, params.num_iters, params.depth, params.num_clients, params.timestamp)).unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();

@@ -66,22 +66,32 @@ impl Server1 {
 
         let mut rng = ChaCha20Rng::from_entropy();
         
-        let paths = (0..(NU * num_clients))
+        // These are fast operations, so there's no need to parallelize them.
+        let pathset = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
-        self.pathset_indices = self.get_path_indices(paths);
+        self.pathset_indices = self.get_path_indices(pathset);
 
         let bytes = self.send(&serialize(&Command::Server2Read(ReadType::ReadPaths(self.pathset_indices.clone()))).unwrap()).unwrap();
         let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
         
         let bucket_size = buckets.len();
-        self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
-        self.pt = SparseBinaryTree::new_with_data(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
         
-        self.metadata_pt = SparseBinaryTree::new_with_data(
-            vec![Metadata::default(); bucket_size],
-            self.pathset_indices.clone(),
+        // Initialize each of these objects in parallel using rayon::join. These trees are initializing a lot of data.
+        // Specifically, they use BLOCK_SIZE * Z * len(pathset_indices) bytes of memory.
+        let (p, (pt, metadata_pt)) = rayon::join(
+            || SparseBinaryTree::new_with_data(&buckets, &self.pathset_indices),
+            || rayon::join(
+                || SparseBinaryTree::new_with_data(&vec![Bucket::default(); bucket_size], &self.pathset_indices),
+                || SparseBinaryTree::new_with_data(
+                    &vec![Metadata::default(); bucket_size],
+                    &self.pathset_indices,
+                )
+            )
         );
+        self.p = p;
+        self.pt = pt;
+        self.metadata_pt = metadata_pt;
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
@@ -216,6 +226,7 @@ impl Server1 {
         Ok(())
     }
 
+    /// This fetches the indices of all of the nodes covered by any of the paths in the pathset.
     pub fn get_path_indices(&self, paths: Vec<Path>) -> Vec<usize> {
         let mut pathset: HashSet<usize> = HashSet::new();
         pathset.insert(1);
