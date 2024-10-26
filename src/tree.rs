@@ -1,15 +1,16 @@
 use std::{
     cmp::max,
-    fmt::{self, Debug, Write},
+    fmt::{self, Debug}, fs::File, io::{Read, Write},
 };
 
 use aes_gcm::aead::Buffer;
+use serde::{Deserialize, Serialize};
 
-use crate::{Bucket, Direction, Path};
+use crate::{Bucket, Direction, Metadata, Path};
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct BinaryTree<T> {
-    pub(crate) value: Vec<Option<T>>,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BinaryTree<T> {
+    pub value: Vec<Option<T>>,
 }
 
 pub(crate) trait TreeValue: Clone + Debug + PartialEq + Default {
@@ -250,7 +251,7 @@ impl fmt::Display for BinaryTree<Bucket> {
 
 // Sparse binary tree
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SparseBinaryTree<T> {
     pub packed_buckets: Vec<T>,  // List of non-None buckets
     pub packed_indices: Vec<usize>,     // Indices corresponding to these buckets
@@ -447,6 +448,50 @@ where
         results
     }
 
+}
+
+#[derive(Serialize, Deserialize)]
+struct DBState {
+    tree: BinaryTree<Bucket>,
+    metadata: BinaryTree<Metadata>,
+}
+
+/// Parameters that define the state of the DB.
+pub struct DBStateParams {
+    pub bucket_size: usize,
+    pub num_iters: usize,
+    pub depth: usize,
+    pub num_clients: usize,
+    pub timestamp: u64,
+}
+
+
+/// Serialize the trees into a file.
+/// 
+/// State is saved in the format state_{bucket_size}_{num_iters}_{depth}_{num_clients}.bin to db/
+pub fn serialize_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata>, params: &DBStateParams) {
+    let db_state = DBState {
+        tree: tree.clone(),
+        metadata: metadata.clone(),
+    };
+    let serialized_db_state = bincode::serialize(&db_state).unwrap();
+    let dir_path = format!("db/state_{}_{}_{}_{}",
+        params.bucket_size, params.num_iters, params.depth, params.num_clients);
+    std::fs::create_dir_all(&dir_path).unwrap();
+    let file_path = format!("{}/{}.bin", dir_path, params.timestamp);
+    let mut file = File::create(file_path).unwrap();
+    file.write_all(&serialized_db_state).unwrap();
+}
+
+/// Deserialize the trees from a file.
+pub fn deserialize_trees(params: &DBStateParams) -> (BinaryTree<Bucket>, BinaryTree<Metadata>) {
+    let mut file = File::open(format!("db/state_{}_{}_{}_{}/{}.bin", params.bucket_size, params.num_iters, params.depth, params.num_clients, params.timestamp)).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap();
+
+    let db_state: DBState = bincode::deserialize(&buffer).unwrap();
+
+    (db_state.tree, db_state.metadata)
 }
 
 #[cfg(test)]

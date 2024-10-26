@@ -3,9 +3,9 @@ use std::collections::HashSet;
 use crate::{error::OramError, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
-    pub(crate) tree: BinaryTree<Bucket>,
-    pub(crate) prf_keys: Vec<Key>,
-    pub(crate) epoch: u64,
+    pub tree: BinaryTree<Bucket>,
+    pub prf_keys: Vec<Key>,
+    pub epoch: u64,
     pathset_indices: Vec<usize>
 }
 
@@ -54,7 +54,7 @@ impl Server2 {
     pub fn add_prf_key(&mut self, key: &Key) {
         self.prf_keys.push(key.clone());
 
-        if self.epoch >= DELTA {
+        if self.epoch >= DELTA as u64 {
             self.prf_keys.remove(0);
         }
     }

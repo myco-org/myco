@@ -11,7 +11,7 @@ use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
 
 pub(crate) type Timestamp = u64;
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct Metadata(Vec<(Path, Key, Timestamp)>);
 
 impl Metadata {
@@ -161,7 +161,7 @@ impl From<usize> for Path {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Block(pub(crate) Vec<u8>);
+pub struct Block(pub(crate) Vec<u8>);
 
 impl Block {
     pub(crate) fn new(data: Vec<u8>) -> Self {
@@ -177,7 +177,7 @@ impl Block {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Default, Serialize, Deserialize)]
-pub(crate) struct Bucket(Vec<Block>);
+pub struct Bucket(Vec<Block>);
 
 impl TreeValue for Bucket {
     fn new_random() -> Self {
@@ -230,14 +230,14 @@ impl Bucket {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub(crate) struct Key(pub(crate) Vec<u8>);
+pub struct Key(pub(crate) Vec<u8>);
 
 impl Key {
-    pub(crate) fn new(bytes: Vec<u8>) -> Key {
+    pub fn new(bytes: Vec<u8>) -> Key {
         Key(bytes)
     }
 
-    pub(crate) fn random<R: RngCore + Rng>(rng: &mut R) -> Key {
+    pub fn random<R: RngCore + Rng>(rng: &mut R) -> Key {
         Key((0..LAMBDA / 8).map(|_| rng.gen()).collect())
     }
 }
