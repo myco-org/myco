@@ -1,6 +1,5 @@
-/// Number of epochs before a message expires.
-pub const DELTA: usize = 1000;
 /// Depth of the binary tree.
+pub const DELTA: usize = 1000;
 pub const D: usize = 20;
 /// Security parameter of the scheme.
 pub const LAMBDA: usize = 128;
