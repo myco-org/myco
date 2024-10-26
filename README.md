@@ -1,3 +1,3 @@
 # Myco
 
-To run the simulation, use `cargo run --features simulation`.
+To run the simulation, use `cargo run --bin simulation --release`.

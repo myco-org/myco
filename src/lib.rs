@@ -6,6 +6,7 @@ use network::{Command, Local, ReadType, WriteType};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
+use tree::BinaryTree;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -13,11 +14,11 @@ use std::{
 };
 
 // Add module declarations
-mod constants;
-mod dtypes;
+pub mod constants;
+pub mod dtypes;
 mod error;
-mod server1;
-mod server2;
+pub mod server1;
+pub mod server2;
 mod tree;
 mod network;
 
@@ -120,10 +121,11 @@ fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
     buf.into_iter().rev().collect()
 }
 
-struct Client {
-    id: String,
+/// A Myco client (user).
+pub struct Client {
+    pub id: String,
     epoch: usize,
-    keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
+    pub keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
     s1: Arc<Mutex<Server1>>,
     s2: Arc<Mutex<Server2>>,
 }
@@ -160,7 +162,7 @@ impl Local for Client {
 
 
 impl Client {
-    fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
         Client {
             id,
             epoch: 0,
@@ -170,7 +172,7 @@ impl Client {
         }
     }
 
-    fn setup(&mut self, k: &Key) -> Result<(), OramError> {
+    pub fn setup(&mut self, k: &Key) -> Result<(), OramError> {
         let k_msg = kdf(&k.0, "MSG")?;
         let k_oram = kdf(&k.0, "ORAM")?;
         let k_prf = kdf(&k.0, "PRF")?;
@@ -178,7 +180,7 @@ impl Client {
         Ok(())
     }
 
-    fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
+    pub fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
@@ -200,7 +202,7 @@ impl Client {
         Ok(())
     }
 
-    fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
+    pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
         // Use the passed epoch if available, otherwise default to self.epoch - 1
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
@@ -254,6 +256,61 @@ impl Client {
         let bytes = self.send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap()).unwrap();
         deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap()
     }
+}
+
+/// Helper function to calculate the bucket usage of the server.
+pub fn calculate_bucket_usage(server2_tree: &BinaryTree<Bucket>, metadata_tree: &BinaryTree<Metadata>, k_msg: &[u8]) -> (usize, usize, f64, f64, f64) {
+    let mut bucket_usage = Vec::new();
+    let mut total_messages = 0;
+    let mut max_usage = 0;
+    let mut max_depth = 0;
+
+    server2_tree.zip(metadata_tree)
+        .into_iter()
+        .for_each(|(bucket, metadata_bucket, path)| {
+            if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                let mut decryptable_messages = 0;
+                for b in 0..bucket.len() {
+                    if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
+                        if let Some(c_msg) = bucket.get(b) {
+                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                if decrypt(k_msg, &ct).is_ok() {
+                                    decryptable_messages += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                bucket_usage.push(decryptable_messages);
+                total_messages += decryptable_messages;
+                if decryptable_messages > max_usage {
+                    max_usage = decryptable_messages;
+                    max_depth = path.len();
+                }
+            }
+        });
+
+    let total_buckets = bucket_usage.len();
+    let average_usage = total_messages as f64 / total_buckets as f64;
+
+    // Calculate median
+    bucket_usage.sort_unstable();
+    let median_usage = if total_buckets % 2 == 0 {
+        (bucket_usage[total_buckets / 2 - 1] + bucket_usage[total_buckets / 2]) as f64 / 2.0
+    } else {
+        bucket_usage[total_buckets / 2] as f64
+    };
+
+    // Calculate standard deviation
+    let variance = bucket_usage.iter()
+        .map(|&x| {
+            let diff = x as f64 - average_usage;
+            diff * diff
+        })
+        .sum::<f64>() / total_buckets as f64;
+    let std_dev = variance.sqrt();
+    println!("Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}", max_usage, max_depth, average_usage, median_usage, std_dev);
+    (max_usage, max_depth, average_usage, median_usage, std_dev)
 }
 
 #[cfg(test)]
@@ -337,8 +394,10 @@ mod util_tests {
 }
 
 mod e2e_tests {
+    use std::{fs::File, io::{Read, Write}};
+
     use rand::RngCore;
-    use tree::BinaryTree;
+    use tree::{deserialize_trees, serialize_trees, BinaryTree, DBStateParams};
 
     use super::*;
 
@@ -687,113 +746,11 @@ mod e2e_tests {
     }
 
     #[test]
-    #[cfg(feature = "simulation")]
-    #[test]
-    fn test_simulation() {
-        use rand::{RngCore, SeedableRng};
-        use rand_chacha::ChaCha20Rng;
-        use std::time::Duration;
-        use super::*;
-    
-        let num_clients = NUM_WRITES_PER_EPOCH;
-        let num_epochs = DELTA;
-    
-        let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-    
-        let mut rng = ChaCha20Rng::from_entropy();
-        let mut clients = Vec::new();
-    
-        let mut total_duration: Duration = Duration::new(0, 0);
-        let mut successful_epochs = 0;
-        let mut k_msg: Vec<u8> = Vec::new();
-        let key = Key::random(&mut rng);
-        for i in 0..num_clients {
-            let client_name = format!("Client_{}", i);
-            let mut client = Client::new(client_name, s1.clone(), s2.clone());
-    
-            client.setup(&key).expect("Setup failed");
-    
-            clients.push(client);
-        }
-        k_msg = clients[0].keys.get(&key).unwrap().0.clone();
-
-        // Perform multiple epochs
-        for epoch in 0..num_epochs {
-            println!("Starting epoch: {}", epoch);
-    
-            // Measure batch_init latency
-            let epoch_start_time = std::time::Instant::now();
-            let batch_init_start_time = std::time::Instant::now();
-            s1.lock().unwrap().batch_init(num_clients);
-            let batch_init_duration = batch_init_start_time.elapsed();
-    
-            // Measure write latency
-            let write_start_time = std::time::Instant::now();
-            for client in clients.iter_mut() {
-                let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
-                if let Err(e) = client.write(&message, &key) {
-                    panic!("Write failed in epoch {}: {:?}", epoch, e);
-                }
-            }
-            let write_duration = write_start_time.elapsed();
-    
-            // Measure batch_write latency
-            let batch_write_start_time = std::time::Instant::now();
-            s1.lock().unwrap().batch_write();
-            let batch_write_duration = batch_write_start_time.elapsed();
-    
-            // Measure read latency for each client
-            let mut total_read_duration = Duration::new(0, 0);
-            for client in clients.iter() {
-                let read_start_time = std::time::Instant::now();
-                let read_result: Vec<u8> = client
-                    .read(&key, client.id.clone(), 0)
-                    .expect(&format!("Read failed in epoch {}", epoch));
-                let client_read_duration = read_start_time.elapsed();
-                total_read_duration += client_read_duration;
-            }
-    
-            // Calculate average read duration across all clients in this epoch
-            let average_read_duration = total_read_duration / num_clients as u32;
-    
-            // Measure total duration
-            let epoch_duration = epoch_start_time.elapsed();
-            total_duration += epoch_duration;
-            successful_epochs += 1;
-    
-            // Print the duration of the current epoch and its phases
-            println!(
-                "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?}, avg client read: {:?})",
-                epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration, average_read_duration
-            );
-    
-            // Calculate the average duration so far
-            let average_duration = total_duration / successful_epochs as u32;
-    
-            // Print cumulative duration and average duration so far
-            println!(
-                "Total duration so far: {:?}, average duration so far: {:?}",
-                total_duration, average_duration
-            );
-
-            calculate_bucket_usage(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &k_msg);
-        }
-    
-        // After all epochs, print the total duration and final average duration
-        let final_average_duration = total_duration / successful_epochs as u32;
-        println!(
-            "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
-            total_duration, final_average_duration
-        );
-    }
-
-    #[test]
     fn test_message_persistence() {
         let server2 = Arc::new(Mutex::new(Server2::new()));
         let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
 
-        let num_epochs = 20;
+        let num_epochs = DELTA as usize;
         let num_clients = 1;
         
         // Create a vector of unique messages and keys
@@ -867,7 +824,7 @@ mod e2e_tests {
         let server2 = Arc::new(Mutex::new(Server2::new()));
         let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
 
-        let num_epochs = 1000;
+        let num_epochs = DELTA;
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
         let message = vec![1, 2, 3, 4]; // Simple test message
@@ -963,58 +920,99 @@ mod e2e_tests {
         println!("LCA path lengths: {:?}", lca_path_lengths);
     }
 
-    fn calculate_bucket_usage(server2_tree: &BinaryTree<Bucket>, metadata_tree: &BinaryTree<Metadata>, k_msg: &[u8]) -> (usize, usize, f64, f64, f64) {
-        let mut bucket_usage = Vec::new();
-        let mut total_messages = 0;
-        let mut max_usage = 0;
-        let mut max_depth = 0;
+    #[test]
+    /// Tests the serialization and deserialization of the server 2 tree and the server 1 metadata tree.
+    fn test_tree_serialization() {
+        let server2 = Arc::new(Mutex::new(Server2::new()));
+        let server1 = Server1::new(server2.clone());
 
-        server2_tree.zip(metadata_tree)
-            .into_iter()
-            .for_each(|(bucket, metadata_bucket, path)| {
-                if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
-                    let mut decryptable_messages = 0;
-                    for b in 0..bucket.len() {
-                        if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
-                            if let Some(c_msg) = bucket.get(b) {
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    if decrypt(k_msg, &ct).is_ok() {
-                                        decryptable_messages += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    bucket_usage.push(decryptable_messages);
-                    total_messages += decryptable_messages;
-                    if decryptable_messages > max_usage {
-                        max_usage = decryptable_messages;
-                        max_depth = path.len();
-                    }
+        let server1_metadata_serialized = bincode::serialize(&server1.metadata).unwrap();
+        let server1_metadata_deserialized: BinaryTree<Metadata> = bincode::deserialize(&server1_metadata_serialized).unwrap();
+
+        let server2_tree_serialized = bincode::serialize(&server2.lock().unwrap().tree).unwrap();
+        let server2_tree_deserialized: BinaryTree<Bucket> = bincode::deserialize(&server2_tree_serialized).unwrap();
+
+        assert_eq!(server1.metadata, server1_metadata_deserialized);
+        assert_eq!(server2.lock().unwrap().tree, server2_tree_deserialized);
+    }
+
+    /// Helper function to test the execution of the protocol over a user-defined number of clients and epochs.
+    fn test_protocol_execution_with_params(s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>, num_clients: usize, num_epochs: usize){
+        let mut rng = ChaCha20Rng::from_entropy();
+        let mut clients: Vec<Client> = Vec::new();
+    
+        let mut k_msg: Vec<u8> = Vec::new();
+        let key = Key::random(&mut rng);
+        for i in 0..num_clients {
+            let client_name = format!("Client_{}", i);
+            let mut client = Client::new(client_name, s1.clone(), s2.clone());
+    
+            client.setup(&key).expect("Setup failed");
+    
+            clients.push(client);
+        }
+        k_msg = clients[0].keys.get(&key).unwrap().0.clone();
+
+        // Perform multiple epochs
+        for epoch in 0..num_epochs {
+            println!("Starting epoch: {}", epoch);
+    
+            s1.lock().unwrap().batch_init(num_clients);
+    
+            for client in clients.iter_mut() {
+                let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+                if let Err(e) = client.write(&message, &key) {
+                    panic!("Write failed in epoch {}: {:?}", epoch, e);
                 }
-            });
+            }
+    
+            s1.lock().unwrap().batch_write();
+    
+            for client in clients.iter() {
+                let _: Vec<u8> = client
+                    .read(&key, client.id.clone(), 0)
+                    .expect(&format!("Read failed in epoch {}", epoch));
+            }
+            }
+    }
 
-        let total_buckets = bucket_usage.len();
-        let average_usage = total_messages as f64 / total_buckets as f64;
+    #[test]
+    #[cfg(feature = "simulation")]
+    /// Tests the execution of the protocol, then serializes the protocol mid-execution, serializes it and reloads it back into S1 and S2.
+    fn test_create_serialized_full_db() {
+        use super::*;
+    
+        let num_clients = NUM_WRITES_PER_EPOCH;
+        let num_epochs = DELTA;
+    
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    
+        test_protocol_execution_with_params(s1.clone(), s2.clone(), num_clients, num_epochs as usize);
 
-        // Calculate median
-        bucket_usage.sort_unstable();
-        let median_usage = if total_buckets % 2 == 0 {
-            (bucket_usage[total_buckets / 2 - 1] + bucket_usage[total_buckets / 2]) as f64 / 2.0
-        } else {
-            bucket_usage[total_buckets / 2] as f64
+        let state_params = DBStateParams {
+            bucket_size: Z,
+            num_iters: DELTA as usize,
+            depth: D,
+            num_clients: NUM_WRITES_PER_EPOCH,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs(),
         };
 
-        // Calculate standard deviation
-        let variance = bucket_usage.iter()
-            .map(|&x| {
-                let diff = x as f64 - average_usage;
-                diff * diff
-            })
-            .sum::<f64>() / total_buckets as f64;
-        let std_dev = variance.sqrt();
-        println!("Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}", max_usage, max_depth, average_usage, median_usage, std_dev);
-        (max_usage, max_depth, average_usage, median_usage, std_dev)
+        serialize_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &state_params);
+
+        let (server2_tree_deserialized, server1_metadata_deserialized) = deserialize_trees(&state_params);
+
+        // Assert that the deserialized server 1 metadata and the server 2 tree are the same as the original ones.
+        assert_eq!(s1.lock().unwrap().metadata, server1_metadata_deserialized);
+        assert_eq!(s2.lock().unwrap().tree, server2_tree_deserialized);
+
+        s1.lock().unwrap().metadata = server1_metadata_deserialized;
+        s2.lock().unwrap().tree = server2_tree_deserialized;
+
+        test_protocol_execution_with_params(s1, s2, num_clients, num_epochs as usize);
     }
 
 }

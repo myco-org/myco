@@ -3,6 +3,10 @@ name = "myco-rs"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "simulation"
+path = "bin/simulation.rs"
+
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"

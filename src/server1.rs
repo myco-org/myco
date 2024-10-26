@@ -94,7 +94,7 @@ impl Server1 {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        let t_exp = self.epoch + DELTA;
+        let t_exp = self.epoch + DELTA as u64;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         let l_path = Path::from(l);
         self.insert_message(&ct, &l_path, &k_oram_t, t_exp)

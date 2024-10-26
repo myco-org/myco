@@ -1,4 +1,4 @@
-pub const DELTA: u64 = 1000;
+pub const DELTA: usize = 10;
 pub const D: usize = 20;
 pub const LAMBDA: usize = 128;
 pub const NUM_WRITES_PER_EPOCH: usize = 1000;
