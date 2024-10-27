@@ -131,6 +131,7 @@ impl Server1 {
         bucket.push(Block::new(c_msg));
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
         self.metadata_pt.write(metadata_bucket, path);
+
         Ok(())
     }
 
@@ -147,8 +148,7 @@ impl Server1 {
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
                             let (l, k_oram_t, t_exp) = metadata_block;
-                            println!("self.metadata: {:?}", self.metadata);
-                            println!("l: {:?}, k_oram_t: {:?}, t_exp: {:?}", l, k_oram_t, t_exp);
+                            println!("texp: {:?}", t_exp);
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
@@ -165,18 +165,20 @@ impl Server1 {
             },
         );
 
+        println!("message queue: {:?}", message_queue);
+
         self.pt
             .zip_mut(&mut self.metadata_pt)
             .iter_mut()
             .enumerate()
             .for_each(|(idx, (bucket, metadata_bucket, path))| {
-                println!("Where are we? {:?}", idx);
+                // println!("Where are we? {:?}", idx);
                 if let Some(buckets) = message_queue.get(&idx) {
-                    println!("In the bucket at index {}", idx);
+                    // println!("In the bucket at index {}", idx);
                     for (block, k_oram_t, t_exp) in buckets.iter() {
-                        println!("Decrypting");
+                        // println!("Decrypting");
                         if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
-                            println!("decrypting");
+                            // println!("decrypting");
                             let c_msg = encrypt(&k_oram_t.0, &c_msg, EncryptionType::DoubleEncrypt)
                                 .map_err(|_| OramError::EncryptionFailed)
                                 .unwrap();
