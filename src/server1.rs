@@ -60,6 +60,7 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
+        println!("Metadata tree: {:?}", self.metadata);
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
