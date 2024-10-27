@@ -9,10 +9,12 @@ use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use std::collections::{HashMap, HashSet};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -31,22 +33,20 @@ impl Local for Server1 {
         match deserialize::<Command>(command).unwrap() {
             Command::Server2Write(write_type) => {
                 if let WriteType::SavePathset(pathset) = write_type {
-                    return self.s2.write().unwrap().save_pathset(pathset)
+                    return self.s2.write().unwrap().save_pathset(pathset);
                 } else {
                     match write_type {
-                        WriteType::Write(buckets) =>  self.s2.write().unwrap().write(buckets),
+                        WriteType::Write(buckets) => self.s2.write().unwrap().write(buckets),
                         WriteType::AddPrfKey(key) => self.s2.write().unwrap().add_prf_key(&key),
                         _ => (),
                     }
                     Ok(vec![])
                 }
             }
-            Command::Server2Read(read_type) => {
-                match read_type {
-                    ReadType::Read(path) => self.s2.read().unwrap().read(&path),
-                    ReadType::GetPrfKeys => self.s2.read().unwrap().get_prf_keys(),
-                }
-            }
+            Command::Server2Read(read_type) => match read_type {
+                ReadType::Read(path) => self.s2.read().unwrap().read(&path),
+                ReadType::GetPrfKeys => self.s2.read().unwrap().get_prf_keys(),
+            },
             Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
         }
     }
@@ -71,29 +71,47 @@ impl Server1 {
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
-        
+
         // These are fast operations, so there's no need to parallelize them.
         let pathset = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(pathset);
 
-        let bytes = self.send(&serialize(&Command::Server2Write(WriteType::SavePathset(self.pathset_indices.clone()))).unwrap()).unwrap();
-        let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
-        
+        let bytes = self
+            .send(
+                &serialize(&Command::Server2Write(WriteType::SavePathset(
+                    self.pathset_indices.clone(),
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+        let buckets: Vec<Bucket> = deserialize(&bytes)
+            .map_err(|_| OramError::SerializationFailed)
+            .unwrap();
+
         let bucket_size = buckets.len();
-        
+
         // Initialize each of these objects in parallel using rayon::join. These trees are initializing a lot of data.
         // Specifically, they use BLOCK_SIZE * Z * len(pathset_indices) bytes of memory.
         let (p, (pt, metadata_pt)) = rayon::join(
             || SparseBinaryTree::new_with_data(&buckets, &self.pathset_indices),
-            || rayon::join(
-                || SparseBinaryTree::new_with_data(&vec![Bucket::default(); bucket_size], &self.pathset_indices),
-                || SparseBinaryTree::new_with_data(
-                    &vec![Metadata::default(); bucket_size],
-                    &self.pathset_indices,
+            || {
+                rayon::join(
+                    || {
+                        SparseBinaryTree::new_with_data(
+                            &vec![Bucket::default(); bucket_size],
+                            &self.pathset_indices,
+                        )
+                    },
+                    || {
+                        SparseBinaryTree::new_with_data(
+                            &vec![Metadata::default(); bucket_size],
+                            &self.pathset_indices,
+                        )
+                    },
                 )
-            )
+            },
         );
         self.p = p;
         self.pt = pt;
@@ -147,21 +165,21 @@ impl Server1 {
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
 
-        let mut message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
-        self.p.zip_with_binary_tree(&self.metadata).par_iter().for_each(|(bucket, metadata_bucket, path)| {
-            if let Some(bucket) = bucket {
-                (0..bucket.len()).for_each(|b| {
-                    if let Some(metadata_bucket) = metadata_bucket {
-                        if let Some(metadata) = metadata_bucket.get(b) {     
-                            let (l, k_oram_t, t_exp) = metadata;
-                            let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b)).unwrap();
-                            let (lca_idx, _) = self.pt.lca_idx(&path).ok_or(OramError::LcaNotFound).unwrap();
-                            message_queue.entry(lca_idx).or_default().push((c_msg.clone(), k_oram_t.clone(), *t_exp));
-                        }
-                    }
-                });
-            }
-        });
+        // let mut message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        // self.p.zip_with_binary_tree(&self.metadata).par_iter().for_each(|(bucket, metadata_bucket, path)| {
+        //     if let Some(bucket) = bucket {
+        //         (0..bucket.len()).for_each(|b| {
+        //             if let Some(metadata_bucket) = metadata_bucket {
+        //                 if let Some(metadata) = metadata_bucket.get(b) {
+        //                     let (l, k_oram_t, t_exp) = metadata;
+        //                     let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b)).unwrap();
+        //                     let (lca_idx, _) = self.pt.lca_idx(&path).ok_or(OramError::LcaNotFound).unwrap();
+        //                     message_queue.entry(lca_idx).or_default().push((c_msg.clone(), k_oram_t.clone(), *t_exp));
+        //                 }
+        //             }
+        //         });
+        //     }
+        // });
 
         // This loop is for old messages that need to be moved to the new pathset.
         self.p
@@ -172,19 +190,20 @@ impl Server1 {
                     (0..bucket.len()).try_for_each(|b| {
                         metadata_bucket
                             .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
-                            if self.epoch < *t_exp {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+                            .ok_or(OramError::MetadataBucketNotFound)
+                            .and_then(|metadata_bucket| {
+                                let (l, k_oram_t, t_exp) = metadata_bucket
+                                    .get(b)
+                                    .ok_or(OramError::MetadataIndexError(b))?;
+                                if self.epoch < *t_exp {
+                                    let c_msg =
+                                        bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+                                    if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                        self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+                                    }
                                 }
-                            }
-                            Ok(())
-                        })
+                                Ok(())
+                            })
                     })
                 } else {
                     Ok(())
@@ -199,32 +218,33 @@ impl Server1 {
 
         // Adds dummy blocks to fill out buckets that are not filled and then reshuffles the blocks inside of a bucket.
         // Note: Using parallelism here isn't that effective because the amount of time in each loop is quite small, so Rayon introduces a lot of overhead.
-        self.pt.packed_indices.iter().enumerate().for_each(|(i, _full_tree_idx)| {
-            let bucket = &mut self.pt.packed_buckets[i];
-            let metadata_bucket = &mut self.metadata_pt.packed_buckets[i];
+        self.pt.packed_buckets
+            .par_iter_mut()
+            .zip(self.metadata_pt.packed_buckets.par_iter_mut())
+            .for_each(|(bucket, metadata_bucket)| {
 
-            (bucket.len()..Z).for_each(|_| {
-                bucket.push(Block::new_random());
+                (bucket.len()..Z).for_each(|_| {
+                    bucket.push(Block::new_random());
+                });
+                (metadata_bucket.len()..Z).for_each(|_| {
+                    metadata_bucket.push(Path::default(), Key::new(vec![]), 0);
+                });
+
+                assert_eq!(
+                    bucket.len(),
+                    Z,
+                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                    self.epoch,
+                    bucket.len(),
+                    Z
+                );
+                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+                let mut rng1 = ChaCha20Rng::from_seed(seed);
+                let mut rng2 = ChaCha20Rng::from_seed(seed);
+                bucket.shuffle(&mut rng1);
+                metadata_bucket.shuffle(&mut rng2);
             });
-            (metadata_bucket.len()..Z).for_each(|_| {
-                metadata_bucket.push(Path::default(), Key::new(vec![]), 0);
-            });
-
-            assert_eq!(
-                bucket.len(),
-                Z,
-                "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                self.epoch,
-                bucket.len(),
-                Z
-            );
-            assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-            let mut rng1 = ChaCha20Rng::from_seed(seed);
-            let mut rng2 = ChaCha20Rng::from_seed(seed);
-            bucket.shuffle(&mut rng1);
-            metadata_bucket.shuffle(&mut rng2);
-        });
 
         let pt_processing_duration = pt_processing_start.elapsed();
         println!(
@@ -240,13 +260,22 @@ impl Server1 {
 
         // Measure server lock and write time
         let server_write_start = Instant::now();
-        self.send(&serialize(&Command::Server2Write(WriteType::Write(self.pt.packed_buckets.clone()))).unwrap()).unwrap();
-        self.send(&serialize(&Command::Server2Write(WriteType::AddPrfKey(self.k_s1_t.clone()))).unwrap()).unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::Write(
+                self.pt.packed_buckets.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::AddPrfKey(
+                self.k_s1_t.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
         let server_write_duration = server_write_start.elapsed();
-        println!(
-            "Server2 overwrite time: {:?}",
-            server_write_duration
-        );
+        println!("Server2 overwrite time: {:?}", server_write_duration);
 
         // Increment epoch
         self.epoch += 1;
