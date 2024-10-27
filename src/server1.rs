@@ -5,12 +5,13 @@ use crate::{
     EncryptionType, Key, Metadata, OramError, Path,
 };
 use bincode::{deserialize, serialize};
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::collections::HashSet;
 
 pub struct Server1 {
     pub epoch: u64,
@@ -34,13 +35,11 @@ impl Local for Server1 {
                 }
                 Ok(vec![])
             }
-            Command::Server2Read(read_type) => {
-                match read_type {
-                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
-                }
-            }
+            Command::Server2Read(read_type) => match read_type {
+                ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
+                ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
+                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+            },
             Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
         }
     }
@@ -65,19 +64,31 @@ impl Server1 {
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
-        
+
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(paths);
 
-        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::ReadPaths(self.pathset_indices.clone()))).unwrap()).unwrap();
-        let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
-        
+        let bytes = self
+            .send(
+                &serialize(&Command::Server2Read(ReadType::ReadPaths(
+                    self.pathset_indices.clone(),
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+        let buckets: Vec<Bucket> = deserialize(&bytes)
+            .map_err(|_| OramError::SerializationFailed)
+            .unwrap();
+
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
-        self.pt = SparseBinaryTree::new_with_data(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
-        
+        self.pt = SparseBinaryTree::new_with_data(
+            vec![Bucket::default(); bucket_size],
+            self.pathset_indices.clone(),
+        );
+
         self.metadata_pt = SparseBinaryTree::new_with_data(
             vec![Metadata::default(); bucket_size],
             self.pathset_indices.clone(),
@@ -128,30 +139,63 @@ impl Server1 {
         let seed: [u8; 32] = rng.gen();
 
         // Measure processing of buckets and metadata
+        let message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
         let bucket_processing_start = Instant::now();
-        self.p
-            .zip_with_binary_tree(&self.metadata)
-            .iter()
-            .try_for_each(|(bucket, metadata_bucket, _)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
+        self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
+            |(bucket, metadata_bucket, _)| {
+                if bucket.is_none() || metadata_bucket.is_none() {
+                    return;
+                }
+                let bucket = bucket.as_ref().unwrap();
+                let metadata_bucket = metadata_bucket.as_ref().unwrap();
+                {
+                    (0..bucket.len()).for_each(|b| {
+                        if let Some(metadata_bucket) = metadata_bucket.get(b) {
+                            // To know whether the real block should be deleted or not, we need to check
+                            // the metadata tree to see if the block is expired. If not, we need
+                            // to re-randomize it. Write it back to new location at the LCA and then also
+                            // update the metadata tree.
+                            let (l, k_oram_t, t_exp) = metadata_bucket;
                             if self.epoch < *t_exp {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                }
+                                let c_msg = bucket.get(b).unwrap();
+
+                                // Returns the unpacked index of the LCA in pt.
+                                let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                message_queue.entry(lca_idx).or_default().push((
+                                    c_msg.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                ));
                             }
-                            Ok(())
-                        })
-                })
-            })?;
+                        }
+                    });
+                }
+            },
+        );
+
+        self.pt
+            .zip_mut(&mut self.metadata_pt)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                if let Some(buckets) = message_queue.get(&idx) {
+                    for (block, key, t_exp) in buckets.iter() {
+                        if let Ok(c_msg) = decrypt(&key.0, &block.0) {
+                            let c_msg = encrypt(&key.0, &c_msg, EncryptionType::DoubleEncrypt)
+                                .map_err(|_| OramError::EncryptionFailed)
+                                .unwrap();
+
+                            if let Some(bucket) = bucket.as_mut() {
+                                bucket.push(Block::new(c_msg));
+                            }
+                            if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                                metadata_bucket.push(path.clone(), key.clone(), *t_exp);
+                            }
+                        }
+                    }
+                }
+            });
+
         let bucket_processing_duration = bucket_processing_start.elapsed();
         println!("Bucket processing time: {:?}", bucket_processing_duration);
 
@@ -202,13 +246,22 @@ impl Server1 {
 
         // Measure server lock and write time
         let server_write_start = Instant::now();
-        self.send(&serialize(&Command::Server2Write(WriteType::Write(self.pt.packed_buckets.clone()))).unwrap()).unwrap();
-        self.send(&serialize(&Command::Server2Write(WriteType::AddPrfKey(self.k_s1_t.clone()))).unwrap()).unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::Write(
+                self.pt.packed_buckets.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::AddPrfKey(
+                self.k_s1_t.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
         let server_write_duration = server_write_start.elapsed();
-        println!(
-            "Server2 overwrite time: {:?}",
-            server_write_duration
-        );
+        println!("Server2 overwrite time: {:?}", server_write_duration);
 
         // Increment epoch
         self.epoch += 1;
