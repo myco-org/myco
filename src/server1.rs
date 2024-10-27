@@ -143,24 +143,16 @@ impl Server1 {
         let bucket_processing_start = Instant::now();
         self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
             |(bucket, metadata_bucket, _)| {
-                if bucket.is_none() || metadata_bucket.is_none() {
-                    return;
-                }
-                let bucket = bucket.as_ref().unwrap();
-                let metadata_bucket = metadata_bucket.as_ref().unwrap();
-                {
+                if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
                     (0..bucket.len()).for_each(|b| {
-                        if let Some(metadata_bucket) = metadata_bucket.get(b) {
-                            // To know whether the real block should be deleted or not, we need to check
-                            // the metadata tree to see if the block is expired. If not, we need
-                            // to re-randomize it. Write it back to new location at the LCA and then also
-                            // update the metadata tree.
-                            let (l, k_oram_t, t_exp) = metadata_bucket;
+                        if let Some(metadata_block) = metadata_bucket.get(b) {
+                            let (l, k_oram_t, t_exp) = metadata_block;
+                            println!("self.metadata: {:?}", self.metadata);
+                            println!("l: {:?}, k_oram_t: {:?}, t_exp: {:?}", l, k_oram_t, t_exp);
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
-
-                                // Returns the unpacked index of the LCA in pt.
                                 let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                println!("Pushing to message queue at index {}", lca_idx);
                                 message_queue.entry(lca_idx).or_default().push((
                                     c_msg.clone(),
                                     k_oram_t.clone(),
@@ -178,18 +170,24 @@ impl Server1 {
             .iter_mut()
             .enumerate()
             .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                println!("Where are we? {:?}", idx);
                 if let Some(buckets) = message_queue.get(&idx) {
-                    for (block, key, t_exp) in buckets.iter() {
-                        if let Ok(c_msg) = decrypt(&key.0, &block.0) {
-                            let c_msg = encrypt(&key.0, &c_msg, EncryptionType::DoubleEncrypt)
+                    println!("In the bucket at index {}", idx);
+                    for (block, k_oram_t, t_exp) in buckets.iter() {
+                        println!("Decrypting");
+                        if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
+                            println!("decrypting");
+                            let c_msg = encrypt(&k_oram_t.0, &c_msg, EncryptionType::DoubleEncrypt)
                                 .map_err(|_| OramError::EncryptionFailed)
                                 .unwrap();
 
                             if let Some(bucket) = bucket.as_mut() {
+                                println!("Pushing to bucket at index {}", idx);
                                 bucket.push(Block::new(c_msg));
                             }
                             if let Some(metadata_bucket) = metadata_bucket.as_mut() {
-                                metadata_bucket.push(path.clone(), key.clone(), *t_exp);
+                                println!("Pushing to metadata bucket at index {}", idx);
+                                metadata_bucket.push(path.clone(), k_oram_t.clone(), *t_exp);
                             }
                         }
                     }
