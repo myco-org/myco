@@ -142,7 +142,8 @@ impl Local for Client {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match bincode::deserialize::<Command>(command).unwrap() {
             Command::Server1Write(ct, f, k_oram_t, cs) => {
-                self.s1.lock().unwrap().write(ct, f, k_oram_t, cs)?;
+                // println!("Client sending queue write command");
+                self.s1.lock().unwrap().queue_write(ct, f, k_oram_t, cs)?;
                 Ok(vec![])
             }
             Command::Server2Write(write_type) => match write_type {
