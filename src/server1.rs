@@ -203,10 +203,11 @@ impl Server1 {
             .zip_mut(&mut self.metadata_pt)
             .par_iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, _))| {
+            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
                 // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
 
+                // Insert both the new and non-expired messages into the pt and metadata_pt.
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
                     for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
                         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
@@ -228,50 +229,40 @@ impl Server1 {
                         }
                     }
                 }
+
+                // Insert new random blocks into the pt bucket and metadata_pt bucket.
+                if let Some(bucket) = bucket {
+                    let mut rng = ChaCha20Rng::from_seed(seed);
+                    (bucket.len()..Z).for_each(|_| {
+                        bucket.push(Block::new_random());
+                    });
+
+                    assert_eq!(
+                        bucket.len(),
+                        Z,
+                        "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                        self.epoch,
+                        bucket.len(),
+                        Z
+                    );
+
+                    bucket.shuffle(&mut rng);
+                }
+                if let Some(metadata_bucket) = metadata_bucket {
+                    let mut rng = ChaCha20Rng::from_seed(seed);
+                    (metadata_bucket.len()..Z).for_each(|_| {
+                        metadata_bucket.push(bucket_path.clone(), Key::new(vec![]), 0);
+                    });
+
+                    assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+                    metadata_bucket.shuffle(&mut rng);
+                }
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
 
         // Reset the message queue
         self.message_queue.clear();
-
-        // Measure processing of pt and metadata_pt
-        let pt_processing_start = Instant::now();
-        self.pt
-            .zip_mut(&mut self.metadata_pt)
-            .par_iter_mut()
-            .try_for_each(|(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
-                    .as_mut()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
-                (bucket.len()..Z).for_each(|_| {
-                    bucket.push(Block::new_random());
-                });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-                });
-
-                assert_eq!(
-                    bucket.len(),
-                    Z,
-                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                    self.epoch,
-                    bucket.len(),
-                    Z
-                );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-                let mut rng1 = ChaCha20Rng::from_seed(seed);
-                let mut rng2 = ChaCha20Rng::from_seed(seed);
-                bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
-                Ok(())
-            })?;
-        let pt_processing_duration = pt_processing_start.elapsed();
-        println!(
-            "PT and metadata_pt processing time: {:?}",
-            pt_processing_duration
-        );
 
         // Measure metadata overwrite time
         let metadata_overwrite_start = Instant::now();
