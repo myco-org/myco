@@ -347,12 +347,13 @@ where
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if self.get_by_index(next_idx).is_none() {
+                println!("Current path is here {:?}", current_path);
                 return Some((idx, current_path.clone()));
             }
             idx = next_idx;
             current_path.push(direction);
         }
-
+        println!("Current path is {:?}", current_path);
         Some((idx, current_path.clone()))
     }
 

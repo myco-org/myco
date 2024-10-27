@@ -188,7 +188,6 @@ impl Server1 {
             },
         );
 
-
         // This enumerated index doesn't match the index inside of the message queue.
         self.pt
             .zip_mut(&mut self.metadata_pt)
@@ -207,6 +206,8 @@ impl Server1 {
                             if let Some(bucket) = bucket.as_mut() {
                                 bucket.push(Block::new(c_msg));
                             }
+
+                            println!("About to push to path {:?}", path);
                             if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                                 metadata_bucket.push(path.clone(), k_oram_t.clone(), *t_exp);
                             }
