@@ -158,6 +158,14 @@ impl Server1 {
         Ok(())
     }
 
+    /// Queues all of the unexpired messages in the metadata bucket for all nodes in the tree.
+    pub fn queue_batch_write(&mut self) -> Result<(), OramError> {
+        // Goes through the metadata bucket for all unexpired messages. If it's not expired, then we add
+        // it to the map as it needs to be updated in pt.
+
+        Ok(())
+    }
+
     pub fn batch_write(&mut self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
@@ -165,51 +173,62 @@ impl Server1 {
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
 
-        // let mut message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
-        // self.p.zip_with_binary_tree(&self.metadata).par_iter().for_each(|(bucket, metadata_bucket, path)| {
-        //     if let Some(bucket) = bucket {
-        //         (0..bucket.len()).for_each(|b| {
-        //             if let Some(metadata_bucket) = metadata_bucket {
-        //                 if let Some(metadata) = metadata_bucket.get(b) {
-        //                     let (l, k_oram_t, t_exp) = metadata;
-        //                     let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b)).unwrap();
-        //                     let (lca_idx, _) = self.pt.lca_idx(&path).ok_or(OramError::LcaNotFound).unwrap();
-        //                     message_queue.entry(lca_idx).or_default().push((c_msg.clone(), k_oram_t.clone(), *t_exp));
-        //                 }
-        //             }
-        //         });
-        //     }
-        // });
+        let message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
+            |(bucket, metadata_bucket, _)| {
+                if bucket.is_none() || metadata_bucket.is_none() {
+                    return;
+                }
+                let bucket = bucket.as_ref().unwrap();
+                let metadata_bucket = metadata_bucket.as_ref().unwrap();
+                {
+                    (0..bucket.len()).for_each(|b| {
+                        if let Some(metadata_bucket) = metadata_bucket.get(b) {
+                            // To know whether the real block should be deleted or not, we need to check
+                            // the metadata tree to see if the block is expired. If not, we need
+                            // to re-randomize it. Write it back to new location at the LCA and then also
+                            // update the metadata tree.
+                            let (l, k_oram_t, t_exp) = metadata_bucket;
+                            if self.epoch < *t_exp {
+                                let c_msg = bucket.get(b).unwrap();
 
-        // This loop is for old messages that need to be moved to the new pathset.
-        self.p
-            .zip_with_binary_tree(&self.metadata)
-            .iter()
-            .try_for_each(|(bucket, metadata_bucket, _)| {
-                let res = if let Some(bucket) = bucket {
-                    (0..bucket.len()).try_for_each(|b| {
-                        metadata_bucket
-                            .as_ref()
-                            .ok_or(OramError::MetadataBucketNotFound)
-                            .and_then(|metadata_bucket| {
-                                let (l, k_oram_t, t_exp) = metadata_bucket
-                                    .get(b)
-                                    .ok_or(OramError::MetadataIndexError(b))?;
-                                if self.epoch < *t_exp {
-                                    let c_msg =
-                                        bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                    if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                        self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                    }
-                                }
-                                Ok(())
-                            })
-                    })
-                } else {
-                    Ok(())
-                };
-                res
-            })?;
+                                // Returns the unpacked index of the LCA in pt.
+                                let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                message_queue.entry(lca_idx).or_default().push((
+                                    c_msg.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                ));
+                            }
+                        }
+                    });
+                }
+            },
+        );
+
+        self.pt
+            .zip_mut(&mut self.metadata_pt)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                if let Some(buckets) = message_queue.get(&idx) {
+                    for (block, key, t_exp) in buckets.iter() {
+                        if let Ok(c_msg) = decrypt(&key.0, &block.0) {
+                            let c_msg = encrypt(&key.0, &c_msg, EncryptionType::DoubleEncrypt)
+                                .map_err(|_| OramError::EncryptionFailed)
+                                .unwrap();
+
+                            if let Some(bucket) = bucket.as_mut() {
+                                bucket.push(Block::new(c_msg));
+                            }
+                            if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                                metadata_bucket.push(path.clone(), key.clone(), *t_exp);
+                            }
+                        }
+                    }
+                }
+            });
+
         let bucket_processing_duration = bucket_processing_start.elapsed();
         println!("Bucket processing time: {:?}", bucket_processing_duration);
 
@@ -218,11 +237,11 @@ impl Server1 {
 
         // Adds dummy blocks to fill out buckets that are not filled and then reshuffles the blocks inside of a bucket.
         // Note: Using parallelism here isn't that effective because the amount of time in each loop is quite small, so Rayon introduces a lot of overhead.
-        self.pt.packed_buckets
+        self.pt
+            .packed_buckets
             .par_iter_mut()
             .zip(self.metadata_pt.packed_buckets.par_iter_mut())
             .for_each(|(bucket, metadata_bucket)| {
-
                 (bucket.len()..Z).for_each(|_| {
                     bucket.push(Block::new_random());
                 });
