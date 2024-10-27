@@ -212,7 +212,7 @@ impl Bucket {
         self.0.is_empty()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.0.len()
     }
 

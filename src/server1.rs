@@ -5,13 +5,14 @@ use crate::{
     EncryptionType, Key, Metadata, OramError, Path,
 };
 use bincode::{deserialize, serialize};
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -112,6 +113,7 @@ impl Server1 {
         let t_exp = self.epoch + DELTA as u64;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         let l_path = Path::from(l);
+        // TODO: This should queue the message instead of inserting it immediately.
         self.insert_message(&ct, &l_path, &k_oram_t, t_exp)
     }
 
@@ -144,6 +146,24 @@ impl Server1 {
 
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
+
+        let mut message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        self.p.zip_with_binary_tree(&self.metadata).par_iter().for_each(|(bucket, metadata_bucket, path)| {
+            if let Some(bucket) = bucket {
+                (0..bucket.len()).for_each(|b| {
+                    if let Some(metadata_bucket) = metadata_bucket {
+                        if let Some(metadata) = metadata_bucket.get(b) {     
+                            let (l, k_oram_t, t_exp) = metadata;
+                            let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b)).unwrap();
+                            let (lca_idx, _) = self.pt.lca_idx(&path).ok_or(OramError::LcaNotFound).unwrap();
+                            message_queue.entry(lca_idx).or_default().push((c_msg.clone(), k_oram_t.clone(), *t_exp));
+                        }
+                    }
+                });
+            }
+        });
+
+        // This loop is for old messages that need to be moved to the new pathset.
         self.p
             .zip_with_binary_tree(&self.metadata)
             .iter()
