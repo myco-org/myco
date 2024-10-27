@@ -1,4 +1,4 @@
-use std::{process::Command, sync::{Arc, Mutex}};
+use std::{process::Command, sync::{Arc, Mutex, RwLock}};
 use clap::Parser;
 use myco_rs::{constants::{D, DELTA, NUM_WRITES_PER_EPOCH, Z}, dtypes::Key, server1::Server1, server2::Server2};
 use rand::{Rng, SeedableRng};
@@ -38,8 +38,8 @@ fn main() {
     let num_clients = simulation_args.num_clients;
     let num_epochs = simulation_args.iters;
 
-    let s2 = Arc::new(Mutex::new(Server2::new()));
-    let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    let s2 = Arc::new(RwLock::new(Server2::new()));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2.clone())));
 
     let mut rng = ChaCha20Rng::from_entropy();
     let mut clients = Vec::new();
@@ -65,7 +65,7 @@ fn main() {
         // Measure batch_init latency
         let epoch_start_time = std::time::Instant::now();
         let batch_init_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_init(num_clients);
+        s1.write().unwrap().batch_init(num_clients);
         let batch_init_duration = batch_init_start_time.elapsed();
 
         // Measure write latency
@@ -80,7 +80,7 @@ fn main() {
 
         // Measure batch_write latency
         let batch_write_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_write();
+        s1.write().unwrap().batch_write();
         let batch_write_duration = batch_write_start_time.elapsed();
 
         // Measure read latency for each client
@@ -125,5 +125,5 @@ fn main() {
         total_duration, final_average_duration
     );
 
-    save_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &simulation_args.into());
+    save_trees(&s2.read().unwrap().tree, &s1.read().unwrap().metadata, &simulation_args.into());
 }

@@ -5,7 +5,6 @@ use crate::{error::OramError, Bucket, Key, Path};
 #[derive(Serialize, Deserialize)]
 pub(crate) enum ReadType {
     Read(Path),
-    ReadPaths(Vec<usize>),
     GetPrfKeys,
 }
 
@@ -13,6 +12,7 @@ pub(crate) enum ReadType {
 pub(crate) enum WriteType {
     Write(Vec<Bucket>),
     AddPrfKey(Key),
+    SavePathset(Vec<usize>),
 }
 
 #[derive(Serialize, Deserialize)]

@@ -9,7 +9,7 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use std::collections::HashSet;
 
@@ -17,7 +17,7 @@ pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub num_clients: usize,
-    pub s2: Arc<Mutex<Server2>>,
+    pub s2: Arc<RwLock<Server2>>,
     pub p: SparseBinaryTree<Bucket>,
     pub pt: SparseBinaryTree<Bucket>,
     pub metadata_pt: SparseBinaryTree<Metadata>,
@@ -29,17 +29,21 @@ impl Local for Server1 {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match deserialize::<Command>(command).unwrap() {
             Command::Server2Write(write_type) => {
-                match write_type {
-                    WriteType::Write(buckets) => self.s2.lock().unwrap().write(buckets),
-                    WriteType::AddPrfKey(key) => self.s2.lock().unwrap().add_prf_key(&key),
+                if let WriteType::SavePathset(pathset) = write_type {
+                    return self.s2.write().unwrap().save_pathset(pathset)
+                } else {
+                    match write_type {
+                        WriteType::Write(buckets) =>  self.s2.write().unwrap().write(buckets),
+                        WriteType::AddPrfKey(key) => self.s2.write().unwrap().add_prf_key(&key),
+                        _ => (),
+                    }
+                    Ok(vec![])
                 }
-                Ok(vec![])
             }
             Command::Server2Read(read_type) => {
                 match read_type {
-                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+                    ReadType::Read(path) => self.s2.read().unwrap().read(&path),
+                    ReadType::GetPrfKeys => self.s2.read().unwrap().get_prf_keys(),
                 }
             }
             Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
@@ -48,7 +52,7 @@ impl Local for Server1 {
 }
 
 impl Server1 {
-    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(s2: Arc<RwLock<Server2>>) -> Self {
         Self {
             epoch: 0,
             k_s1_t: Key::new(vec![]),
@@ -73,7 +77,7 @@ impl Server1 {
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(pathset);
 
-        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::ReadPaths(self.pathset_indices.clone()))).unwrap()).unwrap();
+        let bytes = self.send(&serialize(&Command::Server2Write(WriteType::SavePathset(self.pathset_indices.clone()))).unwrap()).unwrap();
         let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
         
         let bucket_size = buckets.len();
@@ -202,37 +206,6 @@ impl Server1 {
             metadata_bucket.shuffle(&mut rng2);
         });
 
-        // self.pt
-        //     .zip_mut(&mut self.metadata_pt)
-        //     .iter_mut()  
-        //     .try_for_each(|(bucket, metadata_bucket, path)| {
-        //         let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-        //         let metadata_bucket: &mut Metadata = metadata_bucket
-        //             .as_mut()
-        //             .ok_or(OramError::MetadataBucketNotFound)?;
-        //         (bucket.len()..Z).for_each(|_| {
-        //             bucket.push(Block::new_random());
-        //         });
-        //         (metadata_bucket.len()..Z).for_each(|_| {
-        //             metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-        //         });
-
-        //         assert_eq!(
-        //             bucket.len(),
-        //             Z,
-        //             "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-        //             self.epoch,
-        //             bucket.len(),
-        //             Z
-        //         );
-        //         assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
-
-        //         let mut rng1 = ChaCha20Rng::from_seed(seed);
-        //         let mut rng2 = ChaCha20Rng::from_seed(seed);
-        //         bucket.shuffle(&mut rng1);
-        //         metadata_bucket.shuffle(&mut rng2);
-        //         Ok(())
-        //     })?;
         let pt_processing_duration = pt_processing_start.elapsed();
         println!(
             "PT and metadata_pt processing time: {:?}",

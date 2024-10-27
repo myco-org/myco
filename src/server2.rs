@@ -23,7 +23,7 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    pub fn read(&mut self, l: &Path) -> Result<Vec<u8>, OramError> {
+    pub fn read(&self, l: &Path) -> Result<Vec<u8>, OramError> {
         bincode::serialize(&self.tree.get_all_nodes_along_path(l))
             .map_err(|_| OramError::SerializationFailed)
     }
@@ -59,13 +59,15 @@ impl Server2 {
         }
     }
 
-    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<u8>, OramError> {
+    /// Saves the latest pathset indices.
+    /// Returns the serialized buckets at the pathset indices.
+    pub fn save_pathset(&mut self, pathset: Vec<usize>) -> Result<Vec<u8>, OramError> {
         self.pathset_indices = pathset.clone();
 
-        let buckets: Vec<Bucket> = pathset
-            .iter()
-            .map(|i| self.tree.value[*i].clone().unwrap())
-            .collect();
+        let buckets: Vec<Bucket> = self.pathset_indices
+        .iter()
+        .map(|i| self.tree.value[*i].clone().unwrap())
+        .collect();
 
         bincode::serialize(&buckets).map_err(|_| OramError::SerializationFailed)
     }

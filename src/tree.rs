@@ -207,31 +207,6 @@ impl<T: TreeValue> BinaryTree<T> {
             .collect()
     }
 
-    pub fn zip_mut<'a, 'b, S>(
-        &'a mut self,
-        rhs: &'b mut BinaryTree<S>,
-    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
-        let len = std::cmp::max(self.value.len(), rhs.value.len());
-
-        // Ensure both trees have the same size by resizing them
-        self.value.resize_with(len, || None);
-        rhs.value.resize_with(len, || None);
-
-        // Iterate over both trees, returning mutable references
-        self.value
-            .iter_mut()
-            .zip(rhs.value.iter_mut())
-            .enumerate()
-            .filter_map(|(i, (a, b))| {
-                if a.is_some() {
-                    Some((a.as_mut(), b.as_mut(), Path::from(i)))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
 }
 
 impl fmt::Display for BinaryTree<Bucket> {
@@ -383,43 +358,7 @@ where
         }
 
         results
-    }
-
-    pub fn zip_mut<'a, 'b, S>(
-        &'a mut self,
-        rhs: &'b mut SparseBinaryTree<S>,
-    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
-        // Ensure both trees have the same number of elements
-        if self.packed_indices.len() != rhs.packed_indices.len() {
-            panic!("Trees must have the same number of elements to zip.");
-        }
-    
-        let mut result = Vec::new();
-    
-        for i in 0..self.packed_indices.len() {
-            let lhs_idx = self.packed_indices[i];
-            let rhs_idx = rhs.packed_indices[i];
-    
-            if lhs_idx == rhs_idx {
-                // SAFETY: We know `i` is in bounds due to the length check above.
-                let lhs_value = &mut self.packed_buckets[i] as *mut T;
-                let rhs_value = &mut rhs.packed_buckets[i] as *mut S;
-    
-                unsafe {
-                    result.push((
-                        Some(&mut *lhs_value),
-                        Some(&mut *rhs_value),
-                        Path::from(lhs_idx),
-                    ));
-                }
-            } else {
-                // The indices don't match, this case shouldn't happen given the assumption
-                panic!("Indices don't match in the same-length trees.");
-            }
-        }
-    
-        result
-    }    
+    }   
 
     pub fn zip_with_binary_tree<S: Clone>(
         &self,
