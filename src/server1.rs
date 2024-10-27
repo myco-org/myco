@@ -9,6 +9,7 @@ use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -144,8 +145,10 @@ impl Server1 {
         // Measure processing of buckets and metadata
         let message_queue: DashMap<usize, Vec<(Block, Key, u64, Path)>> = DashMap::new();
         let bucket_processing_start = Instant::now();
-        self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
-            |(bucket, metadata_bucket, _)| {
+        self.p
+            .zip_with_binary_tree(&self.metadata)
+            .par_iter()
+            .for_each(|(bucket, metadata_bucket, _)| {
                 if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
@@ -163,13 +166,12 @@ impl Server1 {
                         }
                     });
                 }
-            },
-        );
+            });
 
         // This enumerated index doesn't match the index inside of the message queue.
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .iter_mut()
+            .par_iter_mut()
             .enumerate()
             .for_each(|(idx, (bucket, metadata_bucket, _))| {
                 // Get the original index in the p and metadata tree from the index in pt.
@@ -204,7 +206,7 @@ impl Server1 {
         let pt_processing_start = Instant::now();
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .iter_mut()
+            .par_iter_mut()
             .try_for_each(|(bucket, metadata_bucket, path)| {
                 let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
                 let metadata_bucket: &mut Metadata = metadata_bucket
