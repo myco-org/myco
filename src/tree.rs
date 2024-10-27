@@ -1,6 +1,6 @@
 use std::{
     cmp::max,
-    fmt::{self, Debug}, fs::File, io::{Read, Write},
+    fmt::{self, Debug}, fs::File, io::{Read, Write}, sync::RwLock,
 };
 
 use aes_gcm::aead::Buffer;

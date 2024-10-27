@@ -172,64 +172,67 @@ impl Server1 {
 
         // Measure processing of pt and metadata_pt
         let pt_processing_start = Instant::now();
-        // // Adds dummy blocks to fill out buckets that are not filled and then reshuffles the blocks inside of a bucket.
-        
-        // self.pt.packed_buckets.par_iter_mut().zip(self.metadata_pt.packed_buckets.par_iter_mut()).try_for_each(|(bucket, metadata_bucket)| {
-        //     (bucket.len()..Z).for_each(|_| {
-        //         bucket.push(Block::new_random());
-        //     });
-        //     (metadata_bucket.len()..Z).for_each(|_| {
-        //         metadata_bucket.push(Path::default(), Key::new(vec![]), 0);
-        //     });
 
-        //     assert_eq!(
-        //         bucket.len(),
-        //         Z,
-        //         "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-        //         self.epoch,
-        //         bucket.len(),
-        //         Z
-        //     );
-        //     assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+        // Adds dummy blocks to fill out buckets that are not filled and then reshuffles the blocks inside of a bucket.
+        // Note: Using parallelism here isn't that effective because the amount of time in each loop is quite small, so Rayon introduces a lot of overhead.
+        self.pt.packed_indices.iter().enumerate().for_each(|(i, _full_tree_idx)| {
+            let bucket = &mut self.pt.packed_buckets[i];
+            let metadata_bucket = &mut self.metadata_pt.packed_buckets[i];
 
-        //     let mut rng1 = ChaCha20Rng::from_seed(seed);
-        //     let mut rng2 = ChaCha20Rng::from_seed(seed);
-        //     bucket.shuffle(&mut rng1);
-        //     metadata_bucket.shuffle(&mut rng2);
-        //     Ok(())
-        // })?;
+            (bucket.len()..Z).for_each(|_| {
+                bucket.push(Block::new_random());
+            });
+            (metadata_bucket.len()..Z).for_each(|_| {
+                metadata_bucket.push(Path::default(), Key::new(vec![]), 0);
+            });
 
-        self.pt
-            .zip_mut(&mut self.metadata_pt)
-            .iter_mut()
-            .try_for_each(|(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
-                    .as_mut()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
-                (bucket.len()..Z).for_each(|_| {
-                    bucket.push(Block::new_random());
-                });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-                });
+            assert_eq!(
+                bucket.len(),
+                Z,
+                "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                self.epoch,
+                bucket.len(),
+                Z
+            );
+            assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
 
-                assert_eq!(
-                    bucket.len(),
-                    Z,
-                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                    self.epoch,
-                    bucket.len(),
-                    Z
-                );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+            let mut rng1 = ChaCha20Rng::from_seed(seed);
+            let mut rng2 = ChaCha20Rng::from_seed(seed);
+            bucket.shuffle(&mut rng1);
+            metadata_bucket.shuffle(&mut rng2);
+        });
 
-                let mut rng1 = ChaCha20Rng::from_seed(seed);
-                let mut rng2 = ChaCha20Rng::from_seed(seed);
-                bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
-                Ok(())
-            })?;
+        // self.pt
+        //     .zip_mut(&mut self.metadata_pt)
+        //     .iter_mut()  
+        //     .try_for_each(|(bucket, metadata_bucket, path)| {
+        //         let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
+        //         let metadata_bucket: &mut Metadata = metadata_bucket
+        //             .as_mut()
+        //             .ok_or(OramError::MetadataBucketNotFound)?;
+        //         (bucket.len()..Z).for_each(|_| {
+        //             bucket.push(Block::new_random());
+        //         });
+        //         (metadata_bucket.len()..Z).for_each(|_| {
+        //             metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
+        //         });
+
+        //         assert_eq!(
+        //             bucket.len(),
+        //             Z,
+        //             "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+        //             self.epoch,
+        //             bucket.len(),
+        //             Z
+        //         );
+        //         assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+        //         let mut rng1 = ChaCha20Rng::from_seed(seed);
+        //         let mut rng2 = ChaCha20Rng::from_seed(seed);
+        //         bucket.shuffle(&mut rng1);
+        //         metadata_bucket.shuffle(&mut rng2);
+        //         Ok(())
+        //     })?;
         let pt_processing_duration = pt_processing_start.elapsed();
         println!(
             "PT and metadata_pt processing time: {:?}",
