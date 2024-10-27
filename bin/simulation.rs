@@ -60,7 +60,7 @@ fn main() {
 
         // Measure write latency
         let write_start_time = std::time::Instant::now();
-        clients.par_iter_mut().for_each(|client| {
+        clients.iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             if let Err(e) = client.write(&message, &key) {
                 panic!("Write failed in epoch {}: {:?}", epoch, e);
