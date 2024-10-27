@@ -22,7 +22,6 @@ pub(crate) enum Command {
     Server2Read(ReadType),
 }
 
-
 pub(crate) trait Local {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError>;
 }

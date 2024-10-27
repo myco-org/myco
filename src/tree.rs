@@ -1,6 +1,8 @@
 use std::{
     cmp::max,
-    fmt::{self, Debug}, fs::File, io::{Read, Write},
+    fmt::{self, Debug},
+    fs::File,
+    io::{Read, Write},
 };
 
 use aes_gcm::aead::Buffer;
@@ -180,11 +182,14 @@ impl<T: TreeValue> BinaryTree<T> {
         }
 
         // Iterate over the sparse tree and copy its values into the binary tree at the corresponding indices
-        for (bucket, &index) in sparse_tree.packed_buckets.iter().zip(&sparse_tree.packed_indices) {
+        for (bucket, &index) in sparse_tree
+            .packed_buckets
+            .iter()
+            .zip(&sparse_tree.packed_indices)
+        {
             self.value[index] = Some(bucket.clone());
         }
     }
-    
 
     pub fn zip<S: Clone>(&self, rhs: &BinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
         let len = max(self.value.len(), rhs.value.len());
@@ -231,7 +236,6 @@ impl<T: TreeValue> BinaryTree<T> {
             })
             .collect()
     }
-
 }
 
 impl fmt::Display for BinaryTree<Bucket> {
@@ -253,8 +257,8 @@ impl fmt::Display for BinaryTree<Bucket> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SparseBinaryTree<T> {
-    pub packed_buckets: Vec<T>,  // List of non-None buckets
-    pub packed_indices: Vec<usize>,     // Indices corresponding to these buckets
+    pub packed_buckets: Vec<T>,     // List of non-None buckets
+    pub packed_indices: Vec<usize>, // Indices corresponding to these buckets
 }
 
 impl<T> SparseBinaryTree<T>
@@ -298,7 +302,7 @@ where
         }
         self.get_by_index(idx)
     }
-    
+
     // Retrieve the value at the given path in a sparse binary tree
     pub fn get_index(&self, path: &Path) -> usize {
         let mut idx = 1; // Start at the root
@@ -307,7 +311,6 @@ where
         }
         idx
     }
-    
 
     // Retrieves value by index
     pub fn get_by_index(&self, index: usize) -> Option<&T> {
@@ -322,7 +325,7 @@ where
         self.packed_indices
             .iter()
             .position(|&i| i == index)
-            .map(move |pos| &mut self.packed_buckets[pos])  // Returns mutable reference
+            .map(move |pos| &mut self.packed_buckets[pos]) // Returns mutable reference
     }
 
     // Write a value into the sparse tree at the specified path
@@ -340,7 +343,7 @@ where
     pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1; // Start at the root
-    
+
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if self.get_by_index(next_idx).is_none() {
@@ -351,10 +354,10 @@ where
             idx = next_idx;
             current_path.push(direction);
         }
-    
+
         self.get_by_index_mut(idx) // Get mutable reference at the end
             .map(|value| (value, current_path.clone()))
-    }    
+    }
 
     // // Overwrite the sparse binary tree with another one
     // pub fn overwrite(&mut self, other: &SparseBinaryTree<T>) {
@@ -364,10 +367,7 @@ where
     // }
 
     // Zips two sparse binary trees together
-    pub fn zip<S: Clone>(
-        &self,
-        rhs: &SparseBinaryTree<S>,
-    ) -> Vec<(Option<T>, Option<S>, Path)> {
+    pub fn zip<S: Clone>(&self, rhs: &SparseBinaryTree<S>) -> Vec<(Option<T>, Option<S>, Path)> {
         let mut results = Vec::new();
 
         let max_len = self.packed_indices.len().max(rhs.packed_indices.len());
@@ -393,18 +393,18 @@ where
         if self.packed_indices.len() != rhs.packed_indices.len() {
             panic!("Trees must have the same number of elements to zip.");
         }
-    
+
         let mut result = Vec::new();
-    
+
         for i in 0..self.packed_indices.len() {
             let lhs_idx = self.packed_indices[i];
             let rhs_idx = rhs.packed_indices[i];
-    
+
             if lhs_idx == rhs_idx {
                 // SAFETY: We know `i` is in bounds due to the length check above.
                 let lhs_value = &mut self.packed_buckets[i] as *mut T;
                 let rhs_value = &mut rhs.packed_buckets[i] as *mut S;
-    
+
                 unsafe {
                     result.push((
                         Some(&mut *lhs_value),
@@ -417,37 +417,36 @@ where
                 panic!("Indices don't match in the same-length trees.");
             }
         }
-    
+
         result
-    }    
+    }
 
     pub fn zip_with_binary_tree<S: Clone>(
         &self,
         rhs: &BinaryTree<S>,
     ) -> Vec<(Option<T>, Option<S>, Path)> {
         let mut results = Vec::new();
-    
+
         // Iterate only over the indices in the sparse binary tree
         for (i, &index) in self.packed_indices.iter().enumerate() {
-            let lhs_bucket = self.packed_buckets.get(i).cloned();  // Get the value from the sparse tree
-    
+            let lhs_bucket = self.packed_buckets.get(i).cloned(); // Get the value from the sparse tree
+
             // Get the corresponding value from the normal binary tree
             let rhs_bucket = if index < rhs.value.len() {
                 rhs.value[index].clone()
             } else {
                 None
             };
-    
+
             // Create a Path from the current index
             let path = Path::from(index);
-    
+
             // Add the zipped result to the results vector
             results.push((lhs_bucket, rhs_bucket, path));
         }
-    
+
         results
     }
-
 }
 
 #[derive(Serialize, Deserialize)]
@@ -465,18 +464,23 @@ pub struct DBStateParams {
     pub timestamp: u64,
 }
 
-
 /// Serialize the trees into a file.
-/// 
+///
 /// State is saved in the format state_{bucket_size}_{num_iters}_{depth}_{num_clients}.bin to db/
-pub fn serialize_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata>, params: &DBStateParams) {
+pub fn serialize_trees(
+    tree: &BinaryTree<Bucket>,
+    metadata: &BinaryTree<Metadata>,
+    params: &DBStateParams,
+) {
     let db_state = DBState {
         tree: tree.clone(),
         metadata: metadata.clone(),
     };
     let serialized_db_state = bincode::serialize(&db_state).unwrap();
-    let dir_path = format!("db/state_{}_{}_{}_{}",
-        params.bucket_size, params.num_iters, params.depth, params.num_clients);
+    let dir_path = format!(
+        "db/state_{}_{}_{}_{}",
+        params.bucket_size, params.num_iters, params.depth, params.num_clients
+    );
     std::fs::create_dir_all(&dir_path).unwrap();
     let file_path = format!("{}/{}.bin", dir_path, params.timestamp);
     let mut file = File::create(file_path).unwrap();
@@ -485,7 +489,11 @@ pub fn serialize_trees(tree: &BinaryTree<Bucket>, metadata: &BinaryTree<Metadata
 
 /// Deserialize the trees from a file.
 pub fn deserialize_trees(params: &DBStateParams) -> (BinaryTree<Bucket>, BinaryTree<Metadata>) {
-    let mut file = File::open(format!("db/state_{}_{}_{}_{}/{}.bin", params.bucket_size, params.num_iters, params.depth, params.num_clients, params.timestamp)).unwrap();
+    let mut file = File::open(format!(
+        "db/state_{}_{}_{}_{}/{}.bin",
+        params.bucket_size, params.num_iters, params.depth, params.num_clients, params.timestamp
+    ))
+    .unwrap();
     let mut buffer = Vec::new();
     file.read_to_end(&mut buffer).unwrap();
 

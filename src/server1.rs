@@ -8,9 +8,9 @@ use bincode::{deserialize, serialize};
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use std::collections::HashSet;
 
 pub struct Server1 {
     pub epoch: u64,
@@ -34,13 +34,11 @@ impl Local for Server1 {
                 }
                 Ok(vec![])
             }
-            Command::Server2Read(read_type) => {
-                match read_type {
-                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
-                }
-            }
+            Command::Server2Read(read_type) => match read_type {
+                ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
+                ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
+                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+            },
             Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
         }
     }
@@ -65,19 +63,31 @@ impl Server1 {
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
-        
+
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(paths);
 
-        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::ReadPaths(self.pathset_indices.clone()))).unwrap()).unwrap();
-        let buckets: Vec<Bucket> = deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap();
-        
+        let bytes = self
+            .send(
+                &serialize(&Command::Server2Read(ReadType::ReadPaths(
+                    self.pathset_indices.clone(),
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+        let buckets: Vec<Bucket> = deserialize(&bytes)
+            .map_err(|_| OramError::SerializationFailed)
+            .unwrap();
+
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
-        self.pt = SparseBinaryTree::new_with_data(vec![Bucket::default(); bucket_size], self.pathset_indices.clone());
-        
+        self.pt = SparseBinaryTree::new_with_data(
+            vec![Bucket::default(); bucket_size],
+            self.pathset_indices.clone(),
+        );
+
         self.metadata_pt = SparseBinaryTree::new_with_data(
             vec![Metadata::default(); bucket_size],
             self.pathset_indices.clone(),
@@ -202,13 +212,22 @@ impl Server1 {
 
         // Measure server lock and write time
         let server_write_start = Instant::now();
-        self.send(&serialize(&Command::Server2Write(WriteType::Write(self.pt.packed_buckets.clone()))).unwrap()).unwrap();
-        self.send(&serialize(&Command::Server2Write(WriteType::AddPrfKey(self.k_s1_t.clone()))).unwrap()).unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::Write(
+                self.pt.packed_buckets.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        self.send(
+            &serialize(&Command::Server2Write(WriteType::AddPrfKey(
+                self.k_s1_t.clone(),
+            )))
+            .unwrap(),
+        )
+        .unwrap();
         let server_write_duration = server_write_start.elapsed();
-        println!(
-            "Server2 overwrite time: {:?}",
-            server_write_duration
-        );
+        println!("Server2 overwrite time: {:?}", server_write_duration);
 
         // Increment epoch
         self.epoch += 1;

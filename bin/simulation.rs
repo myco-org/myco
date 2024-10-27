@@ -1,12 +1,20 @@
-use std::{process::Command, sync::{Arc, Mutex}};
-use myco_rs::{server2::Server2, server1::Server1, constants::{DELTA, NUM_WRITES_PER_EPOCH}, dtypes::Key};
+use myco_rs::{
+    constants::{DELTA, NUM_WRITES_PER_EPOCH},
+    dtypes::Key,
+    server1::Server1,
+    server2::Server2,
+};
 use rand::{Rng, SeedableRng};
+use std::{
+    process::Command,
+    sync::{Arc, Mutex},
+};
 
 fn main() {
     use rand_chacha::ChaCha20Rng;
 
-    use std::time::Duration;
     use myco_rs::*;
+    use std::time::Duration;
 
     let num_clients = NUM_WRITES_PER_EPOCH;
     let num_epochs = DELTA;

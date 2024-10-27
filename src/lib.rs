@@ -6,21 +6,21 @@ use network::{Command, Local, ReadType, WriteType};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
-use tree::BinaryTree;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
     sync::{Arc, Mutex},
 };
+use tree::BinaryTree;
 
 // Add module declarations
 pub mod constants;
 pub mod dtypes;
 mod error;
+mod network;
 pub mod server1;
 pub mod server2;
 mod tree;
-mod network;
 
 // Import constants and server modules
 use constants::*;
@@ -137,29 +137,24 @@ impl Local for Client {
                 self.s1.lock().unwrap().write(ct, f, k_oram_t, cs)?;
                 Ok(vec![])
             }
-            Command::Server2Write(write_type) => {
-                match write_type {
-                    WriteType::Write(buckets) => {
-                        self.s2.lock().unwrap().write(buckets);
-                        Ok(vec![])
-                    }
-                    WriteType::AddPrfKey(key) => {
-                        self.s2.lock().unwrap().add_prf_key(&key);
-                        Ok(vec![])
-                    }
+            Command::Server2Write(write_type) => match write_type {
+                WriteType::Write(buckets) => {
+                    self.s2.lock().unwrap().write(buckets);
+                    Ok(vec![])
                 }
-            }
-            Command::Server2Read(read_type) => {
-                match read_type {
-                    ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                    ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                    ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+                WriteType::AddPrfKey(key) => {
+                    self.s2.lock().unwrap().add_prf_key(&key);
+                    Ok(vec![])
                 }
-            }
+            },
+            Command::Server2Read(read_type) => match read_type {
+                ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
+                ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
+                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+            },
         }
     }
 }
-
 
 impl Client {
     pub fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
@@ -198,7 +193,8 @@ impl Client {
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap()).unwrap();
+        self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap())
+            .unwrap();
         Ok(())
     }
 
@@ -213,7 +209,10 @@ impl Client {
 
         let f = prf(&k_prf, &epoch.to_be_bytes());
 
-        let keys: Vec<Key> = deserialize(&self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
+        let keys: Vec<Key> = deserialize(
+            &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?,
+        )
+        .map_err(|_| OramError::SerializationFailed)?;
 
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
 
@@ -223,7 +222,10 @@ impl Client {
         let l_path = Path::from(l);
 
         // 3: p ← S2.Read(ℓ)
-        let path: Vec<Bucket> = deserialize(&self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?).map_err(|_| OramError::SerializationFailed)?;
+        let path: Vec<Bucket> = deserialize(
+            &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?,
+        )
+        .map_err(|_| OramError::SerializationFailed)?;
 
         // 4: for block ∈ p do
         for bucket in path {
@@ -244,7 +246,8 @@ impl Client {
         let k_oram_t = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs = self.id.clone().into_bytes();
-        self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap()).unwrap();
+        self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap())
+            .unwrap();
         Ok(())
     }
 
@@ -253,19 +256,28 @@ impl Client {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        let bytes = self.send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap()).unwrap();
-        deserialize(&bytes).map_err(|_| OramError::SerializationFailed).unwrap()
+        let bytes = self
+            .send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap())
+            .unwrap();
+        deserialize(&bytes)
+            .map_err(|_| OramError::SerializationFailed)
+            .unwrap()
     }
 }
 
 /// Helper function to calculate the bucket usage of the server.
-pub fn calculate_bucket_usage(server2_tree: &BinaryTree<Bucket>, metadata_tree: &BinaryTree<Metadata>, k_msg: &[u8]) -> (usize, usize, f64, f64, f64) {
+pub fn calculate_bucket_usage(
+    server2_tree: &BinaryTree<Bucket>,
+    metadata_tree: &BinaryTree<Metadata>,
+    k_msg: &[u8],
+) -> (usize, usize, f64, f64, f64) {
     let mut bucket_usage = Vec::new();
     let mut total_messages = 0;
     let mut max_usage = 0;
     let mut max_depth = 0;
 
-    server2_tree.zip(metadata_tree)
+    server2_tree
+        .zip(metadata_tree)
         .into_iter()
         .for_each(|(bucket, metadata_bucket, path)| {
             if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
@@ -302,14 +314,19 @@ pub fn calculate_bucket_usage(server2_tree: &BinaryTree<Bucket>, metadata_tree: 
     };
 
     // Calculate standard deviation
-    let variance = bucket_usage.iter()
+    let variance = bucket_usage
+        .iter()
         .map(|&x| {
             let diff = x as f64 - average_usage;
             diff * diff
         })
-        .sum::<f64>() / total_buckets as f64;
+        .sum::<f64>()
+        / total_buckets as f64;
     let std_dev = variance.sqrt();
-    println!("Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}", max_usage, max_depth, average_usage, median_usage, std_dev);
+    println!(
+        "Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}",
+        max_usage, max_depth, average_usage, median_usage, std_dev
+    );
     (max_usage, max_depth, average_usage, median_usage, std_dev)
 }
 
@@ -394,7 +411,10 @@ mod util_tests {
 }
 
 mod e2e_tests {
-    use std::{fs::File, io::{Read, Write}};
+    use std::{
+        fs::File,
+        io::{Read, Write},
+    };
 
     use rand::RngCore;
     use tree::{deserialize_trees, serialize_trees, BinaryTree, DBStateParams};
@@ -589,7 +609,6 @@ mod e2e_tests {
             "Read message doesn't match the written message from this epoch"
         );
 
-
         // Epoch 2: Alice writes again but reads the message from epoch 1
         s1.lock().unwrap().batch_init(1);
 
@@ -632,10 +651,13 @@ mod e2e_tests {
         bob.setup(&key_bob_to_alice).expect("Bob setup failed");
 
         let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-        alice.write(&alice_msg_epoch1, &key_alice_to_bob).expect("Alice write failed");
+        alice
+            .write(&alice_msg_epoch1, &key_alice_to_bob)
+            .expect("Alice write failed");
 
         let bob_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-        bob.write(&bob_msg_epoch1, &key_bob_to_alice).expect("Bob write failed");
+        bob.write(&bob_msg_epoch1, &key_bob_to_alice)
+            .expect("Bob write failed");
 
         s1.lock().unwrap().batch_write();
 
@@ -643,10 +665,13 @@ mod e2e_tests {
         s1.lock().unwrap().batch_init(2);
 
         let alice_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-        alice.write(&alice_msg_epoch2, &key_alice_to_bob).expect("Alice write failed in epoch 2");
+        alice
+            .write(&alice_msg_epoch2, &key_alice_to_bob)
+            .expect("Alice write failed in epoch 2");
 
         let bob_msg_epoch2: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-        bob.write(&bob_msg_epoch2, &key_bob_to_alice).expect("Bob write failed in epoch 2");
+        bob.write(&bob_msg_epoch2, &key_bob_to_alice)
+            .expect("Bob write failed in epoch 2");
 
         s1.lock().unwrap().batch_write();
 
@@ -752,7 +777,7 @@ mod e2e_tests {
 
         let num_epochs = DELTA as usize;
         let num_clients = 1;
-        
+
         // Create a vector of unique messages and keys
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
@@ -771,7 +796,10 @@ mod e2e_tests {
 
         // Verify the messages
         let mut decrypted_messages = Vec::new();
-        let _ = server2.lock().unwrap().tree
+        let _ = server2
+            .lock()
+            .unwrap()
+            .tree
             .zip(&server1.lock().unwrap().metadata)
             .into_iter()
             .try_for_each(|(bucket, metadata_bucket, _path)| {
@@ -781,16 +809,16 @@ mod e2e_tests {
                         .as_ref()
                         .ok_or(OramError::MetadataBucketNotFound)
                         .and_then(|metadata_bucket| {
-                        let (_l, k_oram_t, t_exp) = metadata_bucket
-                            .get(b)
-                            .ok_or(OramError::MetadataIndexError(b))?;
+                            let (_l, k_oram_t, t_exp) = metadata_bucket
+                                .get(b)
+                                .ok_or(OramError::MetadataIndexError(b))?;
                             let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
                             if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
                                 if let Ok(decrypted) = decrypt(&k_msg, &ct) {
                                     decrypted_messages.push(trim_zeros(&decrypted));
                                 }
                             }
-                        Ok(())
+                            Ok(())
                         })
                 })
             });
@@ -803,10 +831,16 @@ mod e2e_tests {
             }
         }
 
-        assert_eq!(found_messages, num_epochs * num_clients, 
-            "Not all original messages were found in the decrypted messages");
-        assert_eq!(decrypted_messages.len(), num_epochs * num_clients, 
-            "Number of decrypted messages doesn't match the expected count");
+        assert_eq!(
+            found_messages,
+            num_epochs * num_clients,
+            "Not all original messages were found in the decrypted messages"
+        );
+        assert_eq!(
+            decrypted_messages.len(),
+            num_epochs * num_clients,
+            "Number of decrypted messages doesn't match the expected count"
+        );
     }
 
     #[test]
@@ -833,18 +867,34 @@ mod e2e_tests {
         let k_oram_t = kdf(k_oram, &epoch.to_string()).unwrap();
         let ct = encrypt(k_msg, &message, EncryptionType::Encrypt).unwrap();
         client.epoch += 1;
-        client.s1.lock().unwrap().write(ct, f.clone(), Key::new(k_oram_t), cs.clone()).expect("Initial write failed");
+        client
+            .s1
+            .lock()
+            .unwrap()
+            .write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
+            .expect("Initial write failed");
         let k_s1_t = server1.lock().unwrap().k_s1_t.0.clone();
-        let l = prf(k_s1_t.as_slice(), &[f.clone().as_slice(), cs.clone().as_slice()].concat());
+        let l = prf(
+            k_s1_t.as_slice(),
+            &[f.clone().as_slice(), cs.clone().as_slice()].concat(),
+        );
         let intended_path = Path::from(l);
 
-        server1.lock().unwrap().batch_write().expect("Initial batch write failed");
+        server1
+            .lock()
+            .unwrap()
+            .batch_write()
+            .expect("Initial batch write failed");
 
         let mut pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
 
         // Function to verify message at LCA
         let verify_message_at_lca = |lca_bucket: &Bucket, lca_path: &Path| {
-            let metadata_bucket = server1.lock().unwrap().metadata.get(lca_path)
+            let metadata_bucket = server1
+                .lock()
+                .unwrap()
+                .metadata
+                .get(lca_path)
                 .expect("Metadata not found at LCA");
             let mut found = false;
             for b in 0..lca_bucket.len() {
@@ -852,7 +902,8 @@ mod e2e_tests {
                     .get(b)
                     .ok_or(OramError::MetadataIndexError(b))
                     .expect("Failed to get metadata");
-                let c_msg = lca_bucket.get(b)
+                let c_msg = lca_bucket
+                    .get(b)
                     .ok_or(OramError::BucketIndexError(b))
                     .expect("Failed to get bucket item");
                 if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
@@ -869,12 +920,14 @@ mod e2e_tests {
             found
         };
 
-        let (lca_bucket, lca_path) = pathset.lca(&intended_path)
-        .expect("LCA not found");
+        let (lca_bucket, lca_path) = pathset.lca(&intended_path).expect("LCA not found");
 
         // Verify message at LCA
-        assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
-        "Message not found at LCA in epoch {}", epoch);
+        assert!(
+            verify_message_at_lca(&lca_bucket, &lca_path),
+            "Message not found at LCA in epoch {}",
+            epoch
+        );
 
         let mut latest_index = server2.lock().unwrap().tree.get_index(&lca_path);
         let mut times_relocated = 0;
@@ -882,24 +935,31 @@ mod e2e_tests {
 
         // Trace message movement over epochs
         for epoch in 1..num_epochs {
-
             // Perform batch_init
             server1.lock().unwrap().batch_init(1);
 
             // Perform batch_write
-            server1.lock().unwrap().batch_write().expect("Batch write failed");
+            server1
+                .lock()
+                .unwrap()
+                .batch_write()
+                .expect("Batch write failed");
 
-            let mut new_pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
+            let mut new_pathset: tree::SparseBinaryTree<Bucket> =
+                server1.lock().unwrap().pt.clone();
             if new_pathset.packed_indices.contains(&latest_index) {
-                let (lca_bucket, lca_path) = new_pathset.lca(&intended_path)
-                .expect("LCA not found");
+                let (lca_bucket, lca_path) =
+                    new_pathset.lca(&intended_path).expect("LCA not found");
 
                 let lca_path_length = lca_path.len();
                 lca_path_lengths.push(lca_path_length);
 
                 // Verify message at LCA
-                assert!(verify_message_at_lca(&lca_bucket, &lca_path), 
-                "Message not found at LCA in epoch {}", epoch);
+                assert!(
+                    verify_message_at_lca(&lca_bucket, &lca_path),
+                    "Message not found at LCA in epoch {}",
+                    epoch
+                );
 
                 latest_index = new_pathset.get_index(&lca_path);
                 times_relocated += 1;
@@ -917,28 +977,35 @@ mod e2e_tests {
         let server1 = Server1::new(server2.clone());
 
         let server1_metadata_serialized = bincode::serialize(&server1.metadata).unwrap();
-        let server1_metadata_deserialized: BinaryTree<Metadata> = bincode::deserialize(&server1_metadata_serialized).unwrap();
+        let server1_metadata_deserialized: BinaryTree<Metadata> =
+            bincode::deserialize(&server1_metadata_serialized).unwrap();
 
         let server2_tree_serialized = bincode::serialize(&server2.lock().unwrap().tree).unwrap();
-        let server2_tree_deserialized: BinaryTree<Bucket> = bincode::deserialize(&server2_tree_serialized).unwrap();
+        let server2_tree_deserialized: BinaryTree<Bucket> =
+            bincode::deserialize(&server2_tree_serialized).unwrap();
 
         assert_eq!(server1.metadata, server1_metadata_deserialized);
         assert_eq!(server2.lock().unwrap().tree, server2_tree_deserialized);
     }
 
     /// Helper function to test the execution of the protocol over a user-defined number of clients and epochs.
-    fn test_protocol_execution_with_params(s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>, num_clients: usize, num_epochs: usize){
+    fn test_protocol_execution_with_params(
+        s1: Arc<Mutex<Server1>>,
+        s2: Arc<Mutex<Server2>>,
+        num_clients: usize,
+        num_epochs: usize,
+    ) {
         let mut rng = ChaCha20Rng::from_entropy();
         let mut clients: Vec<Client> = Vec::new();
-    
+
         let mut k_msg: Vec<u8> = Vec::new();
         let key = Key::random(&mut rng);
         for i in 0..num_clients {
             let client_name = format!("Client_{}", i);
             let mut client = Client::new(client_name, s1.clone(), s2.clone());
-    
+
             client.setup(&key).expect("Setup failed");
-    
+
             clients.push(client);
         }
         k_msg = clients[0].keys.get(&key).unwrap().0.clone();
@@ -946,24 +1013,24 @@ mod e2e_tests {
         // Perform multiple epochs
         for epoch in 0..num_epochs {
             println!("Starting epoch: {}", epoch);
-    
+
             s1.lock().unwrap().batch_init(num_clients);
-    
+
             for client in clients.iter_mut() {
                 let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
                 if let Err(e) = client.write(&message, &key) {
                     panic!("Write failed in epoch {}: {:?}", epoch, e);
                 }
             }
-    
+
             s1.lock().unwrap().batch_write();
-    
+
             for client in clients.iter() {
                 let _: Vec<u8> = client
                     .read(&key, client.id.clone(), 0)
                     .expect(&format!("Read failed in epoch {}", epoch));
             }
-            }
+        }
     }
 
     #[test]
@@ -971,14 +1038,19 @@ mod e2e_tests {
     /// Tests the execution of the protocol, then serializes the protocol mid-execution, serializes it and reloads it back into S1 and S2.
     fn test_create_serialized_full_db() {
         use super::*;
-    
+
         let num_clients = NUM_WRITES_PER_EPOCH;
         let num_epochs = DELTA;
-    
+
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-    
-        test_protocol_execution_with_params(s1.clone(), s2.clone(), num_clients, num_epochs as usize);
+
+        test_protocol_execution_with_params(
+            s1.clone(),
+            s2.clone(),
+            num_clients,
+            num_epochs as usize,
+        );
 
         let state_params = DBStateParams {
             bucket_size: Z,
@@ -991,9 +1063,14 @@ mod e2e_tests {
                 .as_secs(),
         };
 
-        serialize_trees(&s2.lock().unwrap().tree, &s1.lock().unwrap().metadata, &state_params);
+        serialize_trees(
+            &s2.lock().unwrap().tree,
+            &s1.lock().unwrap().metadata,
+            &state_params,
+        );
 
-        let (server2_tree_deserialized, server1_metadata_deserialized) = deserialize_trees(&state_params);
+        let (server2_tree_deserialized, server1_metadata_deserialized) =
+            deserialize_trees(&state_params);
 
         // Assert that the deserialized server 1 metadata and the server 2 tree are the same as the original ones.
         assert_eq!(s1.lock().unwrap().metadata, server1_metadata_deserialized);
@@ -1004,5 +1081,4 @@ mod e2e_tests {
 
         test_protocol_execution_with_params(s1, s2, num_clients, num_epochs as usize);
     }
-
 }
