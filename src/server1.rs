@@ -61,6 +61,7 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
+        println!("Metadata tree: {:?}", self.metadata);
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
@@ -193,7 +194,7 @@ impl Server1 {
             .zip_mut(&mut self.metadata_pt)
             .iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, path))| {
+            .for_each(|(idx, (bucket, metadata_bucket, intended_message_path))| {
                 // Search the packed indices to get
                 let original_idx = self.pathset_indices[idx];
                 if let Some(buckets) = message_queue.get(&original_idx) {
@@ -207,9 +208,13 @@ impl Server1 {
                                 bucket.push(Block::new(c_msg));
                             }
 
-                            println!("About to push to path {:?}", path);
+                            println!("About to push to path {:?}", intended_message_path);
                             if let Some(metadata_bucket) = metadata_bucket.as_mut() {
-                                metadata_bucket.push(path.clone(), k_oram_t.clone(), *t_exp);
+                                metadata_bucket.push(
+                                    intended_message_path.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                );
                             }
                         }
                     }
