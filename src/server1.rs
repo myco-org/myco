@@ -61,7 +61,6 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-        println!("Metadata tree: {:?}", self.metadata);
         println!("=== Starting Epoch {:?} ===", self.epoch);
 
         let mut rng = ChaCha20Rng::from_entropy();
@@ -141,32 +140,9 @@ impl Server1 {
 
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
-        // self.p
-        //     .zip_with_binary_tree(&self.metadata)
-        //     .iter()
-        //     .try_for_each(|(bucket, metadata_bucket, _)| {
-        //         let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-        //         (0..bucket.len()).try_for_each(|b| {
-        //             metadata_bucket
-        //                 .as_ref()
-        //                 .ok_or(OramError::MetadataBucketNotFound)
-        //                 .and_then(|metadata_bucket| {
-        //                     let (l, k_oram_t, t_exp) = metadata_bucket
-        //                         .get(b)
-        //                         .ok_or(OramError::MetadataIndexError(b))?;
-        //                     if self.epoch < *t_exp {
-        //                         let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-        //                         if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-        //                             self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-        //                         }
-        //                     }
-        //                     Ok(())
-        //                 })
-        //         })
-        //     })?;
 
         // Measure processing of buckets and metadata
-        let message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        let message_queue: DashMap<usize, Vec<(Block, Key, u64, Path)>> = DashMap::new();
         let bucket_processing_start = Instant::now();
         self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
             |(bucket, metadata_bucket, _)| {
@@ -181,6 +157,7 @@ impl Server1 {
                                     c_msg.clone(),
                                     k_oram_t.clone(),
                                     *t_exp,
+                                    l.clone(),
                                 ));
                             }
                         }
@@ -194,11 +171,12 @@ impl Server1 {
             .zip_mut(&mut self.metadata_pt)
             .iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, intended_message_path))| {
-                // Search the packed indices to get
+            .for_each(|(idx, (bucket, metadata_bucket, _))| {
+                // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
+
                 if let Some(buckets) = message_queue.get(&original_idx) {
-                    for (block, k_oram_t, t_exp) in buckets.iter() {
+                    for (block, k_oram_t, t_exp, intended_message_path) in buckets.iter() {
                         if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
                             let c_msg = encrypt(&k_oram_t.0, &c_msg, EncryptionType::DoubleEncrypt)
                                 .map_err(|_| OramError::EncryptionFailed)
@@ -208,7 +186,6 @@ impl Server1 {
                                 bucket.push(Block::new(c_msg));
                             }
 
-                            println!("About to push to path {:?}", intended_message_path);
                             if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                                 metadata_bucket.push(
                                     intended_message_path.clone(),

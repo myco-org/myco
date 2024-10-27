@@ -152,9 +152,12 @@ impl From<usize> for Path {
     fn from(value: usize) -> Self {
         let mut directions = Vec::new();
         let mut value = value;
-        while value > 0 {
-            directions.push(Direction::from((value & 1) as u8));
-            value >>= 1;
+        if value > 1 {
+            value = value >> 1;
+            while value > 0 {
+                directions.push(Direction::from((value & 1) as u8));
+                value >>= 1;
+            }
         }
         Path(directions)
     }
