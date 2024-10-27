@@ -5,6 +5,7 @@ use crate::{
     EncryptionType, Key, Metadata, OramError, Path,
 };
 use bincode::{deserialize, serialize};
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -139,29 +140,80 @@ impl Server1 {
 
         // Measure processing of buckets and metadata
         let bucket_processing_start = Instant::now();
-        self.p
-            .zip_with_binary_tree(&self.metadata)
-            .iter()
-            .try_for_each(|(bucket, metadata_bucket, _)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
+        // self.p
+        //     .zip_with_binary_tree(&self.metadata)
+        //     .iter()
+        //     .try_for_each(|(bucket, metadata_bucket, _)| {
+        //         let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+        //         (0..bucket.len()).try_for_each(|b| {
+        //             metadata_bucket
+        //                 .as_ref()
+        //                 .ok_or(OramError::MetadataBucketNotFound)
+        //                 .and_then(|metadata_bucket| {
+        //                     let (l, k_oram_t, t_exp) = metadata_bucket
+        //                         .get(b)
+        //                         .ok_or(OramError::MetadataIndexError(b))?;
+        //                     if self.epoch < *t_exp {
+        //                         let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
+        //                         if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+        //                             self.insert_message(&ct, l, k_oram_t, *t_exp)?;
+        //                         }
+        //                     }
+        //                     Ok(())
+        //                 })
+        //         })
+        //     })?;
+
+        // Measure processing of buckets and metadata
+        let message_queue: DashMap<usize, Vec<(Block, Key, u64)>> = DashMap::new();
+        let bucket_processing_start = Instant::now();
+        self.p.zip_with_binary_tree(&self.metadata).iter().for_each(
+            |(bucket, metadata_bucket, _)| {
+                if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                    (0..bucket.len()).for_each(|b| {
+                        if let Some(metadata_block) = metadata_bucket.get(b) {
+                            let (l, k_oram_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                }
+                                let c_msg = bucket.get(b).unwrap();
+                                let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                message_queue.entry(lca_idx).or_default().push((
+                                    c_msg.clone(),
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                ));
                             }
-                            Ok(())
-                        })
-                })
-            })?;
+                        }
+                    });
+                }
+            },
+        );
+
+
+        // This enumerated index doesn't match the index inside of the message queue.
+        self.pt
+            .zip_mut(&mut self.metadata_pt)
+            .iter_mut()
+            .enumerate()
+            .for_each(|(idx, (bucket, metadata_bucket, path))| {
+                // Search the packed indices to get
+                let original_idx = self.pathset_indices[idx];
+                if let Some(buckets) = message_queue.get(&original_idx) {
+                    for (block, k_oram_t, t_exp) in buckets.iter() {
+                        if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
+                            let c_msg = encrypt(&k_oram_t.0, &c_msg, EncryptionType::DoubleEncrypt)
+                                .map_err(|_| OramError::EncryptionFailed)
+                                .unwrap();
+
+                            if let Some(bucket) = bucket.as_mut() {
+                                bucket.push(Block::new(c_msg));
+                            }
+                            if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                                metadata_bucket.push(path.clone(), k_oram_t.clone(), *t_exp);
+                            }
+                        }
+                    }
+                }
+            });
         let bucket_processing_duration = bucket_processing_start.elapsed();
         println!("Bucket processing time: {:?}", bucket_processing_duration);
 

@@ -579,7 +579,7 @@ mod e2e_tests {
     }
 
     #[test]
-    fn test_read_old_message_single_client() {
+    fn test_read_old_message_single_client_single_epoch() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
 
