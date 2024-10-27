@@ -60,8 +60,8 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-        println!("Metadata tree: {:?}", self.metadata);
         println!("=== Starting Epoch {:?} ===", self.epoch);
+        println!("Metadata tree: {:?}", self.metadata);
 
         let mut rng = ChaCha20Rng::from_entropy();
 
@@ -121,6 +121,7 @@ impl Server1 {
         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
             .map_err(|_| OramError::EncryptionFailed)?;
 
+        // This path here is incorrect given the depth of the tree.
         let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
         let mut metadata_bucket = self
             .metadata_pt
@@ -129,6 +130,9 @@ impl Server1 {
             .clone();
 
         bucket.push(Block::new(c_msg));
+
+        // The intended path of the message should always be less than D.
+        assert!(l.len() < D + 1);
         metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
         self.metadata_pt.write(metadata_bucket, path);
         Ok(())
@@ -180,6 +184,7 @@ impl Server1 {
                     bucket.push(Block::new_random());
                 });
                 (metadata_bucket.len()..Z).for_each(|_| {
+                    println!("Pushing to path in batch_write fill {:?}", path);
                     metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
                 });
 
@@ -230,6 +235,8 @@ impl Server1 {
         let server_write_duration = server_write_start.elapsed();
         println!("Server2 overwrite time: {:?}", server_write_duration);
 
+        println!("[End of Batch Write] Metadata tree: {:?}", self.metadata);
+        println!("[End of Batch Write] Metadata_PT: {:?}", self.metadata_pt);
         // Increment epoch
         self.epoch += 1;
 

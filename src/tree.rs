@@ -347,16 +347,26 @@ where
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
             if self.get_by_index(next_idx).is_none() {
-                return self
-                    .get_by_index_mut(idx) // Get mutable reference here
-                    .map(|value| (value, current_path.clone()));
+                let (value, path) = if let Some(value) = self.get_by_index_mut(idx) {
+                    (value, current_path.clone())
+                } else {
+                    return None;
+                };
+
+                println!("LCA Path is {:?}", path);
+                return Some((value, path));
             }
             idx = next_idx;
             current_path.push(direction);
         }
 
-        self.get_by_index_mut(idx) // Get mutable reference at the end
-            .map(|value| (value, current_path.clone()))
+        if let Some(value) = self.get_by_index_mut(idx) {
+            assert!(current_path.len() < 2);
+            println!("LCA Path is {:?}", current_path);
+            return Some((value, current_path.clone()));
+        }
+
+        None
     }
 
     // // Overwrite the sparse binary tree with another one
