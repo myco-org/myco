@@ -235,63 +235,32 @@ impl Client {
     }
 
     pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
-        use std::time::Instant;
-        let start_total = Instant::now();
-        
         // Use the passed epoch if available, otherwise default to self.epoch - 1
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
-
-        // Time KDF and key derivation
-        let start_key_derivation = Instant::now();
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
-        println!("Key derivation time: {:?}", start_key_derivation.elapsed());
-
-        // Time PRF computation
-        let start_prf = Instant::now();
         let f = prf(&k_prf, &epoch.to_be_bytes())?;
-        println!("PRF computation time: {:?}", start_prf.elapsed());
-
-        // Time getting PRF keys from server
-        let start_get_keys = Instant::now();
         let keys: Vec<Key> = deserialize(
             &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?,
         )
         .map_err(|_| OramError::SerializationFailed)?;
-        println!("Get PRF keys time: {:?}", start_get_keys.elapsed());
-
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
-
-        // Time path computation
-        let start_path_compute = Instant::now();
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);
-        println!("Path computation time: {:?}", start_path_compute.elapsed());
-
-        // Time server read operation
-        let start_server_read = Instant::now();
         let path: Vec<Bucket> = deserialize(
             &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?,
         )
         .map_err(|_| OramError::SerializationFailed)?;
-        println!("Server read time: {:?}", start_server_read.elapsed());
 
-        // Time decryption process
-        let start_decryption = Instant::now();
         for bucket in path {
             for block in bucket {
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
                     let result = decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
-                    println!("Decryption time: {:?}", start_decryption.elapsed());
-                    println!("Total read time: {:?}", start_total.elapsed());
                     return result;
                 }
             }
         }
-
-        println!("Decryption time (failed): {:?}", start_decryption.elapsed());
-        println!("Total read time (failed): {:?}", start_total.elapsed());
         Err(OramError::NoMessageFound)
     }
 
