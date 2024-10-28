@@ -111,7 +111,7 @@ impl Server1 {
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA as u64;
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let l_path = Path::from(l);
         self.insert_message(&ct, &l_path, &k_oram_t, t_exp)
     }
@@ -126,7 +126,7 @@ impl Server1 {
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
         let t_exp = self.epoch + DELTA as u64;
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
             .pt
@@ -230,33 +230,53 @@ impl Server1 {
                     }
                 }
 
-                // Insert new random blocks into the pt bucket and metadata_pt bucket.
+                // Insert blocks into the pt bucket and metadata_pt bucket.
                 if let Some(bucket) = bucket {
-                    let mut rng = ChaCha20Rng::from_seed(seed);
-                    (bucket.len()..Z).for_each(|_| {
-                        bucket.push(Block::new_random());
-                    });
+                    #[cfg(feature = "no-enc")]
+                    {
+                        // Just push the block, no padding or shuffling needed
+                    }
 
-                    assert_eq!(
-                        bucket.len(),
-                        Z,
-                        "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        let mut rng = ChaCha20Rng::from_seed(seed);
+                        // Add random padding blocks
+                        (bucket.len()..Z).for_each(|_| {
+                            bucket.push(Block::new_random());
+                        });
+
+                        bucket.shuffle(&mut rng);
+                    }
+                    assert!(
+                        bucket.len() <= Z,
+                        "Bucket length exceeds Z in epoch {}: bucket length={}, expected<={}",
                         self.epoch,
                         bucket.len(),
                         Z
                     );
-
-                    bucket.shuffle(&mut rng);
                 }
                 if let Some(metadata_bucket) = metadata_bucket {
-                    let mut rng = ChaCha20Rng::from_seed(seed);
-                    (metadata_bucket.len()..Z).for_each(|_| {
-                        metadata_bucket.push(bucket_path.clone(), Key::new(vec![]), 0);
-                    });
+                    #[cfg(feature = "no-enc")]
+                    {
+                        // Just push the metadata, no padding or shuffling needed
+                    }
 
-                    assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        let mut rng = ChaCha20Rng::from_seed(seed);
+                        // Add random padding metadata
+                        (metadata_bucket.len()..Z).for_each(|_| {
+                            metadata_bucket.push(bucket_path.clone(), Key::new(vec![]), 0);
+                        });
 
-                    metadata_bucket.shuffle(&mut rng);
+                        metadata_bucket.shuffle(&mut rng);
+                    }
+                    assert!(
+                        metadata_bucket.len() <= Z,
+                        "Metadata bucket length exceeds Z: bucket length={}, expected<={}",
+                        metadata_bucket.len(),
+                        Z
+                    );
                 }
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
