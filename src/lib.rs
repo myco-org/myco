@@ -37,10 +37,10 @@ use server1::Server1;
 use server2::Server2;
 
 // Key Derivation Function (KDF)
-fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, OramError> {
+fn kdf(key: &[u8], input: &str) -> Result<Vec<u8>, OramError> {
     let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
-    let binding = [info.as_bytes()];
+    let binding = [input.as_bytes()];
     let okm = prk
         .expand(&binding, hkdf::HKDF_SHA256)
         .map_err(|_| OramError::HkdfExpansionFailed)?;
@@ -52,16 +52,24 @@ fn kdf(key: &[u8], info: &str) -> Result<Vec<u8>, OramError> {
 
 // Pseudorandom Function (PRF)
 // Make this an arbitrary-length PRF
-fn prf(key: &[u8], input: &[u8]) -> Vec<u8> {
-    let mut result = vec![0u8; 32];
-    pbkdf2::derive(
-        pbkdf2::PBKDF2_HMAC_SHA256,
-        NonZeroU32::new(1000).unwrap(),
-        key,
-        input,
-        &mut result,
-    );
-    result
+fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, OramError> {
+    // Fixed output length of 32 bytes
+    let output_length = 32;
+
+    // Using a fixed salt for HKDF
+    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
+    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
+
+    // Use info directly as the context for HKDF expansion
+    let binding = [input];
+    let okm = prk
+        .expand(&binding, hkdf::HKDF_SHA256)
+        .map_err(|_| OramError::HkdfExpansionFailed)?;
+
+    // Allocate output buffer with fixed length of 32 bytes
+    let mut result = vec![0u8; output_length];
+    okm.fill(&mut result).map_err(|_| OramError::HkdfFillFailed)?;
+    Ok(result)
 }
 
 // Pad a message to the right with zeros
@@ -84,39 +92,58 @@ fn encrypt(
     message: &[u8],
     encryption_type: EncryptionType,
 ) -> Result<Vec<u8>, OramError> {
-    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::EncryptionFailed)?;
+    #[cfg(feature = "no-enc")]
+    {
+        // In no-enc mode, just pad the message and return it
+        return Ok(match encryption_type {
+            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
+        });
+    }
 
-    let binding = rand::thread_rng().gen::<[u8; 12]>();
-    let nonce = Nonce::from_slice(&binding); // 96-bits; unique per message
-    let mut buffer = match encryption_type {
-        EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE), // Fixed size buffer for message
-        EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE), // Fixed size buffer for message
-    };
+    #[cfg(not(feature = "no-enc"))]
+    {
+        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::EncryptionFailed)?;
+        let binding = rand::thread_rng().gen::<[u8; 12]>();
+        let nonce = Nonce::from_slice(&binding);
+        let mut buffer = match encryption_type {
+            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
+        };
 
-    cipher
-        .encrypt_in_place(nonce, b"", &mut buffer)
-        .map_err(|_| OramError::EncryptionFailed)?;
+        cipher
+            .encrypt_in_place(nonce, b"", &mut buffer)
+            .map_err(|_| OramError::EncryptionFailed)?;
 
-    // Prepend the nonce to the ciphertext to use during decryption
-    Ok([nonce.as_slice(), buffer.as_slice()].concat())
+        Ok([nonce.as_slice(), buffer.as_slice()].concat())
+    }
 }
 
 // Decrypt a ciphertext
 fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, OramError> {
-    if ciphertext.len() < 12 {
-        return Err(OramError::NoMessageFound);
+    #[cfg(feature = "no-enc")]
+    {
+        // In no-enc mode, just return the input
+        return Ok(ciphertext.to_vec());
     }
 
-    let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::NoMessageFound)?;
-    let (nonce, ciphertext) = ciphertext.split_at(12); // Extract nonce and ciphertext
-    let nonce = Nonce::from_slice(nonce);
-    let mut buffer = Vec::from(ciphertext);
+    #[cfg(not(feature = "no-enc"))]
+    {
+        if ciphertext.len() < 12 {
+            return Err(OramError::NoMessageFound);
+        }
 
-    cipher
-        .decrypt_in_place(nonce, b"", &mut buffer)
-        .map_err(|_| OramError::NoMessageFound)?;
+        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::NoMessageFound)?;
+        let (nonce, ciphertext) = ciphertext.split_at(12);
+        let nonce = Nonce::from_slice(nonce);
+        let mut buffer = Vec::from(ciphertext);
 
-    Ok(buffer)
+        cipher
+            .decrypt_in_place(nonce, b"", &mut buffer)
+            .map_err(|_| OramError::NoMessageFound)?;
+
+        Ok(buffer)
+    }
 }
 
 fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
@@ -192,7 +219,7 @@ impl Client {
         let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
 
         // 2: ℓ = PRF_kprf (t)
-        let f = prf(k_prf, &epoch.to_be_bytes());
+        let f = prf(k_prf, &epoch.to_be_bytes())?;
 
         // 3: koram,t = KDF(koram, t)
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
@@ -208,59 +235,78 @@ impl Client {
     }
 
     pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
+        use std::time::Instant;
+        let start_total = Instant::now();
+        
         // Use the passed epoch if available, otherwise default to self.epoch - 1
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
 
-        // 1: koram,t = KDF(koram, t)
+        // Time KDF and key derivation
+        let start_key_derivation = Instant::now();
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+        println!("Key derivation time: {:?}", start_key_derivation.elapsed());
 
-        let f = prf(&k_prf, &epoch.to_be_bytes());
+        // Time PRF computation
+        let start_prf = Instant::now();
+        let f = prf(&k_prf, &epoch.to_be_bytes())?;
+        println!("PRF computation time: {:?}", start_prf.elapsed());
 
+        // Time getting PRF keys from server
+        let start_get_keys = Instant::now();
         let keys: Vec<Key> = deserialize(
             &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?,
         )
         .map_err(|_| OramError::SerializationFailed)?;
+        println!("Get PRF keys time: {:?}", start_get_keys.elapsed());
 
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
 
-        // 2: ℓ = PRFkprf (t)
-        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat());
-
+        // Time path computation
+        let start_path_compute = Instant::now();
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);
+        println!("Path computation time: {:?}", start_path_compute.elapsed());
 
-        // 3: p ← S2.Read(ℓ)
+        // Time server read operation
+        let start_server_read = Instant::now();
         let path: Vec<Bucket> = deserialize(
             &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?,
         )
         .map_err(|_| OramError::SerializationFailed)?;
+        println!("Server read time: {:?}", start_server_read.elapsed());
 
-        // 4: for block ∈ p do
+        // Time decryption process
+        let start_decryption = Instant::now();
         for bucket in path {
             for block in bucket {
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    return decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
+                    let result = decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
+                    println!("Decryption time: {:?}", start_decryption.elapsed());
+                    println!("Total read time: {:?}", start_total.elapsed());
+                    return result;
                 }
             }
         }
-        // 8: end for
 
+        println!("Decryption time (failed): {:?}", start_decryption.elapsed());
+        println!("Total read time (failed): {:?}", start_total.elapsed());
         Err(OramError::NoMessageFound)
     }
 
-    fn fake_write(&self) -> Result<(), OramError> {
+    pub fn fake_write(&self) -> Result<(), OramError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        let k_oram_t = Key::random(&mut rng);
+        let k_oram_t: Key = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
-        let cs = self.id.clone().into_bytes();
+        let cs: Vec<u8> = self.id.clone().into_bytes();
         self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap())
             .unwrap();
         Ok(())
     }
 
-    fn fake_read(&self) -> Vec<Bucket> {
+    pub fn fake_read(&self) -> Vec<Bucket> {
         // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
@@ -364,8 +410,8 @@ mod util_tests {
         let input1 = b"input1";
         let input2 = b"input2";
 
-        let output1 = prf(key, input1);
-        let output2 = prf(key, input2);
+        let output1 = prf(key, input1).expect("PRF failed");
+        let output2 = prf(key, input2).expect("PRF failed");
 
         assert_ne!(output1, output2);
         assert_eq!(output1.len(), 32);
@@ -872,9 +918,9 @@ mod e2e_tests {
         let epoch = client.epoch;
         let cs = client.id.clone().into_bytes();
         let (k_msg, k_oram, k_prf) = client.keys.get(&key).unwrap();
-        let f: Vec<u8> = prf(k_prf, &epoch.to_be_bytes());
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).unwrap();
-        let ct = encrypt(k_msg, &message, EncryptionType::Encrypt).unwrap();
+        let f: Vec<u8> = prf(k_prf, &epoch.to_be_bytes()).expect("PRF failed");
+        let k_oram_t = kdf(k_oram, &epoch.to_string()).expect("KDF failed");
+        let ct = encrypt(k_msg, &message, EncryptionType::Encrypt).expect("Encryption failed");
         client.epoch += 1;
         client
             .s1
@@ -886,7 +932,7 @@ mod e2e_tests {
         let l = prf(
             k_s1_t.as_slice(),
             &[f.clone().as_slice(), cs.clone().as_slice()].concat(),
-        );
+        ).expect("PRF failed");
         let intended_path = Path::from(l);
 
         server1

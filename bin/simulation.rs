@@ -10,7 +10,7 @@ use myco_rs::{
     constants::{DELTA, NUM_WRITES_PER_EPOCH},
     dtypes::Key,
     server1::Server1,
-    server2::Server2,
+    server2::Server2, Client,
 };
 use rand::{Rng, SeedableRng};
 use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
@@ -19,14 +19,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-fn main() {
+fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
-
-    use myco_rs::*;
     use std::time::Duration;
-
-    let num_clients = NUM_WRITES_PER_EPOCH;
-    let num_epochs = DELTA;
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
@@ -62,9 +57,10 @@ fn main() {
         let write_start_time = std::time::Instant::now();
         clients.iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
-            if let Err(e) = client.write(&message, &key) {
-                panic!("Write failed in epoch {}: {:?}", epoch, e);
-            }
+            #[cfg(feature = "no-enc")]
+            client.fake_write().expect("Write failed");
+            #[cfg(not(feature = "no-enc"))]
+            client.write(&message, &key).expect("Write failed");
         });
         let write_duration = write_start_time.elapsed();
 
@@ -115,4 +111,92 @@ fn main() {
         "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
         total_duration, final_average_duration
     );
+}
+
+fn run_single_client_simulation(num_epochs: usize) {
+    use rand_chacha::ChaCha20Rng;
+    use std::time::Duration;
+
+    let s2 = Arc::new(Mutex::new(Server2::new()));
+    let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+
+    let mut rng = ChaCha20Rng::from_entropy();
+    let mut total_duration: Duration = Duration::new(0, 0);
+    let mut successful_epochs = 0;
+
+    // Setup single client
+    let key = Key::random(&mut rng);
+    let mut client = Client::new("Client_0".to_string(), s1.clone(), s2.clone());
+    client.setup(&key).expect("Setup failed");
+
+    // Perform multiple epochs
+    for epoch in 0..num_epochs {
+        println!("Starting epoch: {}", epoch);
+
+        let epoch_start_time = std::time::Instant::now();
+        
+        // Single client batch_init
+        let batch_init_start_time = std::time::Instant::now();
+        s1.lock().unwrap().batch_init(1);
+        let batch_init_duration = batch_init_start_time.elapsed();
+
+        // Single write
+        let write_start_time = std::time::Instant::now();
+        let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
+        #[cfg(feature = "no-enc")]
+        client.fake_write().expect("Write failed");
+        #[cfg(not(feature = "no-enc"))]
+        client.write(&message, &key).expect("Write failed");
+        let write_duration = write_start_time.elapsed();
+
+        // Batch write
+        let batch_write_start_time = std::time::Instant::now();
+        s1.lock().unwrap().batch_write();
+        let batch_write_duration = batch_write_start_time.elapsed();
+
+        // // Read
+        // let read_start_time = std::time::Instant::now();
+        // let _read_result = client
+        //     .read(&key, client.id.clone(), 0)
+        //     .expect(&format!("Read failed in epoch {}", epoch));
+        // let read_duration = read_start_time.elapsed();
+
+        // Calculate durations
+        let epoch_duration = epoch_start_time.elapsed();
+        total_duration += epoch_duration;
+        successful_epochs += 1;
+
+        println!(
+            "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?})",
+            epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration,
+        );
+
+        println!(
+            "Total duration so far: {:?}, average duration: {:?}",
+            total_duration,
+            total_duration / successful_epochs as u32
+        );
+    }
+
+    println!(
+        "All epochs completed successfully. Total duration: {:?}, average duration: {:?}",
+        total_duration,
+        total_duration / successful_epochs as u32
+    );
+}
+
+fn main() {
+    #[cfg(feature = "no-enc")]
+    println!("Running simulation in NO ENCRYPTION mode");
+    
+    #[cfg(not(feature = "no-enc"))]
+    println!("Running simulation in STANDARD ENCRYPTION mode");
+
+    let simulation_type = "single"; // or "multi"
+    
+    match simulation_type {
+        "single" => run_single_client_simulation(10000),
+        "multi" => run_multi_client_simulation(NUM_WRITES_PER_EPOCH, DELTA),
+        _ => panic!("Unknown simulation type"),
+    }
 }
