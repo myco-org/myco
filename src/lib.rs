@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use bincode::{deserialize, serialize};
@@ -134,7 +142,8 @@ impl Local for Client {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match bincode::deserialize::<Command>(command).unwrap() {
             Command::Server1Write(ct, f, k_oram_t, cs) => {
-                self.s1.lock().unwrap().write(ct, f, k_oram_t, cs)?;
+                // println!("Client sending queue write command");
+                self.s1.lock().unwrap().queue_write(ct, f, k_oram_t, cs)?;
                 Ok(vec![])
             }
             Command::Server2Write(write_type) => match write_type {
@@ -579,7 +588,7 @@ mod e2e_tests {
     }
 
     #[test]
-    fn test_read_old_message_single_client() {
+    fn test_read_old_message_single_client_single_epoch() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
 

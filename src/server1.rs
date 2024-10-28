@@ -5,9 +5,13 @@ use crate::{
     EncryptionType, Key, Metadata, OramError, Path,
 };
 use bincode::{deserialize, serialize};
+use dashmap::DashMap;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -22,6 +26,8 @@ pub struct Server1 {
     pub metadata_pt: SparseBinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
     pub pathset_indices: Vec<usize>,
+    // Each index can have multiple buckets.
+    pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
 impl Local for Server1 {
@@ -56,6 +62,7 @@ impl Server1 {
             metadata_pt: SparseBinaryTree::new(),
             metadata: BinaryTree::new_with_depth(D),
             pathset_indices: vec![],
+            message_queue: DashMap::new(),
         }
     }
 
@@ -87,7 +94,6 @@ impl Server1 {
             vec![Bucket::default(); bucket_size],
             self.pathset_indices.clone(),
         );
-
         self.metadata_pt = SparseBinaryTree::new_with_data(
             vec![Metadata::default(); bucket_size],
             self.pathset_indices.clone(),
@@ -108,6 +114,34 @@ impl Server1 {
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
         let l_path = Path::from(l);
         self.insert_message(&ct, &l_path, &k_oram_t, t_exp)
+    }
+
+    /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
+    /// an epoch, each queued write is written to pt and metadata_pt.
+    pub fn queue_write(
+        &mut self,
+        ct: Vec<u8>,
+        f: Vec<u8>,
+        k_oram_t: Key,
+        cs: Vec<u8>,
+    ) -> Result<(), OramError> {
+        let t_exp = self.epoch + DELTA as u64;
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat());
+        let intended_message_path = Path::from(l);
+        let (lca_idx, _) = self
+            .pt
+            .lca_idx(&intended_message_path)
+            .ok_or(OramError::LcaNotFound)?;
+
+        // Queue the write.
+        self.message_queue.entry(lca_idx).or_default().push((
+            ct,
+            k_oram_t,
+            t_exp,
+            intended_message_path,
+        ));
+
+        Ok(())
     }
 
     pub fn insert_message(
@@ -141,68 +175,94 @@ impl Server1 {
         let bucket_processing_start = Instant::now();
         self.p
             .zip_with_binary_tree(&self.metadata)
-            .iter()
-            .try_for_each(|(bucket, metadata_bucket, _)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
-                (0..bucket.len()).try_for_each(|b| {
-                    metadata_bucket
-                        .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
-                        .and_then(|metadata_bucket| {
-                            let (l, k_oram_t, t_exp) = metadata_bucket
-                                .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
+            .par_iter()
+            .for_each(|(bucket, metadata_bucket, _)| {
+                if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                    (0..bucket.len()).for_each(|b| {
+                        if let Some(metadata_block) = metadata_bucket.get(b) {
+                            let (l, k_oram_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
-                                let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                    self.insert_message(&ct, l, k_oram_t, *t_exp)?;
-                                }
+                                let c_msg = bucket.get(b).unwrap();
+                                // Decrypt to get the first layer of decryption (client).
+                                let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
+                                let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                self.message_queue.entry(lca_idx).or_default().push((
+                                    ct,
+                                    k_oram_t.clone(),
+                                    *t_exp,
+                                    l.clone(),
+                                ));
                             }
-                            Ok(())
-                        })
-                })
-            })?;
-        let bucket_processing_duration = bucket_processing_start.elapsed();
-        println!("Bucket processing time: {:?}", bucket_processing_duration);
+                        }
+                    });
+                }
+            });
 
-        // Measure processing of pt and metadata_pt
-        let pt_processing_start = Instant::now();
+        // This enumerated index doesn't match the index inside of the message queue.
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .iter_mut()
-            .try_for_each(|(bucket, metadata_bucket, path)| {
-                let bucket = bucket.as_mut().ok_or(OramError::BucketNotFound)?;
-                let metadata_bucket: &mut Metadata = metadata_bucket
-                    .as_mut()
-                    .ok_or(OramError::MetadataBucketNotFound)?;
-                (bucket.len()..Z).for_each(|_| {
-                    bucket.push(Block::new_random());
-                });
-                (metadata_bucket.len()..Z).for_each(|_| {
-                    metadata_bucket.push(path.clone(), Key::new(vec![]), 0);
-                });
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
+                // Get the original index in the p and metadata tree from the index in pt.
+                let original_idx = self.pathset_indices[idx];
 
-                assert_eq!(
-                    bucket.len(),
-                    Z,
-                    "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
-                    self.epoch,
-                    bucket.len(),
-                    Z
-                );
-                assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+                // Insert both the new and non-expired messages into the pt and metadata_pt.
+                if let Some(blocks) = self.message_queue.get(&original_idx) {
+                    for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
+                        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
+                            .map_err(|_| OramError::EncryptionFailed)
+                            .unwrap();
 
-                let mut rng1 = ChaCha20Rng::from_seed(seed);
-                let mut rng2 = ChaCha20Rng::from_seed(seed);
-                bucket.shuffle(&mut rng1);
-                metadata_bucket.shuffle(&mut rng2);
-                Ok(())
-            })?;
-        let pt_processing_duration = pt_processing_start.elapsed();
-        println!(
-            "PT and metadata_pt processing time: {:?}",
-            pt_processing_duration
-        );
+                        // Insert the message into the pt bucket.
+                        if let Some(bucket) = bucket.as_mut() {
+                            bucket.push(Block::new(c_msg));
+                        }
+
+                        // Insert the metadata into the metadata_pt bucket.
+                        if let Some(metadata_bucket) = metadata_bucket.as_mut() {
+                            metadata_bucket.push(
+                                intended_message_path.clone(),
+                                k_oram_t.clone(),
+                                *t_exp,
+                            );
+                        }
+                    }
+                }
+
+                // Insert new random blocks into the pt bucket and metadata_pt bucket.
+                if let Some(bucket) = bucket {
+                    let mut rng = ChaCha20Rng::from_seed(seed);
+                    (bucket.len()..Z).for_each(|_| {
+                        bucket.push(Block::new_random());
+                    });
+
+                    assert_eq!(
+                        bucket.len(),
+                        Z,
+                        "Bucket length is not Z in epoch {}: bucket length={}, expected={}",
+                        self.epoch,
+                        bucket.len(),
+                        Z
+                    );
+
+                    bucket.shuffle(&mut rng);
+                }
+                if let Some(metadata_bucket) = metadata_bucket {
+                    let mut rng = ChaCha20Rng::from_seed(seed);
+                    (metadata_bucket.len()..Z).for_each(|_| {
+                        metadata_bucket.push(bucket_path.clone(), Key::new(vec![]), 0);
+                    });
+
+                    assert_eq!(metadata_bucket.len(), Z, "Metadata bucket length is not Z");
+
+                    metadata_bucket.shuffle(&mut rng);
+                }
+            });
+        let bucket_processing_duration = bucket_processing_start.elapsed();
+
+        // Reset the message queue
+        self.message_queue.clear();
 
         // Measure metadata overwrite time
         let metadata_overwrite_start = Instant::now();

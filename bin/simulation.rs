@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use myco_rs::{
     constants::{DELTA, NUM_WRITES_PER_EPOCH},
     dtypes::Key,
@@ -5,6 +13,7 @@ use myco_rs::{
     server2::Server2,
 };
 use rand::{Rng, SeedableRng};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use std::{
     process::Command,
     sync::{Arc, Mutex},
@@ -51,12 +60,12 @@ fn main() {
 
         // Measure write latency
         let write_start_time = std::time::Instant::now();
-        for client in clients.iter_mut() {
-            let message: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+        clients.iter_mut().for_each(|client| {
+            let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             if let Err(e) = client.write(&message, &key) {
                 panic!("Write failed in epoch {}: {:?}", epoch, e);
             }
-        }
+        });
         let write_duration = write_start_time.elapsed();
 
         // Measure batch_write latency
@@ -64,8 +73,9 @@ fn main() {
         s1.lock().unwrap().batch_write();
         let batch_write_duration = batch_write_start_time.elapsed();
 
-        // Measure read latency for each client
+        // Measure read latency for each client.
         let mut total_read_duration = Duration::new(0, 0);
+        // Note: These operations are on the order of microseconds.
         for client in clients.iter() {
             let read_start_time = std::time::Instant::now();
             let read_result: Vec<u8> = client
