@@ -103,19 +103,6 @@ impl Server1 {
         self.k_s1_t = Key::random(&mut rng);
     }
 
-    pub fn write(
-        &mut self,
-        ct: Vec<u8>,
-        f: Vec<u8>,
-        k_oram_t: Key,
-        cs: Vec<u8>,
-    ) -> Result<(), OramError> {
-        let t_exp = self.epoch + DELTA as u64;
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
-        let l_path = Path::from(l);
-        self.insert_message(&ct, &l_path, &k_oram_t, t_exp)
-    }
-
     /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
     /// an epoch, each queued write is written to pt and metadata_pt.
     pub fn queue_write(
@@ -141,29 +128,6 @@ impl Server1 {
             intended_message_path,
         ));
 
-        Ok(())
-    }
-
-    pub fn insert_message(
-        &mut self,
-        ct: &Vec<u8>,
-        l: &Path,
-        k_oram_t: &Key,
-        t_exp: u64,
-    ) -> Result<(), OramError> {
-        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-            .map_err(|_| OramError::EncryptionFailed)?;
-
-        let (bucket, path) = self.pt.lca(&l).ok_or(OramError::LcaNotFound)?;
-        let mut metadata_bucket = self
-            .metadata_pt
-            .get(&path)
-            .ok_or(OramError::MetadataBucketNotFound)?
-            .clone();
-
-        bucket.push(Block::new(c_msg));
-        metadata_bucket.push(l.clone(), k_oram_t.clone(), t_exp);
-        self.metadata_pt.write(metadata_bucket, path);
         Ok(())
     }
 

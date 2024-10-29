@@ -908,7 +908,7 @@ mod e2e_tests {
             .s1
             .lock()
             .unwrap()
-            .write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
+            .queue_write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
             .expect("Initial write failed");
         let k_s1_t = server1.lock().unwrap().k_s1_t.0.clone();
         let l = prf(
