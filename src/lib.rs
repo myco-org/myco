@@ -305,22 +305,35 @@ pub fn calculate_bucket_usage(
         .into_iter()
         .for_each(|(bucket, metadata_bucket, path)| {
             if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
-                let mut decryptable_messages = 0;
-                for b in 0..bucket.len() {
-                    if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
-                        if let Some(c_msg) = bucket.get(b) {
-                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                if decrypt(k_msg, &ct).is_ok() {
-                                    decryptable_messages += 1;
+                let messages_in_bucket = {
+                    #[cfg(feature = "no-enc")]
+                    {
+                        // In no-enc mode, just count non-empty blocks
+                        bucket.len()
+                    }
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        // With encryption, check if messages are decryptable
+                        let mut decryptable_messages = 0;
+                        for b in 0..bucket.len() {
+                            if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
+                                if let Some(c_msg) = bucket.get(b) {
+                                    if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                        if decrypt(k_msg, &ct).is_ok() {
+                                            decryptable_messages += 1;
+                                        }
+                                    }
                                 }
                             }
                         }
+                        decryptable_messages
                     }
-                }
-                bucket_usage.push(decryptable_messages);
-                total_messages += decryptable_messages;
-                if decryptable_messages > max_usage {
-                    max_usage = decryptable_messages;
+                };
+
+                bucket_usage.push(messages_in_bucket);
+                total_messages += messages_in_bucket;
+                if messages_in_bucket > max_usage {
+                    max_usage = messages_in_bucket;
                     max_depth = path.len();
                 }
             }
