@@ -10,7 +10,7 @@ use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use bincode::{deserialize, serialize};
 use error::OramError;
-use network::{Command, Local, ReadType, WriteType};
+use network::{Command, Local, ReadType, WriteType, Server1Access, Server2Access, LocalServer1Access, LocalServer2Access};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
@@ -25,7 +25,7 @@ use tree::BinaryTree;
 pub mod constants;
 pub mod dtypes;
 mod error;
-mod network;
+pub mod network;
 pub mod server1;
 pub mod server2;
 mod tree;
@@ -161,39 +161,12 @@ pub struct Client {
     pub id: String,
     epoch: usize,
     pub keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
-    s1: Arc<Mutex<Server1>>,
-    s2: Arc<Mutex<Server2>>,
-}
-
-impl Local for Client {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
-        match bincode::deserialize::<Command>(command).unwrap() {
-            Command::Server1Write(ct, f, k_oram_t, cs) => {
-                // println!("Client sending queue write command");
-                self.s1.lock().unwrap().queue_write(ct, f, k_oram_t, cs)?;
-                Ok(vec![])
-            }
-            Command::Server2Write(write_type) => match write_type {
-                WriteType::Write(buckets) => {
-                    self.s2.lock().unwrap().write(buckets);
-                    Ok(vec![])
-                }
-                WriteType::AddPrfKey(key) => {
-                    self.s2.lock().unwrap().add_prf_key(&key);
-                    Ok(vec![])
-                }
-            },
-            Command::Server2Read(read_type) => match read_type {
-                ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
-            },
-        }
-    }
+    s1: Box<dyn Server1Access>,
+    s2: Box<dyn Server2Access>,
 }
 
 impl Client {
-    pub fn new(id: String, s1: Arc<Mutex<Server1>>, s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(id: String, s1: Box<dyn Server1Access>, s2: Box<dyn Server2Access>) -> Self {
         Client {
             id,
             epoch: 0,
@@ -215,49 +188,34 @@ impl Client {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
-        // 1: {kmsg, koram, kprf } ← keys[k]
         let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
-
-        // 2: ℓ = PRF_kprf (t)
         let f = prf(k_prf, &epoch.to_be_bytes())?;
-
-        // 3: koram,t = KDF(koram, t)
         let k_oram_t = kdf(k_oram, &epoch.to_string())?;
-
-        // 4: ct = Enckmsg (m)
         let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
 
         self.epoch += 1;
-        // 5: return S1.Write(ct, ℓ, koram,t)
-        self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap())
-            .unwrap();
-        Ok(())
+        self.s1.queue_write(ct, f, Key::new(k_oram_t), cs)
     }
 
     pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
-        // Use the passed epoch if available, otherwise default to self.epoch - 1
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
+        
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
         let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
         let f = prf(&k_prf, &epoch.to_be_bytes())?;
-        let keys: Vec<Key> = deserialize(
-            &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?,
-        )
-        .map_err(|_| OramError::SerializationFailed)?;
+        
+        let keys = self.s2.get_prf_keys()?;
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);
-        let path: Vec<Bucket> = deserialize(
-            &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?,
-        )
-        .map_err(|_| OramError::SerializationFailed)?;
+        
+        let path = self.s2.read(&l_path)?;
 
         for bucket in path {
             for block in bucket {
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
-                    let result = decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
-                    return result;
+                    return decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
                 }
             }
         }
@@ -270,22 +228,13 @@ impl Client {
         let k_oram_t: Key = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs: Vec<u8> = self.id.clone().into_bytes();
-        self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap())
-            .unwrap();
-        Ok(())
+        self.s1.queue_write(ct, l, k_oram_t, cs)
     }
 
     pub fn fake_read(&self) -> Vec<Bucket> {
-        // 1: ℓ′ $ ←− {0, 1}^D
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        // 2: S2.Read(ℓ′)
-        let bytes = self
-            .send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap())
-            .unwrap();
-        deserialize(&bytes)
-            .map_err(|_| OramError::SerializationFailed)
-            .unwrap()
+        self.s2.read(&Path::from(l)).unwrap()
     }
 }
 
@@ -305,22 +254,35 @@ pub fn calculate_bucket_usage(
         .into_iter()
         .for_each(|(bucket, metadata_bucket, path)| {
             if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
-                let mut decryptable_messages = 0;
-                for b in 0..bucket.len() {
-                    if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
-                        if let Some(c_msg) = bucket.get(b) {
-                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
-                                if decrypt(k_msg, &ct).is_ok() {
-                                    decryptable_messages += 1;
+                let messages_in_bucket = {
+                    #[cfg(feature = "no-enc")]
+                    {
+                        // In no-enc mode, just count non-empty blocks
+                        bucket.len()
+                    }
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        // With encryption, check if messages are decryptable
+                        let mut decryptable_messages = 0;
+                        for b in 0..bucket.len() {
+                            if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
+                                if let Some(c_msg) = bucket.get(b) {
+                                    if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                        if decrypt(k_msg, &ct).is_ok() {
+                                            decryptable_messages += 1;
+                                        }
+                                    }
                                 }
                             }
                         }
+                        decryptable_messages
                     }
-                }
-                bucket_usage.push(decryptable_messages);
-                total_messages += decryptable_messages;
-                if decryptable_messages > max_usage {
-                    max_usage = decryptable_messages;
+                };
+
+                bucket_usage.push(messages_in_bucket);
+                total_messages += messages_in_bucket;
+                if messages_in_bucket > max_usage {
+                    max_usage = messages_in_bucket;
                     max_depth = path.len();
                 }
             }
@@ -463,8 +425,12 @@ mod e2e_tests {
     #[test]
     fn test_client_setup() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-        let mut alice = Client::new("Alice".to_string(), s1, s2);
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1 });
+        
+        let mut alice = Client::new("Alice".to_string(), s1_access, s2_access.clone());
+        
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
@@ -474,8 +440,11 @@ mod e2e_tests {
     #[test]
     fn test_write_and_read() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
+        
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
@@ -492,9 +461,17 @@ mod e2e_tests {
     #[test]
     fn test_multiple_clients_one_epoch() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access)));
+        
+        let s2_access_alice = Box::new(LocalServer2Access { server: s2.clone() });
+
+        let s1_access_alice = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access_alice, s2_access_alice);
+        
+        let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut bob = Client::new("Bob".to_string(), s1_access_bob, s2_access_bob);
 
         let mut rng: ChaCha20Rng = ChaCha20Rng::from_entropy();
         let k1 = Key::random(&mut rng);
@@ -524,8 +501,10 @@ mod e2e_tests {
     #[test]
     fn test_multiple_writes_and_reads() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2);
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
         let num_operations = 5;
 
@@ -552,15 +531,20 @@ mod e2e_tests {
     #[test]
     fn test_multiple_clients_multiple_epochs() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-
-        let mut alice = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-        let mut bob = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access)));
+        
+        let s2_access_alice = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1_access_alice = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access_alice, s2_access_alice);
+        
+        let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut bob = Client::new("Bob".to_string(), s1_access_bob, s2_access_bob);
 
         let mut rng = ChaCha20Rng::from_entropy();
 
         // Initialize the first epoch
-
         for _ in 0..5 {
             s1.lock().unwrap().batch_init(2);
 
@@ -605,23 +589,20 @@ mod e2e_tests {
     #[test]
     fn test_read_old_message_single_client_single_epoch() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-
-        let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
         let mut rng = ChaCha20Rng::from_entropy();
-
         let key = Key::random(&mut rng);
 
         // Epoch 1: Alice writes
         s1.lock().unwrap().batch_init(1);
-
         alice.setup(&key).expect("Setup failed");
 
         let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
-
         alice.write(&alice_msg_epoch1, &key).expect("Write failed");
-
         s1.lock().unwrap().batch_write();
 
         let alice_read_epoch1: Vec<u8> = alice
@@ -656,10 +637,14 @@ mod e2e_tests {
     #[test]
     fn test_read_old_message_two_clients() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-
-        let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
-        let mut bob: Client = Client::new("Bob".to_string(), s1.clone(), s2.clone());
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access.clone(), s2_access.clone());
+        
+        let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut bob = Client::new("Bob".to_string(), s1_access_bob.clone(), s2_access_bob.clone());
 
         let mut rng = ChaCha20Rng::from_entropy();
 
@@ -721,22 +706,20 @@ mod e2e_tests {
     #[test]
     fn test_read_old_message_single_client_multiple_epochs() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
-
-        let mut alice: Client = Client::new("Alice".to_string(), s1.clone(), s2.clone());
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
         let mut rng = ChaCha20Rng::from_entropy();
-
         let key = Key::random(&mut rng);
 
         // Epoch 1: Alice writes
         s1.lock().unwrap().batch_init(1);
-
         alice.setup(&key).expect("Setup failed");
 
         let alice_msg_epoch1: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
         alice.write(&alice_msg_epoch1, &key).expect("Write failed");
-
         s1.lock().unwrap().batch_write();
 
         // Epoch 2: Alice writes again
@@ -757,7 +740,7 @@ mod e2e_tests {
             "Read message doesn't match the written message from epoch 1 in epoch 2"
         );
 
-        // Epoch 3: Alice writes again
+        // Epoch 3: Alice writes again and reads from epoch 1
         s1.lock().unwrap().batch_init(1);
 
         let alice_msg_epoch3: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
@@ -796,8 +779,10 @@ mod e2e_tests {
 
     #[test]
     fn test_message_persistence() {
-        let server2 = Arc::new(Mutex::new(Server2::new()));
-        let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
         let num_epochs = DELTA as usize;
         let num_clients = 1;
@@ -805,26 +790,26 @@ mod e2e_tests {
         // Create a vector of unique messages and keys
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
-        let mut client = Client::new("Client".to_string(), server1.clone(), server2.clone());
+        let mut client = Client::new("Client".to_string(), s1_access, s2_access);
         client.setup(&key).unwrap();
         let k_msg = client.keys.get(&key).unwrap().0.clone();
         let mut messages = Vec::new();
         // Write messages
         for epoch in 0..num_epochs {
-            server1.lock().unwrap().batch_init(num_clients);
+            s1.lock().unwrap().batch_init(num_clients);
             let message: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();
             client.write(&message, &key).unwrap();
-            server1.lock().unwrap().batch_write().unwrap();
+            s1.lock().unwrap().batch_write().unwrap();
             messages.push(message);
         }
 
         // Verify the messages
         let mut decrypted_messages = Vec::new();
-        let _ = server2
+        let _ = s2
             .lock()
             .unwrap()
             .tree
-            .zip(&server1.lock().unwrap().metadata)
+            .zip(&s1.lock().unwrap().metadata)
             .into_iter()
             .try_for_each(|(bucket, metadata_bucket, _path)| {
                 let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
@@ -869,19 +854,20 @@ mod e2e_tests {
 
     #[test]
     fn test_message_movement() {
-        let server2 = Arc::new(Mutex::new(Server2::new()));
-        let server1 = Arc::new(Mutex::new(Server1::new(server2.clone())));
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+        let mut client = Client::new("Client".to_string(), s1_access, s2_access);
 
         let num_epochs = DELTA;
         let mut rng = ChaCha20Rng::from_entropy();
         let key = Key::random(&mut rng);
         let message = vec![1, 2, 3, 4]; // Simple test message
 
-        let mut client = Client::new("Client".to_string(), server1.clone(), server2.clone());
-        client.setup(&key).expect("Client setup failed");
-
         // Initial write
-        server1.lock().unwrap().batch_init(1);
+        client.setup(&key).unwrap();
+        s1.lock().unwrap().batch_init(1);
 
         // Doing a client write manually and extracting the intended path of this message
         let epoch = client.epoch;
@@ -893,28 +879,26 @@ mod e2e_tests {
         client.epoch += 1;
         client
             .s1
-            .lock()
-            .unwrap()
-            .write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
+            .queue_write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
             .expect("Initial write failed");
-        let k_s1_t = server1.lock().unwrap().k_s1_t.0.clone();
+        let k_s1_t = s1.lock().unwrap().k_s1_t.0.clone();
         let l = prf(
             k_s1_t.as_slice(),
             &[f.clone().as_slice(), cs.clone().as_slice()].concat(),
         ).expect("PRF failed");
         let intended_path = Path::from(l);
 
-        server1
+        s1
             .lock()
             .unwrap()
             .batch_write()
             .expect("Initial batch write failed");
 
-        let mut pathset: tree::SparseBinaryTree<Bucket> = server1.lock().unwrap().pt.clone();
+        let mut pathset: tree::SparseBinaryTree<Bucket> = s1.lock().unwrap().pt.clone();
 
         // Function to verify message at LCA
         let verify_message_at_lca = |lca_bucket: &Bucket, lca_path: &Path| {
-            let metadata_bucket = server1
+            let metadata_bucket = s1
                 .lock()
                 .unwrap()
                 .metadata
@@ -953,24 +937,24 @@ mod e2e_tests {
             epoch
         );
 
-        let mut latest_index = server2.lock().unwrap().tree.get_index(&lca_path);
+        let mut latest_index = s2.lock().unwrap().tree.get_index(&lca_path);
         let mut times_relocated = 0;
         let mut lca_path_lengths = Vec::new();
 
         // Trace message movement over epochs
         for epoch in 1..num_epochs {
             // Perform batch_init
-            server1.lock().unwrap().batch_init(1);
+            s1.lock().unwrap().batch_init(1);
 
             // Perform batch_write
-            server1
+            s1
                 .lock()
                 .unwrap()
                 .batch_write()
                 .expect("Batch write failed");
 
             let mut new_pathset: tree::SparseBinaryTree<Bucket> =
-                server1.lock().unwrap().pt.clone();
+                s1.lock().unwrap().pt.clone();
             if new_pathset.packed_indices.contains(&latest_index) {
                 let (lca_bucket, lca_path) =
                     new_pathset.lca(&intended_path).expect("LCA not found");
@@ -997,19 +981,20 @@ mod e2e_tests {
     #[test]
     /// Tests the serialization and deserialization of the server 2 tree and the server 1 metadata tree.
     fn test_tree_serialization() {
-        let server2 = Arc::new(Mutex::new(Server2::new()));
-        let server1 = Server1::new(server2.clone());
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
 
-        let server1_metadata_serialized = bincode::serialize(&server1.metadata).unwrap();
-        let server1_metadata_deserialized: BinaryTree<Metadata> =
-            bincode::deserialize(&server1_metadata_serialized).unwrap();
+        let s1_metadata_serialized = bincode::serialize(&s1.lock().unwrap().metadata).unwrap();
+        let s1_metadata_deserialized: BinaryTree<Metadata> =
+            bincode::deserialize(&s1_metadata_serialized).unwrap();
 
-        let server2_tree_serialized = bincode::serialize(&server2.lock().unwrap().tree).unwrap();
-        let server2_tree_deserialized: BinaryTree<Bucket> =
-            bincode::deserialize(&server2_tree_serialized).unwrap();
+        let s2_tree_serialized = bincode::serialize(&s2.lock().unwrap().tree).unwrap();
+        let s2_tree_deserialized: BinaryTree<Bucket> =
+            bincode::deserialize(&s2_tree_serialized).unwrap();
 
-        assert_eq!(server1.metadata, server1_metadata_deserialized);
-        assert_eq!(server2.lock().unwrap().tree, server2_tree_deserialized);
+        assert_eq!(s1.lock().unwrap().metadata, s1_metadata_deserialized);
+        assert_eq!(s2.lock().unwrap().tree, s2_tree_deserialized);
     }
 
     /// Helper function to test the execution of the protocol over a user-defined number of clients and epochs.
@@ -1026,10 +1011,11 @@ mod e2e_tests {
         let key = Key::random(&mut rng);
         for i in 0..num_clients {
             let client_name = format!("Client_{}", i);
-            let mut client = Client::new(client_name, s1.clone(), s2.clone());
+            let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+            let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
+            let mut client = Client::new(client_name, s1_access, s2_access);
 
             client.setup(&key).expect("Setup failed");
-
             clients.push(client);
         }
         k_msg = clients[0].keys.get(&key).unwrap().0.clone();
@@ -1067,7 +1053,8 @@ mod e2e_tests {
         let num_epochs = DELTA;
 
         let s2 = Arc::new(Mutex::new(Server2::new()));
-        let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access)));
 
         test_protocol_execution_with_params(
             s1.clone(),

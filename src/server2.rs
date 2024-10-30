@@ -23,9 +23,8 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    pub fn read(&mut self, l: &Path) -> Result<Vec<u8>, OramError> {
-        bincode::serialize(&self.tree.get_all_nodes_along_path(l))
-            .map_err(|_| OramError::SerializationFailed)
+    pub fn read(&mut self, l: &Path) -> Result<Vec<Bucket>, OramError> {
+        Ok(self.tree.get_all_nodes_along_path(l))
     }
 
     /// Get a reference to the tree
@@ -49,9 +48,9 @@ impl Server2 {
         // Increment the epoch
         self.epoch += 1;
     }
-
-    pub fn get_prf_keys(&self) -> Result<Vec<u8>, OramError> {
-        bincode::serialize(&self.prf_keys).map_err(|_| OramError::SerializationFailed)
+    
+    pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
+        Ok(self.prf_keys.clone())
     }
 
     pub fn add_prf_key(&mut self, key: &Key) {
@@ -62,7 +61,7 @@ impl Server2 {
         }
     }
 
-    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<u8>, OramError> {
+    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         self.pathset_indices = pathset.clone();
 
         let buckets: Vec<Bucket> = pathset
@@ -70,6 +69,6 @@ impl Server2 {
             .map(|i| self.tree.value[*i].clone().unwrap())
             .collect();
 
-        bincode::serialize(&buckets).map_err(|_| OramError::SerializationFailed)
+        Ok(buckets)
     }
 }

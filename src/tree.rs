@@ -3,6 +3,7 @@ use std::{
     fmt::{self, Debug},
     fs::File,
     io::{Read, Write},
+    time::Instant,
 };
 
 use aes_gcm::aead::Buffer;
@@ -111,6 +112,8 @@ impl<T: TreeValue> BinaryTree<T> {
     }
 
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
+        let start = Instant::now();
+
         let mut nodes = vec![];
         let mut idx = 1;
 
@@ -123,11 +126,13 @@ impl<T: TreeValue> BinaryTree<T> {
             idx = 2 * idx + u8::from(direction) as usize;
 
             if idx >= self.value.len() || self.value[idx].is_none() {
+                println!("get_all_nodes_along_path took: {:?}", start.elapsed());
                 return nodes;
             }
             nodes.push(self.value[idx].clone().unwrap());
         }
 
+        println!("get_all_nodes_along_path took: {:?}", start.elapsed());
         nodes
     }
 
