@@ -1,4 +1,5 @@
-use crate::network::{Command, Local, Network, ReadType, WriteType, Server2Access, LocalServer2Access};
+use crate::network::{Command, RemoteServer2Access, Server2Access};
+use crate::tls_server::TlsServer;
 use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
@@ -69,6 +70,8 @@ impl Server1 {
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
+
+        println!("Batch init successful");
     }
 
     /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
@@ -100,10 +103,15 @@ impl Server1 {
             intended_message_path,
         ));
 
+        println!("IN the queue write for epoch {}", self.epoch);
+
+        println!("Message queue length: {}", self.message_queue.len());
+
         Ok(())
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
+        println!("IN the batch write for epoch {}", self.epoch);
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -133,6 +141,8 @@ impl Server1 {
                     });
                 }
             });
+
+        println!("Finished processing buckets for epoch {}", self.epoch);
 
         // This enumerated index doesn't match the index inside of the message queue.
         self.pt
@@ -220,16 +230,24 @@ impl Server1 {
         // Reset the message queue
         self.message_queue.clear();
 
+        println!("Finished resetting message queue for epoch {}", self.epoch);
+
         // Measure metadata overwrite time
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
 
-        self.s2.write(self.pt.packed_buckets.clone())?;
-        self.s2.add_prf_key(&self.k_s1_t)?;
-
-        // Increment epoch
-        self.epoch += 1;
-
-        Ok(())
+        println!("Sending write command to Server2");
+        match self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()) {
+            Ok(_) => {
+                println!("Successfully wrote to Server2");
+                self.epoch += 1;
+                println!("Server1: Write operation complete, sending success response to client");
+                Ok(())
+            },
+            Err(e) => {
+                println!("Failed to write to Server2: {:?}", e);
+                Err(e)
+            }
+        }
     }
 
     pub fn get_path_indices(&self, paths: Vec<Path>) -> Vec<usize> {
@@ -243,6 +261,31 @@ impl Server1 {
             });
         });
         pathset.into_iter().collect()
+    }
+
+    pub async fn run_server(addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
+        let server = TlsServer::new(addr, cert_path, key_path).await?;
+        
+        // Create a dedicated Server2 connection for Server1
+        let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
+        let server1 = Arc::new(Mutex::new(Server1::new(Box::new(server2_connection))));
+        
+        println!("Server1: Started and waiting for commands");
+    
+        server.run(move |command| {
+            let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
+            let mut server1 = server1.lock().unwrap();
+            match command {
+                Command::Server1Write(ct, f, k_oram_t, cs) => {
+                    server1.queue_write(ct, f, k_oram_t, cs)?;
+                    println!("Finished queue write for epoch {}", server1.epoch);
+                    server1.batch_write()?;
+                    println!("Server1: Sending success response to client");
+                    Ok(vec![1])
+                }
+                _ => Err(OramError::InvalidCommand),
+            }
+        }).await
     }
 }
 

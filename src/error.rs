@@ -24,6 +24,26 @@ pub enum OramError {
     LcaNotFound,
     #[error("Serialization failed")]
     SerializationFailed,
+    #[error("Deserialization failed")]
+    DeserializationError,
     #[error("Invalid command")]
     InvalidCommand,
+    #[error("{0}")]
+    IoError(std::io::Error),
+    #[error("{0}")]
+    TlsError(rustls::Error),
+    #[error("Invalid server name")]
+    InvalidServerName,
+}
+
+impl From<std::io::Error> for OramError {
+    fn from(err: std::io::Error) -> Self {
+        OramError::IoError(err)
+    }
+}
+
+impl From<rustls::Error> for OramError {
+    fn from(err: rustls::Error) -> Self {
+        OramError::TlsError(err)
+    }
 }

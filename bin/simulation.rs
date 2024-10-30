@@ -6,6 +6,8 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
+mod tls_server1;
+
 use myco_rs::{
     calculate_bucket_usage, constants::{DELTA, NUM_WRITES_PER_EPOCH, DB_SIZE}, dtypes::Key, server1::Server1, server2::Server2, Client
 };

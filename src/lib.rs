@@ -29,6 +29,7 @@ pub mod network;
 pub mod server1;
 pub mod server2;
 mod tree;
+pub mod tls_server;
 
 // Import constants and server modules
 use constants::*;
@@ -161,8 +162,8 @@ pub struct Client {
     pub id: String,
     epoch: usize,
     pub keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
-    s1: Box<dyn Server1Access>,
-    s2: Box<dyn Server2Access>,
+    pub s1: Box<dyn Server1Access>,
+    pub s2: Box<dyn Server2Access>,
 }
 
 impl Client {
@@ -206,6 +207,15 @@ impl Client {
         let f = prf(&k_prf, &epoch.to_be_bytes())?;
         
         let keys = self.s2.get_prf_keys()?;
+        if keys.is_empty() {
+            return Err(OramError::NoMessageFound);
+        }
+        
+        // Add bounds checking
+        if epoch_past >= keys.len() {
+            return Err(OramError::NoMessageFound);
+        }
+        
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);

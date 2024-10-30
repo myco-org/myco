@@ -1,6 +1,9 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::{Arc, Mutex}};
 
-use crate::{error::OramError, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
+use bincode::{deserialize, serialize};
+use tokio::stream;
+
+use crate::{error::OramError, network::{Command, ReadType, WriteType, ReadResponse}, tls_server::TlsServer, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
     pub tree: BinaryTree<Bucket>,
@@ -70,5 +73,39 @@ impl Server2 {
             .collect();
 
         Ok(buckets)
+    }
+
+    pub async fn run_server(addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
+        let server2 = Arc::new(Mutex::new(Self::new()));
+        let server = TlsServer::new(addr, cert_path, key_path).await?;
+        
+        println!("Server2: Started and waiting for commands");
+        
+        server.run(move |command| {
+            let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
+            println!("Server2: Received command: {:?}", command);
+            
+            match command { 
+                Command::Server2Write(write_type) => {
+                    match write_type {
+                        WriteType::Write(buckets, prf_key) => {
+                            println!("Server2: Processing write of {} buckets", buckets.len());
+                            server2.lock().unwrap().write(buckets);
+                            server2.lock().unwrap().add_prf_key(&prf_key);
+                            println!("Server2: Write and PRF key update completed");
+                            Ok(vec![])
+                        }
+                    }
+                }
+                Command::Server2Read(read_type) => {
+                    match read_type {
+                        ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
+                        ReadType::ReadPaths(indices) => serialize(&server2.lock().unwrap().read_paths(indices)?),
+                        ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
+                    }.map_err(|_| OramError::SerializationFailed)
+                }
+                _ => Err(OramError::InvalidCommand),
+            }
+        }).await
     }
 }

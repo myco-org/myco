@@ -7,6 +7,14 @@ edition = "2021"
 name = "simulation"
 path = "bin/simulation.rs"
 
+[[bin]]
+name = "tls_server2"
+path = "bin/tls_server2.rs"
+
+[[bin]]
+name = "tls_server1"
+path = "bin/tls_server1.rs"
+
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"
@@ -23,6 +31,11 @@ rand_chacha = "0.3.1"
 serde = { version = "1.0.213", features = ["derive"] }
 bincode = "1.3.3"
 dashmap = "6.1.0"
+tokio = { version = "1.0", features = ["full"] }
+tokio-rustls = "0.24"
+rustls = "0.21"
+rustls-pemfile = "1.0"
+futures = "0.3"
 
 [features]
 simulation = []
