@@ -165,6 +165,7 @@ pub struct Client {
     s2: Arc<Mutex<Server2>>,
 }
 
+#[cfg(feature = "network")]
 impl Local for Client {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match bincode::deserialize::<Command>(command).unwrap() {
@@ -229,38 +230,82 @@ impl Client {
 
         self.epoch += 1;
         // 5: return S1.Write(ct, ℓ, koram,t)
-        self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap())
-            .unwrap();
-        Ok(())
+        #[cfg(feature = "network")]
+        {
+            self.send(&serialize(&Command::Server1Write(ct, f, Key::new(k_oram_t), cs)).unwrap())
+                .unwrap();
+            Ok(())
+        }
+
+        #[cfg(not(feature = "network"))]
+        {
+            self.s1.lock().unwrap().queue_write(ct, f, Key::new(k_oram_t), cs)?;
+            Ok(())
+        }
     }
 
     pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
+        use std::time::Instant;
+
         // Use the passed epoch if available, otherwise default to self.epoch - 1
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
+        
+        let start = Instant::now();
         let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
-        let f = prf(&k_prf, &epoch.to_be_bytes())?;
-        let keys: Vec<Key> = deserialize(
-            &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?,
-        )
-        .map_err(|_| OramError::SerializationFailed)?;
-        let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
-        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
-        let l_path = Path::from(l);
-        let path: Vec<Bucket> = deserialize(
-            &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path))).unwrap())?,
-        )
-        .map_err(|_| OramError::SerializationFailed)?;
+        // println!("Key lookup took: {:?}", start.elapsed());
 
+        let start = Instant::now();
+        let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+        // println!("KDF took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        let f = prf(&k_prf, &epoch.to_be_bytes())?;
+        // println!("First PRF took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        #[cfg(feature = "network")]
+        let keys: Vec<Key> = deserialize(
+            &self.send(&serialize(&Command::Server2Read(ReadType::GetPrfKeys)).unwrap())?
+        ).map_err(|_| OramError::SerializationFailed)?;
+
+        #[cfg(not(feature = "network"))]
+        let keys: Vec<Key> = self.s2.lock().unwrap().get_prf_keys()?;
+        // println!("GetPrfKeys took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
+        // println!("Key index lookup took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
+        // println!("Second PRF took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        let l_path = Path::from(l);
+        // println!("Path creation took: {:?}", start.elapsed());
+
+        let start = Instant::now();
+        #[cfg(feature = "network")]
+        let path: Vec<Bucket> = deserialize(
+            &self.send(&serialize(&Command::Server2Read(ReadType::Read(l_path)))).unwrap())
+            .unwrap();
+
+        #[cfg(not(feature = "network"))]
+        let path: Vec<Bucket> = self.s2.lock().unwrap().read(&l_path).unwrap();
+        // println!("Path read took: {:?}", start.elapsed());
+
+        let start = Instant::now();
         for bucket in path {
             for block in bucket {
                 if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
                     let result = decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
+                    // println!("Bucket search and decryption took: {:?}", start.elapsed());
                     return result;
                 }
             }
         }
+        // println!("Failed bucket search took: {:?}", start.elapsed());
         Err(OramError::NoMessageFound)
     }
 
@@ -270,9 +315,18 @@ impl Client {
         let k_oram_t: Key = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs: Vec<u8> = self.id.clone().into_bytes();
-        self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap())
-            .unwrap();
-        Ok(())
+        #[cfg(feature = "network")]
+        {
+            self.send(&serialize(&Command::Server1Write(ct, l, k_oram_t, cs)).unwrap())
+                .unwrap();
+            Ok(())
+        }
+
+        #[cfg(not(feature = "network"))]
+        {
+            self.s1.lock().unwrap().queue_write(ct, l, k_oram_t, cs)?;
+            Ok(())
+        }
     }
 
     pub fn fake_read(&self) -> Vec<Bucket> {
@@ -280,12 +334,20 @@ impl Client {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
         // 2: S2.Read(ℓ′)
-        let bytes = self
-            .send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap())
-            .unwrap();
-        deserialize(&bytes)
-            .map_err(|_| OramError::SerializationFailed)
-            .unwrap()
+        #[cfg(feature = "network")]
+        {
+            let bytes = self
+                .send(&serialize(&Command::Server2Read(ReadType::Read(Path::from(l)))).unwrap())
+                .unwrap();
+            deserialize(&bytes)
+                .map_err(|_| OramError::SerializationFailed)
+                .unwrap()
+        }
+
+        #[cfg(not(feature = "network"))]
+        {
+            self.s2.lock().unwrap().read(&Path::from(l)).unwrap()
+        }
     }
 }
 
@@ -770,7 +832,7 @@ mod e2e_tests {
             "Read message doesn't match the written message from epoch 1 in epoch 2"
         );
 
-        // Epoch 3: Alice writes again
+        // Epoch 3: Alice writes again and reads from epoch 1
         s1.lock().unwrap().batch_init(1);
 
         let alice_msg_epoch3: Vec<u8> = (0..16).map(|_| (rng.next_u32() % 255 + 1) as u8).collect();

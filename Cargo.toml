@@ -27,3 +27,4 @@ dashmap = "6.1.0"
 [features]
 simulation = []
 no-enc = []
+network = []

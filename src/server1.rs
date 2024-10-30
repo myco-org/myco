@@ -30,6 +30,7 @@ pub struct Server1 {
     pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
+#[cfg(feature = "network")]
 impl Local for Server1 {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         match deserialize::<Command>(command).unwrap() {
@@ -41,9 +42,9 @@ impl Local for Server1 {
                 Ok(vec![])
             }
             Command::Server2Read(read_type) => match read_type {
-                ReadType::Read(path) => self.s2.lock().unwrap().read(&path),
-                ReadType::ReadPaths(pathset) => self.s2.lock().unwrap().read_paths(pathset),
-                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys(),
+                ReadType::Read(path) => self.s2.lock().unwrap().read(&path).map_err(|_| OramError::SerializationFailed),
+                ReadType::ReadPaths(pathset) => Ok(serialize(&self.s2.lock().unwrap().read_paths(pathset.clone())?.as_slice()).unwrap()),
+                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys().map_err(|_| OramError::SerializationFailed)  ,
             },
             Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
         }
@@ -67,8 +68,6 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
-        println!("=== Starting Epoch {:?} ===", self.epoch);
-
         let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients))
@@ -76,18 +75,29 @@ impl Server1 {
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(paths);
 
-        let bytes = self
-            .send(
-                &serialize(&Command::Server2Read(ReadType::ReadPaths(
-                    self.pathset_indices.clone(),
-                )))
-                .unwrap(),
-            )
-            .unwrap();
-        let buckets: Vec<Bucket> = deserialize(&bytes)
-            .map_err(|_| OramError::SerializationFailed)
-            .unwrap();
+        #[cfg(feature = "network")]
+        let buckets: Vec<Bucket> = {
+            let bytes = self
+                .send(
+                    &serialize(&Command::Server2Read(ReadType::ReadPaths(
+                        self.pathset_indices.clone(),
+                    )))
+                    .unwrap(),
+                )
+                .unwrap();
+            deserialize(&bytes)
+                .map_err(|_| OramError::SerializationFailed)
+                .unwrap()
+        };
 
+        #[cfg(not(feature = "network"))]
+        let buckets: Vec<Bucket> = self
+            .s2
+            .lock()
+            .unwrap()
+            .read_paths(self.pathset_indices.clone())
+            .unwrap();
+    
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
@@ -112,7 +122,11 @@ impl Server1 {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        let t_exp = self.epoch + DELTA as u64;
+        let t_exp = if self.epoch < DB_SIZE as u64 {
+            DB_SIZE as u64 
+        } else {
+            self.epoch + DELTA as u64
+        };
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
@@ -149,7 +163,7 @@ impl Server1 {
                                 let c_msg = bucket.get(b).unwrap();
                                 // Decrypt to get the first layer of decryption (client).
                                 let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
-                                let (lca_idx, _) = self.pt.lca_idx(l).unwrap();
+                                let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
                                     ct,
                                     k_oram_t.clone(),
@@ -249,29 +263,31 @@ impl Server1 {
         self.message_queue.clear();
 
         // Measure metadata overwrite time
-        let metadata_overwrite_start = Instant::now();
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
-        let metadata_overwrite_duration = metadata_overwrite_start.elapsed();
-        println!("Metadata overwrite time: {:?}", metadata_overwrite_duration);
 
-        // Measure server lock and write time
-        let server_write_start = Instant::now();
-        self.send(
-            &serialize(&Command::Server2Write(WriteType::Write(
-                self.pt.packed_buckets.clone(),
-            )))
-            .unwrap(),
-        )
-        .unwrap();
-        self.send(
-            &serialize(&Command::Server2Write(WriteType::AddPrfKey(
-                self.k_s1_t.clone(),
-            )))
-            .unwrap(),
-        )
-        .unwrap();
-        let server_write_duration = server_write_start.elapsed();
-        println!("Server2 overwrite time: {:?}", server_write_duration);
+        #[cfg(feature = "network")]
+        {
+            self.send(
+                &serialize(&Command::Server2Write(WriteType::Write(
+                    self.pt.packed_buckets.clone(),
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+            self.send(
+                &serialize(&Command::Server2Write(WriteType::AddPrfKey(
+                    self.k_s1_t.clone(),
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+
+        #[cfg(not(feature = "network"))]
+        {
+            self.s2.lock().unwrap().write(self.pt.packed_buckets.clone());
+            self.s2.lock().unwrap().add_prf_key(&self.k_s1_t);
+        }
 
         // Increment epoch
         self.epoch += 1;
