@@ -1,4 +1,4 @@
-use crate::network::{Command, Local, ReadType, WriteType};
+use crate::network::{Command, Local, Network, ReadType, WriteType, Server2Access, LocalServer2Access};
 use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
@@ -20,7 +20,7 @@ pub struct Server1 {
     pub epoch: u64,
     pub k_s1_t: Key,
     pub num_clients: usize,
-    pub s2: Arc<Mutex<Server2>>,
+    pub s2: Box<dyn Server2Access>,
     pub p: SparseBinaryTree<Bucket>,
     pub pt: SparseBinaryTree<Bucket>,
     pub metadata_pt: SparseBinaryTree<Metadata>,
@@ -30,29 +30,8 @@ pub struct Server1 {
     pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
-#[cfg(feature = "network")]
-impl Local for Server1 {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
-        match deserialize::<Command>(command).unwrap() {
-            Command::Server2Write(write_type) => {
-                match write_type {
-                    WriteType::Write(buckets) => self.s2.lock().unwrap().write(buckets),
-                    WriteType::AddPrfKey(key) => self.s2.lock().unwrap().add_prf_key(&key),
-                }
-                Ok(vec![])
-            }
-            Command::Server2Read(read_type) => match read_type {
-                ReadType::Read(path) => self.s2.lock().unwrap().read(&path).map_err(|_| OramError::SerializationFailed),
-                ReadType::ReadPaths(pathset) => Ok(serialize(&self.s2.lock().unwrap().read_paths(pathset.clone())?.as_slice()).unwrap()),
-                ReadType::GetPrfKeys => self.s2.lock().unwrap().get_prf_keys().map_err(|_| OramError::SerializationFailed)  ,
-            },
-            Command::Server1Write(_, _, _, _) => Err(OramError::InvalidCommand),
-        }
-    }
-}
-
 impl Server1 {
-    pub fn new(s2: Arc<Mutex<Server2>>) -> Self {
+    pub fn new(s2: Box<dyn Server2Access>) -> Self {
         Self {
             epoch: 0,
             k_s1_t: Key::new(vec![]),
@@ -75,28 +54,7 @@ impl Server1 {
             .collect::<Vec<Path>>();
         self.pathset_indices = self.get_path_indices(paths);
 
-        #[cfg(feature = "network")]
-        let buckets: Vec<Bucket> = {
-            let bytes = self
-                .send(
-                    &serialize(&Command::Server2Read(ReadType::ReadPaths(
-                        self.pathset_indices.clone(),
-                    )))
-                    .unwrap(),
-                )
-                .unwrap();
-            deserialize(&bytes)
-                .map_err(|_| OramError::SerializationFailed)
-                .unwrap()
-        };
-
-        #[cfg(not(feature = "network"))]
-        let buckets: Vec<Bucket> = self
-            .s2
-            .lock()
-            .unwrap()
-            .read_paths(self.pathset_indices.clone())
-            .unwrap();
+        let buckets: Vec<Bucket> = self.s2.read_paths(self.pathset_indices.clone()).unwrap();
     
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
@@ -265,29 +223,8 @@ impl Server1 {
         // Measure metadata overwrite time
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
 
-        #[cfg(feature = "network")]
-        {
-            self.send(
-                &serialize(&Command::Server2Write(WriteType::Write(
-                    self.pt.packed_buckets.clone(),
-                )))
-                .unwrap(),
-            )
-            .unwrap();
-            self.send(
-                &serialize(&Command::Server2Write(WriteType::AddPrfKey(
-                    self.k_s1_t.clone(),
-                )))
-                .unwrap(),
-            )
-            .unwrap();
-        }
-
-        #[cfg(not(feature = "network"))]
-        {
-            self.s2.lock().unwrap().write(self.pt.packed_buckets.clone());
-            self.s2.lock().unwrap().add_prf_key(&self.k_s1_t);
-        }
+        self.s2.write(self.pt.packed_buckets.clone())?;
+        self.s2.add_prf_key(&self.k_s1_t)?;
 
         // Increment epoch
         self.epoch += 1;

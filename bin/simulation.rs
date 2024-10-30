@@ -15,13 +15,16 @@ use std::{
     process::Command,
     sync::{Arc, Mutex},
 };
+use myco_rs::network::{LocalServer1Access, LocalServer2Access};
 
 fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
     use std::time::Duration;
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
-    let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
     let mut clients = Vec::new();
@@ -32,7 +35,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     let key = Key::random(&mut rng);
     for i in 0..num_clients {
         let client_name = format!("Client_{}", i);
-        let mut client = Client::new(client_name, s1.clone(), s2.clone());
+        let mut client = Client::new(client_name, s1_access.clone(), s2_access.clone());
 
         client.setup(&key).expect("Setup failed");
 
@@ -107,7 +110,9 @@ fn run_single_client_simulation(num_epochs: usize) {
     use std::time::Duration;
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
-    let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
     let mut total_duration: Duration = Duration::new(0, 0);
@@ -115,7 +120,7 @@ fn run_single_client_simulation(num_epochs: usize) {
 
     // Setup single client
     let key = Key::random(&mut rng);
-    let mut client = Client::new("Client_0".to_string(), s1.clone(), s2.clone());
+    let mut client = Client::new("Client_0".to_string(), s1_access.clone(), s2_access.clone());
     client.setup(&key).expect("Setup failed");
 
     // Track bucket usage statistics over time
@@ -211,7 +216,9 @@ fn run_local_latency_benchmark() {
     use std::time::Duration;
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
-    let s1 = Arc::new(Mutex::new(Server1::new(s2.clone())));
+    let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
 
@@ -220,7 +227,7 @@ fn run_local_latency_benchmark() {
     let mut keys = Vec::new();
     for i in 0..NUM_WRITES_PER_EPOCH {
         let key = Key::random(&mut rng);
-        let mut client = Client::new(format!("Client_{}", i), s1.clone(), s2.clone());
+        let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
         client.setup(&key).expect("Setup failed");
         keys.push(key);
         clients.push(client);
@@ -235,8 +242,8 @@ fn run_local_latency_benchmark() {
         s1.lock().unwrap().batch_init(NUM_WRITES_PER_EPOCH);
         
         // Have each client perform a write
-        clients.par_iter_mut()
-            .zip_eq(keys.par_iter())
+        clients.iter_mut()
+            .zip(keys.iter())
             .enumerate()
             .for_each(|(client_idx, (client, key))| {
                 let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();

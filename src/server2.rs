@@ -23,13 +23,6 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    #[cfg(feature = "network")]
-    pub fn read(&mut self, l: &Path) -> Result<Vec<u8>, OramError> {
-        bincode::serialize(&self.tree.get_all_nodes_along_path(l))
-            .map_err(|_| OramError::SerializationFailed)
-    }
-
-    #[cfg(not(feature = "network"))]
     pub fn read(&mut self, l: &Path) -> Result<Vec<Bucket>, OramError> {
         Ok(self.tree.get_all_nodes_along_path(l))
     }
@@ -55,13 +48,7 @@ impl Server2 {
         // Increment the epoch
         self.epoch += 1;
     }
-
-    #[cfg(feature = "network")]
-    pub fn get_prf_keys(&self) -> Result<Vec<u8>, OramError> {
-        bincode::serialize(&self.prf_keys).map_err(|_| OramError::SerializationFailed)
-    }
     
-    #[cfg(not(feature = "network"))]
     pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         Ok(self.prf_keys.clone())
     }
@@ -74,19 +61,6 @@ impl Server2 {
         }
     }
 
-    #[cfg(feature = "network")]
-    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<u8>, OramError> {
-        self.pathset_indices = pathset.clone();
-
-        let buckets: Vec<Bucket> = pathset
-            .iter()
-            .map(|i| self.tree.value[*i].clone().unwrap())
-            .collect();
-
-        bincode::serialize(&buckets).map_err(|_| OramError::SerializationFailed)
-    }
-
-    #[cfg(not(feature = "network"))]
     pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         self.pathset_indices = pathset.clone();
 
