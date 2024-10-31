@@ -85,33 +85,27 @@ fn cleanup_servers() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_remote_single_client() {
-    println!("Starting test setup...");
     cleanup_servers();
     generate_test_certificates().expect("Failed to generate certificates");
-    println!("Certificates generated successfully");
 
     // Start Server2 in a separate process
-    println!("Starting Server2...");
     let mut server2 = Command::new("cargo")
         .args(["run", "--bin", "tls_server2"])
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("Failed to start Server2");
-    println!("Server2 process spawned");
 
     // Give Server2 more time to start
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start Server1 in a separate process
-    println!("Starting Server1...");
     let mut server1 = Command::new("cargo")
         .args(["run", "--bin", "tls_server1"])
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("Failed to start Server1");
-    println!("Server1 process spawned");
 
     // Give Server1 more time to start and complete batch_init
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -134,15 +128,12 @@ async fn test_remote_single_client() {
     // Add delay before setup
     tokio::time::sleep(Duration::from_secs(1)).await;
     client.setup(&key).expect("Setup failed");
-
-    println!("Setup successful");
     
     // Add delay before write
     tokio::time::sleep(Duration::from_secs(1)).await;
     
     // Write data
     let message = vec![1, 2, 3, 4];
-    println!("Attempting write operation...");
     match client.write(&message, &key) {
         Ok(_) => println!("Client write call completed"),
         Err(e) => println!("Client write failed with error: {:?}", e),
@@ -150,13 +141,8 @@ async fn test_remote_single_client() {
     
     // Add delay after write
     tokio::time::sleep(Duration::from_secs(1)).await;
-    println!("Write successful");
-
-    // Add delay before read
-    tokio::time::sleep(Duration::from_secs(1)).await;
     
     // Read data back
-    println!("Attempting read operation...");
     match client.read(&key, "TestClient".to_string(), 0) {
         Ok(msg) => println!("Read successful: {:?}", msg),
         Err(e) => println!("Read failed with error: {:?}", e),

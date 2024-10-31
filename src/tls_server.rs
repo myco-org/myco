@@ -68,57 +68,35 @@ impl TlsServer {
 
                     loop {
                         let mut len_bytes = [0u8; 4];
-                        println!("TLS {}: Reading command length...", name);
-
 
                         match stream.read_exact(&mut len_bytes).await {
 
                             Ok(0) => {
-                                println!("TLS {}: Client disconnected naturally", name);
                                 break;
                             }
                             Ok(_) => {
-                                println!("TLS {}: Inside OK loop", name);
                                 let len = u32::from_be_bytes(len_bytes);
-                                println!("TLS {}: Command length is {}", name, len);
                                 
                                 let mut command: Vec<u8> = vec![0u8; len as usize];
                                 stream.read_exact(&mut command).await?;
-                                println!("TLS {}: Command received", name);
-
-                                println!("TLS {}: Processing command...", name);
                                 let response = handler(&command)?;
-                                println!("TLS {}: Command processed, response length: {}", name, response.len());
                                 
                                 let len = response.len() as u32;
-                                println!("TLS {}: Sending response length...", name);
                                 stream.write_all(&len.to_be_bytes()).await?;
-                                println!("TLS {}: Sending response...", name);
                                 stream.write_all(&response).await?;
-                                println!("TLS {}: Response sent", name);
-                                
-                                // Remove the shutdown() call that was here
-                                // Just flush to ensure data is sent
                                 stream.flush().await?;
-                                // if counter >= 2 {
-                                //     break;
-                                // }
                             }
                             Err(e) => {
-                                println!("TLS {}: Error reading command length: {:?}", name, e);
                                 break;
                             }
                         }
                     }
-                    println!("TLS {}: Exiting loop", name);
                     Ok(())
                 }.await;
                 
                 if let Err(e) = result {
                     eprintln!("Connection error: {:?}", e);
                 }
-
-                println!("Got here")
             });
         }
     }

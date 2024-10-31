@@ -126,13 +126,11 @@ impl<T: TreeValue> BinaryTree<T> {
             idx = 2 * idx + u8::from(direction) as usize;
 
             if idx >= self.value.len() || self.value[idx].is_none() {
-                println!("get_all_nodes_along_path took: {:?}", start.elapsed());
                 return nodes;
             }
             nodes.push(self.value[idx].clone().unwrap());
         }
 
-        println!("get_all_nodes_along_path took: {:?}", start.elapsed());
         nodes
     }
 

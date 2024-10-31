@@ -27,12 +27,7 @@ impl Server2 {
 
     /// l is the leaf block.
     pub fn read(&mut self, l: &Path) -> Result<Vec<Bucket>, OramError> {
-        println!("Server2: Reading path: {:?}", l);
-
         let buckets = self.tree.get_all_nodes_along_path(l);
-        println!("Server2: Read buckets: {:?}", buckets);
-
-        println!("Server2: Returning tree: {:?}", self.tree.value);
         Ok(buckets)
     }
 
@@ -87,20 +82,16 @@ impl Server2 {
         // Create two TLS servers
         let client_server = TlsServer::new(client_addr, cert_path, key_path, "Server2-Client".to_string()).await?;
         let s1_server = TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
-        
-        println!("Server2: Started and waiting for commands on {} and {}", client_addr, s1_addr);
-        
+                
         // Clone Arc for second server
         let server2_s1 = Arc::clone(&server2);
         
         // Run both servers concurrently
         tokio::try_join!(
             client_server.run(move |command| {
-                println!("Deserialization about to happen 6");
                 let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                println!("Server2-Client: Received command: {:?}", command);
                 
-                let x = match command { 
+                match command { 
                     Command::Server2Read(read_type) => {
                         match read_type {
                             ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
@@ -109,23 +100,17 @@ impl Server2 {
                         }.map_err(|_| OramError::SerializationFailed)
                     }
                     _ => Err(OramError::InvalidCommand),
-                };
-                println!("Server2-Client: Serialized response: {:?}", x);
-                x
+                }
             }),
             s1_server.run(move |command| {
-                println!("Deserialization about to happen 7");
                 let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                println!("Server2-S1: Received command: {:?}", command);
                 
                 match command {
                     Command::Server2Write(write_type) => {
                         match write_type {
                             WriteType::Write(buckets, prf_key) => {
-                                println!("Server2: Processing write of {} buckets", buckets.len());
                                 server2_s1.lock().unwrap().write(buckets);
                                 server2_s1.lock().unwrap().add_prf_key(&prf_key);
-                                println!("Server2: Write and PRF key update completed");
                                 Ok(serialize(&Command::Success).unwrap())
                             }
                         }
