@@ -3,7 +3,7 @@ use std::{collections::HashSet, sync::{Arc, Mutex}};
 use bincode::{deserialize, serialize};
 use tokio::stream;
 
-use crate::{error::OramError, network::{Command, ReadType, WriteType, ReadResponse}, tls_server::TlsServer, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
+use crate::{error::OramError, network::{Command, ReadType, WriteType}, tls_server::TlsServer, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
 
 pub struct Server2 {
     pub tree: BinaryTree<Bucket>,
@@ -27,7 +27,13 @@ impl Server2 {
 
     /// l is the leaf block.
     pub fn read(&mut self, l: &Path) -> Result<Vec<Bucket>, OramError> {
-        Ok(self.tree.get_all_nodes_along_path(l))
+        println!("Server2: Reading path: {:?}", l);
+
+        let buckets = self.tree.get_all_nodes_along_path(l);
+        println!("Server2: Read buckets: {:?}", buckets);
+
+        println!("Server2: Returning tree: {:?}", self.tree.value);
+        Ok(buckets)
     }
 
     /// Get a reference to the tree
@@ -94,7 +100,7 @@ impl Server2 {
                 let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
                 println!("Server2-Client: Received command: {:?}", command);
                 
-                match command { 
+                let x = match command { 
                     Command::Server2Read(read_type) => {
                         match read_type {
                             ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
@@ -103,7 +109,9 @@ impl Server2 {
                         }.map_err(|_| OramError::SerializationFailed)
                     }
                     _ => Err(OramError::InvalidCommand),
-                }
+                };
+                println!("Server2-Client: Serialized response: {:?}", x);
+                x
             }),
             s1_server.run(move |command| {
                 println!("Deserialization about to happen 7");

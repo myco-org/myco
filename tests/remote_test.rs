@@ -101,7 +101,7 @@ async fn test_remote_single_client() {
     println!("Server2 process spawned");
 
     // Give Server2 more time to start
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Start Server1 in a separate process
     println!("Starting Server1...");
@@ -114,7 +114,7 @@ async fn test_remote_single_client() {
     println!("Server1 process spawned");
 
     // Give Server1 more time to start and complete batch_init
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Create separate connections for client and server1
     let server2_connection_for_client = RemoteServer2Access::connect("localhost:8443", "server-cert.pem").await
@@ -132,13 +132,13 @@ async fn test_remote_single_client() {
     let key = Key::random(&mut rng);
     
     // Add delay before setup
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     client.setup(&key).expect("Setup failed");
 
     println!("Setup successful");
     
     // Add delay before write
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     
     // Write data
     let message = vec![1, 2, 3, 4];
@@ -149,11 +149,11 @@ async fn test_remote_single_client() {
     }
     
     // Add delay after write
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     println!("Write successful");
 
     // Add delay before read
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     
     // Read data back
     println!("Attempting read operation...");

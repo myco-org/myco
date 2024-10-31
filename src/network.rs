@@ -99,9 +99,8 @@ impl Server2Access for RemoteServer2Access {
     fn read(&self, path: &Path) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::Read(path.clone()));
         let response = self.connection.send(&serialize(&command).unwrap())?;
-        let read_response: ReadResponse = deserialize(&response).map_err(|_| OramError::DeserializationError)?;
-        println!("Deserialization about to happen 2");
-        Ok(read_response.buckets)
+        println!("this is the one before deserialization");
+        deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
     fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<(), OramError> {
@@ -131,7 +130,6 @@ impl Server2Access for RemoteServer2Access {
     fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         let command = Command::Server2Read(ReadType::GetPrfKeys);
         let response = self.connection.send(&serialize(&command).unwrap())?;
-        println!("Deserialization about to happen 4");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 }
@@ -326,11 +324,4 @@ impl Server1Access for RemoteServer1Access {
             Err(OramError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Unexpected response from Server1")))
         }
     }
-}
-
-// Update the return type for Read operations to include PRF keys
-#[derive(Serialize, Deserialize, Debug)]
-pub struct ReadResponse {
-    pub(crate) buckets: Vec<Bucket>,
-    pub(crate) prf_keys: Vec<Key>,
 }
