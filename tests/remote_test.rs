@@ -13,10 +13,13 @@ use std::path::Path;
 
 fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
     // Skip if certificates already exist
-    if Path::new("server-cert.pem").exists() && Path::new("server-key.pem").exists() {
+    if !Path::new("certs").exists() {
+        fs::create_dir("certs")?;
+    }
+    if Path::new("certs/server-cert.pem").exists() && Path::new("certs/server-key.pem").exists() {
         // Clean up old certificates to ensure we have fresh ones
-        fs::remove_file("server-cert.pem")?;
-        fs::remove_file("server-key.pem")?;
+        fs::remove_file("certs/server-cert.pem")?;
+        fs::remove_file("certs/server-key.pem")?;
     }
 
     // Create a config file for OpenSSL
@@ -43,8 +46,8 @@ DNS.1 = localhost
         .args([
             "req", "-x509",
             "-newkey", "rsa:4096",
-            "-keyout", "server-key.pem",
-            "-out", "server-cert.pem",
+            "-keyout", "certs/server-key.pem",
+            "-out", "certs/server-cert.pem",
             "-days", "365",
             "-nodes",
             "-config", "openssl.cnf",
@@ -58,13 +61,13 @@ DNS.1 = localhost
             "pkcs8",
             "-topk8",
             "-nocrypt",
-            "-in", "server-key.pem",
-            "-out", "server-key.pem.tmp"
+            "-in", "certs/server-key.pem",
+            "-out", "certs/server-key.pem.tmp"
         ])
         .output()?;
 
     // Replace the original key with the PKCS8 version
-    fs::rename("server-key.pem.tmp", "server-key.pem")?;
+    fs::rename("certs/server-key.pem.tmp", "certs/server-key.pem")?;
 
     // Clean up the config file
     fs::remove_file("openssl.cnf")?;
@@ -111,9 +114,9 @@ async fn test_remote_single_client() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Create separate connections for client and server1
-    let server2_connection_for_client = RemoteServer2Access::connect("localhost:8443", "server-cert.pem").await
+    let server2_connection_for_client = RemoteServer2Access::connect("localhost:8443", "certs/server-cert.pem").await
         .expect("Failed to connect to Server2");
-    let server1_connection = RemoteServer1Access::connect("localhost:8420", "server-cert.pem").await
+    let server1_connection = RemoteServer1Access::connect("localhost:8420", "certs/server-cert.pem").await
         .expect("Failed to connect to Server1");
 
     // Create client with its own connection
