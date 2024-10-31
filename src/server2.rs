@@ -90,6 +90,7 @@ impl Server2 {
         // Run both servers concurrently
         tokio::try_join!(
             client_server.run(move |command| {
+                println!("Deserialization about to happen 6");
                 let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
                 println!("Server2-Client: Received command: {:?}", command);
                 
@@ -105,6 +106,7 @@ impl Server2 {
                 }
             }),
             s1_server.run(move |command| {
+                println!("Deserialization about to happen 7");
                 let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
                 println!("Server2-S1: Received command: {:?}", command);
                 

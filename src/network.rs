@@ -92,7 +92,7 @@ impl Server2Access for RemoteServer2Access {
     fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::ReadPaths(indices));
         let response = self.connection.send(&serialize(&command).unwrap())?;
-        println!("READ PATHS RESPONSE GOTTTEDD");
+        println!("Deserialization about to happen 1");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
@@ -100,6 +100,7 @@ impl Server2Access for RemoteServer2Access {
         let command = Command::Server2Read(ReadType::Read(path.clone()));
         let response = self.connection.send(&serialize(&command).unwrap())?;
         let read_response: ReadResponse = deserialize(&response).map_err(|_| OramError::DeserializationError)?;
+        println!("Deserialization about to happen 2");
         Ok(read_response.buckets)
     }
 
@@ -109,6 +110,7 @@ impl Server2Access for RemoteServer2Access {
         let response = self.connection.send(&serialize(&command).unwrap())?;
 
         // Deserialize and check for success
+        println!("Deserialization about to happen 3");
         let response_command: Command = deserialize(&response)
             .map_err(|_| OramError::DeserializationError)?;
         match response_command {
@@ -129,6 +131,7 @@ impl Server2Access for RemoteServer2Access {
     fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         let command = Command::Server2Read(ReadType::GetPrfKeys);
         let response = self.connection.send(&serialize(&command).unwrap())?;
+        println!("Deserialization about to happen 4");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 }
@@ -229,7 +232,7 @@ impl Network for RemoteConnection {
         while retries > 0 {
             println!("RemoteConnection: Attempt {} of {}", 4 - retries, 3);
             let result = {
-                let mut stream = self.stream.lock().unwrap();
+                let mut stream: std::sync::MutexGuard<'_, TlsStream<TcpStream>> = self.stream.lock().unwrap();
                 println!("RemoteConnection: Got stream lock");
                 
                 futures::executor::block_on(async {
@@ -239,7 +242,7 @@ impl Network for RemoteConnection {
                     stream.write_all(command).await?;
                     println!("RemoteConnection: Flushing stream");
                     stream.flush().await?;
-
+                    // Read the response length
                     let mut len_bytes = [0u8; 4];
                     stream.read_exact(&mut len_bytes).await?;
                     println!("RemoteConnection: Response length bytes read");
@@ -257,6 +260,8 @@ impl Network for RemoteConnection {
 
             match result {
                 Ok(response) => {
+
+                    println!("RemoteConnection: Response: {:?}", response);
                     println!("RemoteConnection: Send operation completed successfully");
                     return Ok(response);
                 }

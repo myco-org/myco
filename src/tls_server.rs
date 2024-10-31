@@ -65,7 +65,6 @@ impl TlsServer {
             tokio::spawn(async move {
                 let result: Result<(), OramError> = async move {
                     let mut stream = acceptor.accept(stream).await?;
-                    let mut counter     = 0;
 
                     loop {
                         let mut len_bytes = [0u8; 4];
@@ -101,11 +100,9 @@ impl TlsServer {
                                 // Remove the shutdown() call that was here
                                 // Just flush to ensure data is sent
                                 stream.flush().await?;
-                                counter += 1;
-                                println!("TLS {}: Counter: {}", name, counter);
-                                if counter >= 2 {
-                                    break;
-                                }
+                                // if counter >= 2 {
+                                //     break;
+                                // }
                             }
                             Err(e) => {
                                 println!("TLS {}: Error reading command length: {:?}", name, e);

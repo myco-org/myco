@@ -56,7 +56,7 @@ impl Server1 {
         self.pathset_indices = self.get_path_indices(paths);
 
         let buckets: Vec<Bucket> = self.s2.read_paths(self.pathset_indices.clone()).unwrap();
-    
+        println!("Batch init: buckets read successfully {:?}", buckets);
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
@@ -269,7 +269,7 @@ impl Server1 {
         // Create a dedicated Server2 connection for Server1
         let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
         let server1 = Arc::new(Mutex::new(Server1::new(Box::new(server2_connection))));
-        
+        let server1_clone = server1.clone();
         // Initialize with a default number of clients (e.g., 1)
         {
             println!("Performing batch_init...");
@@ -280,34 +280,43 @@ impl Server1 {
         
         println!("Server1: Started and waiting for commands");
 
+        let server1_clone_for_batch = server1_clone.clone();
+        
+        // Spawn a background task to handle batch writes
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let queue_size = server1_clone_for_batch.lock().unwrap().message_queue.len();
+                println!("Server1: Queue size: {}", queue_size);
+                if queue_size >= 1 {
+                    println!("Initiating batch_write...");
+                    if let Err(e) = server1_clone_for_batch.lock().unwrap().batch_write() {
+                        eprintln!("Error in batch_write: {:?}", e);
+                    }
+                }
+            }
+        });
+
         server.run(move |command| {
+            println!("Deserialization about to happen 5");
+
             let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-            let mut server1 = server1.lock().unwrap();
+            let mut server1_guard = server1.lock().unwrap();
             
             match command {
                 Command::Server1Write(ct, f, k_oram_t, cs) => {
                     println!("Processing write command...");
-                    server1.queue_write(ct, f, k_oram_t, cs)?;
-                    println!("Queue write completed for epoch {}", server1.epoch);
-                    
-                    // Check message queue size and log
-                    let queue_size = server1.message_queue.len();
-                    println!("Current message queue size: {}", queue_size);
-                    
-                    // Return success immediately
+                    server1_guard.queue_write(ct, f, k_oram_t, cs)?;
+                    println!("Queue write completed for epoch {}", server1_guard.epoch);                    
                     let response = serialize(&Command::Success).unwrap();
-                    
-                    // Start batch_write after returning response
-                    if queue_size >= 1 {
-                        println!("Initiating batch_write...");
-                        let _ = server1.batch_write(); 
-                    }
                     
                     Ok(response)
                 }
                 _ => Err(OramError::InvalidCommand),
             }   
-        }).await
+        }).await;
+
+        Ok(())
     }
 }
 
