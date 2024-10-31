@@ -1,4 +1,3 @@
-use bincode::serialize;
 use myco_rs::{
     Client,
     network::{RemoteServer1Access, RemoteServer2Access},
@@ -118,7 +117,7 @@ async fn test_remote_single_client() {
     tokio::time::sleep(Duration::from_secs(3)).await;
 
     // Create separate connections for client and server1
-    let server2_connection_for_client = RemoteServer2Access::connect("localhost:8444", "server-cert.pem").await
+    let server2_connection_for_client = RemoteServer2Access::connect("localhost:8443", "server-cert.pem").await
         .expect("Failed to connect to Server2");
     let server1_connection = RemoteServer1Access::connect("localhost:8420", "server-cert.pem").await
         .expect("Failed to connect to Server1");

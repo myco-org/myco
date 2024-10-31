@@ -264,7 +264,7 @@ impl Server1 {
     }
 
     pub async fn run_server(addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
-        let server = TlsServer::new(addr, cert_path, key_path).await?;
+        let server = TlsServer::new(addr, cert_path, key_path, "Server1".to_string()).await?;
         
         // Create a dedicated Server2 connection for Server1
         let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
@@ -290,21 +290,23 @@ impl Server1 {
                     server1.queue_write(ct, f, k_oram_t, cs)?;
                     println!("Queue write completed for epoch {}", server1.epoch);
                     
-                    // Check message queue size and call batch_write if needed
+                    // Check message queue size and log
                     let queue_size = server1.message_queue.len();
                     println!("Current message queue size: {}", queue_size);
+                    
+                    // Return success immediately
+                    let response = serialize(&Command::Success).unwrap();
+                    
+                    // Start batch_write after returning response
                     if queue_size >= 1 {
                         println!("Initiating batch_write...");
-                        match server1.batch_write() {
-                            Ok(_) => println!("batch_write completed successfully"),
-                            Err(e) => println!("batch_write failed with error: {:?}", e),
-                        }
+                        let _ = server1.batch_write(); 
                     }
                     
-                    Ok(vec![1])
+                    Ok(response)
                 }
                 _ => Err(OramError::InvalidCommand),
-            }
+            }   
         }).await
     }
 }

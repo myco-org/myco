@@ -75,37 +75,63 @@ impl Server2 {
         Ok(buckets)
     }
 
-    pub async fn run_server(addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
+    pub async fn run_server(client_addr: &str, s1_addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
         let server2 = Arc::new(Mutex::new(Self::new()));
-        let server = TlsServer::new(addr, cert_path, key_path).await?;
         
-        println!("Server2: Started and waiting for commands");
+        // Create two TLS servers
+        let client_server = TlsServer::new(client_addr, cert_path, key_path, "Server2-Client".to_string()).await?;
+        let s1_server = TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
         
-        server.run(move |command| {
-            let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-            println!("Server2: Received command: {:?}", command);
-            
-            match command { 
-                Command::Server2Write(write_type) => {
-                    match write_type {
-                        WriteType::Write(buckets, prf_key) => {
-                            println!("Server2: Processing write of {} buckets", buckets.len());
-                            server2.lock().unwrap().write(buckets);
-                            server2.lock().unwrap().add_prf_key(&prf_key);
-                            println!("Server2: Write and PRF key update completed");
-                            Ok(vec![])
-                        }
+        println!("Server2: Started and waiting for commands on {} and {}", client_addr, s1_addr);
+        
+        // Clone Arc for second server
+        let server2_s1 = Arc::clone(&server2);
+        
+        // Run both servers concurrently
+        tokio::try_join!(
+            client_server.run(move |command| {
+                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
+                println!("Server2-Client: Received command: {:?}", command);
+                
+                match command { 
+                    Command::Server2Read(read_type) => {
+                        match read_type {
+                            ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
+                            ReadType::ReadPaths(indices) => serialize(&server2.lock().unwrap().read_paths(indices)?),
+                            ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
+                        }.map_err(|_| OramError::SerializationFailed)
                     }
+                    _ => Err(OramError::InvalidCommand),
                 }
-                Command::Server2Read(read_type) => {
-                    match read_type {
-                        ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
-                        ReadType::ReadPaths(indices) => serialize(&server2.lock().unwrap().read_paths(indices)?),
-                        ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
-                    }.map_err(|_| OramError::SerializationFailed)
+            }),
+            s1_server.run(move |command| {
+                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
+                println!("Server2-S1: Received command: {:?}", command);
+                
+                match command {
+                    Command::Server2Write(write_type) => {
+                        match write_type {
+                            WriteType::Write(buckets, prf_key) => {
+                                println!("Server2: Processing write of {} buckets", buckets.len());
+                                server2_s1.lock().unwrap().write(buckets);
+                                server2_s1.lock().unwrap().add_prf_key(&prf_key);
+                                println!("Server2: Write and PRF key update completed");
+                                Ok(serialize(&Command::Success).unwrap())
+                            }
+                        }
+                    } 
+                    Command::Server2Read(read_type) => {
+                        match read_type {
+                            ReadType::Read(path) => serialize(&server2_s1.lock().unwrap().read(&path)?),
+                            ReadType::ReadPaths(indices) => serialize(&server2_s1.lock().unwrap().read_paths(indices)?),
+                            ReadType::GetPrfKeys => serialize(&server2_s1.lock().unwrap().get_prf_keys()?),
+                        }.map_err(|_| OramError::SerializationFailed)
+                    }
+                    _ => Err(OramError::InvalidCommand),
                 }
-                _ => Err(OramError::InvalidCommand),
-            }
-        }).await
+            })
+        )?;
+
+        Ok(())
     }
 }

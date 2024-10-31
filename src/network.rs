@@ -14,6 +14,7 @@ pub enum Command {
     Server1Write(Vec<u8>, Vec<u8>, Key, Vec<u8>),
     Server2Write(WriteType),
     Server2Read(ReadType),
+    Success,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -91,6 +92,7 @@ impl Server2Access for RemoteServer2Access {
     fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::ReadPaths(indices));
         let response = self.connection.send(&serialize(&command).unwrap())?;
+        println!("READ PATHS RESPONSE GOTTTEDD");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
@@ -105,16 +107,22 @@ impl Server2Access for RemoteServer2Access {
         println!("RemoteServer2Access: Starting write operation");
         let command = Command::Server2Write(WriteType::Write(buckets, prf_key));
         let response = self.connection.send(&serialize(&command).unwrap())?;
-        
-        if response.is_empty() {
-            println!("RemoteServer2Access: Write operation completed successfully");
-            Ok(())
-        } else {
-            println!("RemoteServer2Access: Unexpected response from write operation");
-            Err(OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Unexpected response from Server2"
-            )))
+
+        // Deserialize and check for success
+        let response_command: Command = deserialize(&response)
+            .map_err(|_| OramError::DeserializationError)?;
+        match response_command {
+            Command::Success => {
+                println!("RemoteServer2Access: Write operation completed successfully");
+                Ok(())
+            }
+            _ => {
+                println!("RemoteServer2Access: Unexpected response from write operation");
+                Err(OramError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Unexpected response from Server2"
+                )))
+            }
         }
     }
 
@@ -214,29 +222,44 @@ impl RemoteConnection {
 
 impl Network for RemoteConnection {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
+        println!("RemoteConnection: Starting send operation");
         let mut retries = 3;
         let mut last_error = None;
 
         while retries > 0 {
-            let mut stream = self.stream.lock().unwrap();
-            
-            match futures::executor::block_on(async {
-                // Send length prefix
-                stream.write_all(&(command.len() as u32).to_be_bytes()).await?;
-                stream.write_all(command).await?;
-                stream.flush().await?;
+            println!("RemoteConnection: Attempt {} of {}", 4 - retries, 3);
+            let result = {
+                let mut stream = self.stream.lock().unwrap();
+                println!("RemoteConnection: Got stream lock");
+                
+                futures::executor::block_on(async {
+                    println!("RemoteConnection: Sending command length");
+                    stream.write_all(&(command.len() as u32).to_be_bytes()).await?;
+                    println!("RemoteConnection: Sending command");
+                    stream.write_all(command).await?;
+                    println!("RemoteConnection: Flushing stream");
+                    stream.flush().await?;
 
-                // Read response
-                let mut len_bytes = [0u8; 4];
-                stream.read_exact(&mut len_bytes).await?;
-                let len = u32::from_be_bytes(len_bytes);
-                
-                let mut response = vec![0u8; len as usize];
-                stream.read_exact(&mut response).await?;
-                
-                Ok::<Vec<u8>, std::io::Error>(response)
-            }) {
-                Ok(response) => return Ok(response),
+                    let mut len_bytes = [0u8; 4];
+                    stream.read_exact(&mut len_bytes).await?;
+                    println!("RemoteConnection: Response length bytes read");
+                    let len = u32::from_be_bytes(len_bytes);
+                    println!("RemoteConnection: Response length is {}", len);
+                    
+                    println!("RemoteConnection: Reading response");
+                    let mut response = vec![0u8; len as usize];
+                    stream.read_exact(&mut response).await?;
+                    println!("RemoteConnection: Response read successfully");
+                    
+                    Ok::<Vec<u8>, std::io::Error>(response)
+                })
+            };
+
+            match result {
+                Ok(response) => {
+                    println!("RemoteConnection: Send operation completed successfully");
+                    return Ok(response);
+                }
                 Err(e) => {
                     println!("Connection error, retrying... ({} attempts left): {:?}", retries - 1, e);
                     last_error = Some(e);
@@ -285,12 +308,12 @@ impl Server1Access for LocalServer1Access {
 
 impl Server1Access for RemoteServer1Access {
     fn queue_write(&self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cs: Vec<u8>) -> Result<(), OramError> {
-        println!("Sending write command to Server1");
+        println!("Sending write command to Server1") ;
         let command = Command::Server1Write(ct, f, k_oram_t, cs);
         let response = self.connection.send(&serialize(&command).unwrap())?;
         
         // Check for success response
-        if response == vec![1] {
+        if response == serialize(&Command::Success).unwrap() {
             println!("Write to Server1 completed successfully");
             Ok(())
         } else {
