@@ -91,21 +91,13 @@ impl Server2Access for RemoteServer2Access {
     fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::ReadPaths(indices));
         let response = self.connection.send(&serialize(&command).unwrap())?;
-        let result = deserialize(&response).map_err(|_| OramError::DeserializationError)?;
-        
-        // Explicitly close the connection after read paths
-        self.connection.close()?;
-        Ok(result)
+        deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
     fn read(&self, path: &Path) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::Read(path.clone()));
         let response = self.connection.send(&serialize(&command).unwrap())?;
         let read_response: ReadResponse = deserialize(&response).map_err(|_| OramError::DeserializationError)?;
-        
-        // Store the PRF keys
-        // TODO: Store read_response.prf_keys somewhere
-        
         Ok(read_response.buckets)
     }
 
@@ -114,13 +106,15 @@ impl Server2Access for RemoteServer2Access {
         let command = Command::Server2Write(WriteType::Write(buckets, prf_key));
         let response = self.connection.send(&serialize(&command).unwrap())?;
         
-        // We expect an empty response for write operations
         if response.is_empty() {
             println!("RemoteServer2Access: Write operation completed successfully");
             Ok(())
         } else {
             println!("RemoteServer2Access: Unexpected response from write operation");
-            Err(OramError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Unexpected response from Server2")))
+            Err(OramError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Unexpected response from Server2"
+            )))
         }
     }
 
@@ -144,11 +138,6 @@ impl RemoteServer2Access {
             addr: addr.to_string(),
             cert_path: cert_path.to_string(),
         })
-    }
-
-    // Add method to create a new independent connection
-    pub async fn clone_with_new_connection(&self) -> Result<Self, OramError> {
-        Self::connect(&self.addr, &self.cert_path).await
     }
 }
 
@@ -225,48 +214,43 @@ impl RemoteConnection {
 
 impl Network for RemoteConnection {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
-        let mut stream = self.stream.lock().unwrap();
-        
-        println!("RemoteConnection: Sending command of length {}", command.len());
-        // Send length prefix
-        let len = command.len() as u32;
-        if let Err(e) = futures::executor::block_on(stream.write_all(&len.to_be_bytes())) {
-            println!("RemoteConnection: Failed to write length: {}", e);
-            return Err(OramError::IoError(e));
+        let mut retries = 3;
+        let mut last_error = None;
+
+        while retries > 0 {
+            let mut stream = self.stream.lock().unwrap();
+            
+            match futures::executor::block_on(async {
+                // Send length prefix
+                stream.write_all(&(command.len() as u32).to_be_bytes()).await?;
+                stream.write_all(command).await?;
+                stream.flush().await?;
+
+                // Read response
+                let mut len_bytes = [0u8; 4];
+                stream.read_exact(&mut len_bytes).await?;
+                let len = u32::from_be_bytes(len_bytes);
+                
+                let mut response = vec![0u8; len as usize];
+                stream.read_exact(&mut response).await?;
+                
+                Ok::<Vec<u8>, std::io::Error>(response)
+            }) {
+                Ok(response) => return Ok(response),
+                Err(e) => {
+                    println!("Connection error, retrying... ({} attempts left): {:?}", retries - 1, e);
+                    last_error = Some(e);
+                    retries -= 1;
+                    if retries > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                    }
+                }
+            }
         }
 
-        // Send command
-        if let Err(e) = futures::executor::block_on(stream.write_all(command)) {
-            println!("RemoteConnection: Failed to write command: {}", e);
-            return Err(OramError::IoError(e));
-        }
-        println!("RemoteConnection: Command sent successfully");
-
-        // Ensure the command is fully sent
-        if let Err(e) = futures::executor::block_on(stream.flush()) {
-            println!("RemoteConnection: Failed to flush: {}", e);
-            return Err(OramError::IoError(e));
-        }
-
-        // Read response length
-        println!("RemoteConnection: Attempting to read response length");
-        let mut len_bytes = [0u8; 4];
-        if let Err(e) = futures::executor::block_on(stream.read_exact(&mut len_bytes)) {
-            println!("RemoteConnection: Failed to read response length: {}", e);
-            return Err(OramError::IoError(e));
-        }
-        let len = u32::from_be_bytes(len_bytes);
-        println!("RemoteConnection: Response length received: {}", len);
-
-        // Read response data
-        let mut response = vec![0u8; len as usize];
-        if let Err(e) = futures::executor::block_on(stream.read_exact(&mut response)) {
-            println!("RemoteConnection: Failed to read response data: {}", e);
-            return Err(OramError::IoError(e));
-        }
-        println!("RemoteConnection: Response data received successfully");
-
-        Ok(response)
+        Err(OramError::IoError(last_error.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::Other, "Failed to send command after multiple retries")
+        })))
     }
 }
 

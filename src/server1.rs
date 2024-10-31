@@ -27,7 +27,6 @@ pub struct Server1 {
     pub metadata_pt: SparseBinaryTree<Metadata>,
     pub metadata: BinaryTree<Metadata>,
     pub pathset_indices: Vec<usize>,
-    // Each index can have multiple buckets.
     pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
@@ -48,6 +47,7 @@ impl Server1 {
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
+        println!("IN the batch init for epoch {}", self.epoch);
         let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients))
@@ -270,17 +270,37 @@ impl Server1 {
         let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
         let server1 = Arc::new(Mutex::new(Server1::new(Box::new(server2_connection))));
         
+        // Initialize with a default number of clients (e.g., 1)
+        {
+            println!("Performing batch_init...");
+            let mut server1_guard = server1.lock().unwrap();
+            server1_guard.batch_init(1);
+            println!("batch_init completed successfully");
+        }
+        
         println!("Server1: Started and waiting for commands");
-    
+
         server.run(move |command| {
             let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
             let mut server1 = server1.lock().unwrap();
+            
             match command {
                 Command::Server1Write(ct, f, k_oram_t, cs) => {
+                    println!("Processing write command...");
                     server1.queue_write(ct, f, k_oram_t, cs)?;
-                    println!("Finished queue write for epoch {}", server1.epoch);
-                    server1.batch_write()?;
-                    println!("Server1: Sending success response to client");
+                    println!("Queue write completed for epoch {}", server1.epoch);
+                    
+                    // Check message queue size and call batch_write if needed
+                    let queue_size = server1.message_queue.len();
+                    println!("Current message queue size: {}", queue_size);
+                    if queue_size >= 1 {
+                        println!("Initiating batch_write...");
+                        match server1.batch_write() {
+                            Ok(_) => println!("batch_write completed successfully"),
+                            Err(e) => println!("batch_write failed with error: {:?}", e),
+                        }
+                    }
+                    
                     Ok(vec![1])
                 }
                 _ => Err(OramError::InvalidCommand),
