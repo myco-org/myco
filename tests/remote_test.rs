@@ -1,5 +1,5 @@
 use myco_rs::{
-    Client,
+    client::Client,
     network::{RemoteServer1Access, RemoteServer2Access},
     dtypes::Key,
 };

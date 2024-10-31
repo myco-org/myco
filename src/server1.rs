@@ -289,21 +289,3 @@ impl Server1 {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rand_chacha::ChaCha20Rng;
-
-    #[test]
-    fn test_same_shuffle() {
-        let seed: [u8; 32] = [0; 32];
-        let mut rng1 = ChaCha20Rng::from_seed(seed);
-        let mut rng2 = ChaCha20Rng::from_seed(seed);
-        let mut v1 = (0..10).collect::<Vec<_>>();
-        let mut v2 = v1.clone();
-        v1.shuffle(&mut rng1);
-        v2.shuffle(&mut rng2);
-        assert_eq!(v1, v2);
-    }
-}
