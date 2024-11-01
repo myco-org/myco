@@ -33,6 +33,7 @@ pub mod tree;
 pub mod tls_server;
 pub mod client;
 pub mod logging;
+pub mod rpc_types;
 
 // Import constants and server modules
 use constants::*;

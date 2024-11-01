@@ -1,9 +1,18 @@
-use std::{collections::HashSet, sync::{Arc, Mutex}};
+use std::{
+    collections::HashSet,
+    sync::{Arc, Mutex},
+};
 
 use bincode::{deserialize, serialize};
 use tokio::stream;
 
-use crate::{error::OramError, network::{Command, ReadType, WriteType}, tls_server::TlsServer, tree::BinaryTree, Bucket, Key, Path, D, DELTA};
+use crate::{
+    error::OramError,
+    network::{Command, ReadType, WriteType},
+    tls_server::TlsServer,
+    tree::BinaryTree,
+    Bucket, Key, Path, D, DELTA,
+};
 
 pub struct Server2 {
     pub tree: BinaryTree<Bucket>,
@@ -26,7 +35,7 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    pub fn read(&mut self, l: &Path) -> Result<Vec<Bucket>, OramError> {
+    pub fn read(&self, l: &Path) -> Result<Vec<Bucket>, OramError> {
         let buckets = self.tree.get_all_nodes_along_path(l);
         Ok(buckets)
     }
@@ -52,7 +61,7 @@ impl Server2 {
         // Increment the epoch
         self.epoch += 1;
     }
-    
+
     pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         Ok(self.prf_keys.clone())
     }
@@ -65,6 +74,7 @@ impl Server2 {
         }
     }
 
+    /// This is S2's pathset indices. When we read the paths from the pathset, we also update the pathset indices here.
     pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         self.pathset_indices = pathset.clone();
 
@@ -76,52 +86,68 @@ impl Server2 {
         Ok(buckets)
     }
 
-    pub async fn run_server(client_addr: &str, s1_addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
+    pub async fn run_server(
+        client_addr: &str,
+        s1_addr: &str,
+        cert_path: &str,
+        key_path: &str,
+    ) -> Result<(), OramError> {
         let server2 = Arc::new(Mutex::new(Self::new()));
-        
+
         // Create two TLS servers
-        let client_server = TlsServer::new(client_addr, cert_path, key_path, "Server2-Client".to_string()).await?;
-        let s1_server = TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
-                
+        let client_server = TlsServer::new(
+            client_addr,
+            cert_path,
+            key_path,
+            "Server2-Client".to_string(),
+        )
+        .await?;
+        let s1_server =
+            TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
+
         // Clone Arc for second server
         let server2_s1 = Arc::clone(&server2);
-        
+
         // Run both servers concurrently
         tokio::try_join!(
             client_server.run(move |command| {
-                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                
-                match command { 
-                    Command::Server2Read(read_type) => {
-                        match read_type {
-                            ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
-                            ReadType::ReadPaths(indices) => serialize(&server2.lock().unwrap().read_paths(indices)?),
-                            ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
-                        }.map_err(|_| OramError::SerializationFailed)
+                let command: Command =
+                    deserialize(command).map_err(|_| OramError::DeserializationError)?;
+
+                match command {
+                    Command::Server2Read(read_type) => match read_type {
+                        ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
+                        ReadType::ReadPaths(indices) => {
+                            serialize(&server2.lock().unwrap().read_paths(indices)?)
+                        }
+                        ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
                     }
+                    .map_err(|_| OramError::SerializationFailed),
                     _ => Err(OramError::InvalidCommand),
                 }
             }),
             s1_server.run(move |command| {
-                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                
+                let command: Command =
+                    deserialize(command).map_err(|_| OramError::DeserializationError)?;
+
                 match command {
-                    Command::Server2Write(write_type) => {
-                        match write_type {
-                            WriteType::Write(buckets, prf_key) => {
-                                server2_s1.lock().unwrap().write(buckets);
-                                server2_s1.lock().unwrap().add_prf_key(&prf_key);
-                                Ok(serialize(&Command::Success).unwrap())
-                            }
+                    Command::Server2Write(write_type) => match write_type {
+                        WriteType::Write(buckets, prf_key) => {
+                            server2_s1.lock().unwrap().write(buckets);
+                            server2_s1.lock().unwrap().add_prf_key(&prf_key);
+                            Ok(serialize(&Command::Success).unwrap())
                         }
-                    } 
-                    Command::Server2Read(read_type) => {
-                        match read_type {
-                            ReadType::Read(path) => serialize(&server2_s1.lock().unwrap().read(&path)?),
-                            ReadType::ReadPaths(indices) => serialize(&server2_s1.lock().unwrap().read_paths(indices)?),
-                            ReadType::GetPrfKeys => serialize(&server2_s1.lock().unwrap().get_prf_keys()?),
-                        }.map_err(|_| OramError::SerializationFailed)
+                    },
+                    Command::Server2Read(read_type) => match read_type {
+                        ReadType::Read(path) => serialize(&server2_s1.lock().unwrap().read(&path)?),
+                        ReadType::ReadPaths(indices) => {
+                            serialize(&server2_s1.lock().unwrap().read_paths(indices)?)
+                        }
+                        ReadType::GetPrfKeys => {
+                            serialize(&server2_s1.lock().unwrap().get_prf_keys()?)
+                        }
                     }
+                    .map_err(|_| OramError::SerializationFailed),
                     _ => Err(OramError::InvalidCommand),
                 }
             })
@@ -138,39 +164,49 @@ impl Server2 {
         simulation_key: Key,
         // progress_callback: F,
     ) -> Result<(), OramError>
-    // where
+// where
     //     F: Fn(usize) + Send + Sync + 'static,
     {
         let server2 = Arc::new(Mutex::new(Self::new()));
-        
+
         println!("Server2: Ready for connections");
-        
+
         // Create two TLS servers
-        let client_server = TlsServer::new(client_addr, cert_path, key_path, "Server2-Client".to_string()).await?;
-        let s1_server = TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
-        
+        let client_server = TlsServer::new(
+            client_addr,
+            cert_path,
+            key_path,
+            "Server2-Client".to_string(),
+        )
+        .await?;
+        let s1_server =
+            TlsServer::new(s1_addr, cert_path, key_path, "Server2-S1".to_string()).await?;
+
         println!("Server2: TLS servers initialized");
-        
+
         // Clone Arc for second server
         let server2_s1 = Arc::clone(&server2);
-        
+
         tokio::try_join!(
             client_server.run(move |command| {
-                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                
-                match command { 
-                    Command::Server2Read(read_type) => {
-                        match read_type {
-                            ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
-                            ReadType::ReadPaths(indices) => serialize(&server2.lock().unwrap().read_paths(indices)?),
-                            ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
-                        }.map_err(|_| OramError::SerializationFailed)
+                let command: Command =
+                    deserialize(command).map_err(|_| OramError::DeserializationError)?;
+
+                match command {
+                    Command::Server2Read(read_type) => match read_type {
+                        ReadType::Read(path) => serialize(&server2.lock().unwrap().read(&path)?),
+                        ReadType::ReadPaths(indices) => {
+                            serialize(&server2.lock().unwrap().read_paths(indices)?)
+                        }
+                        ReadType::GetPrfKeys => serialize(&server2.lock().unwrap().get_prf_keys()?),
                     }
+                    .map_err(|_| OramError::SerializationFailed),
                     _ => Err(OramError::InvalidCommand),
                 }
             }),
             s1_server.run(move |command| {
-                let command: Command = deserialize(command).map_err(|_| OramError::DeserializationError)?;
+                let command: Command =
+                    deserialize(command).map_err(|_| OramError::DeserializationError)?;
                 println!("Server2: Received command from S1");
                 match command {
                     Command::Server2Write(write_type) => {
@@ -183,13 +219,16 @@ impl Server2 {
                             }
                         }
                     }
-                    Command::Server2Read(read_type) => {
-                        match read_type {
-                            ReadType::Read(path) => serialize(&server2_s1.lock().unwrap().read(&path)?),
-                            ReadType::ReadPaths(indices) => serialize(&server2_s1.lock().unwrap().read_paths(indices)?),
-                            ReadType::GetPrfKeys => serialize(&server2_s1.lock().unwrap().get_prf_keys()?),
-                        }.map_err(|_| OramError::SerializationFailed)
+                    Command::Server2Read(read_type) => match read_type {
+                        ReadType::Read(path) => serialize(&server2_s1.lock().unwrap().read(&path)?),
+                        ReadType::ReadPaths(indices) => {
+                            serialize(&server2_s1.lock().unwrap().read_paths(indices)?)
+                        }
+                        ReadType::GetPrfKeys => {
+                            serialize(&server2_s1.lock().unwrap().get_prf_keys()?)
+                        }
                     }
+                    .map_err(|_| OramError::SerializationFailed),
                     _ => Err(OramError::InvalidCommand),
                 }
             })

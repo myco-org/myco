@@ -11,10 +11,10 @@ use tokio;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting test client...");
-    
+
     // Create connections
-    let server2_conn = RemoteServer2Access::connect("localhost:8443", "certs/server-cert.pem").await?;
-    let server1_conn = RemoteServer1Access::connect("localhost:8420", "certs/server-cert.pem").await?;
+    let server2_conn = RemoteServer2Access::new("http://127.0.0.1:3002").await?;
+    let server1_conn = RemoteServer1Access::new("http://127.0.0.1:3001").await?;
 
     // Create client
     let mut client = Client::new(
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut rng = ChaCha20Rng::from_entropy();
     let key = Key::random(&mut rng);
-    
+
     println!("Setting up client...");
     client.setup(&key)?;
 
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_message = vec![1, 2, 3, 4];
 
     println!("Beginning latency test...");
-    
+
     // Measure write latency
     let write_start = Instant::now();
     client.write(&test_message, &key)?;
@@ -47,7 +47,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nLatency Test Results:");
     println!("Write latency: {:?}", write_duration);
     println!("Read latency: {:?}", read_duration);
-    println!("Total round-trip latency: {:?}", write_duration + read_duration);
+    println!(
+        "Total round-trip latency: {:?}",
+        write_duration + read_duration
+    );
     println!("Read result: {:?}", read_result);
 
     Ok(())

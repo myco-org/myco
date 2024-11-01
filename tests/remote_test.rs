@@ -1,17 +1,17 @@
 use myco_rs::{
     client::Client,
-    network::{RemoteServer1Access, RemoteServer2Access},
     dtypes::Key,
+    network::{RemoteServer1Access, RemoteServer2Access},
 };
-use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
+use std::fs;
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 use tokio;
-use std::fs;
-use std::path::Path;
 
-fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
     // Skip if certificates already exist
     if !Path::new("certs").exists() {
         fs::create_dir("certs")?;
@@ -23,7 +23,9 @@ fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Create a config file for OpenSSL
-    fs::write("openssl.cnf", r#"
+    fs::write(
+        "openssl.cnf",
+        r#"
 [req]
 distinguished_name = req_distinguished_name
 x509_extensions = v3_req
@@ -39,19 +41,27 @@ subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = localhost
-"#)?;
+"#,
+    )?;
 
     // Generate private key and self-signed certificate using OpenSSL
     Command::new("openssl")
         .args([
-            "req", "-x509",
-            "-newkey", "rsa:4096",
-            "-keyout", "certs/server-key.pem",
-            "-out", "certs/server-cert.pem",
-            "-days", "365",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:4096",
+            "-keyout",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-cert.pem",
+            "-days",
+            "365",
             "-nodes",
-            "-config", "openssl.cnf",
-            "-extensions", "v3_req"
+            "-config",
+            "openssl.cnf",
+            "-extensions",
+            "v3_req",
         ])
         .output()?;
 
@@ -61,8 +71,10 @@ DNS.1 = localhost
             "pkcs8",
             "-topk8",
             "-nocrypt",
-            "-in", "certs/server-key.pem",
-            "-out", "certs/server-key.pem.tmp"
+            "-in",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-key.pem.tmp",
         ])
         .output()?;
 
@@ -81,9 +93,14 @@ fn cleanup_servers() {
         .args(["-f", "tls_server"])
         .output()
         .ok();
-    
+
     // Give OS time to free up the ports
     std::thread::sleep(std::time::Duration::from_secs(1));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn generate_certificates() {
+    generate_test_certificates().expect("Failed to generate certificates");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -114,37 +131,39 @@ async fn test_remote_single_client() {
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Create separate connections for client and server1
-    let server2_connection_for_client = RemoteServer2Access::connect("localhost:8443", "certs/server-cert.pem").await
+    let server2_connection_for_client = RemoteServer2Access::new("localhost:3002")
+        .await
         .expect("Failed to connect to Server2");
-    let server1_connection = RemoteServer1Access::connect("localhost:8420", "certs/server-cert.pem").await
+    let server1_connection = RemoteServer1Access::new("localhost:3001")
+        .await
         .expect("Failed to connect to Server1");
 
     // Create client with its own connection
     let mut client = Client::new(
         "TestClient".to_string(),
         Box::new(server1_connection),
-        Box::new(server2_connection_for_client)
+        Box::new(server2_connection_for_client),
     );
     let mut rng = ChaCha20Rng::from_entropy();
     let key = Key::random(&mut rng);
-    
+
     // Add delay before setup
     tokio::time::sleep(Duration::from_secs(1)).await;
     client.setup(&key).expect("Setup failed");
-    
+
     // Add delay before write
     tokio::time::sleep(Duration::from_secs(1)).await;
-    
+
     // Write data
     let message = vec![1, 2, 3, 4];
     match client.write(&message, &key) {
         Ok(_) => println!("Client write call completed"),
         Err(e) => println!("Client write failed with error: {:?}", e),
     }
-    
+
     // Add delay after write
     tokio::time::sleep(Duration::from_secs(1)).await;
-    
+
     // Read data back
     match client.read(&key, "TestClient".to_string(), 0) {
         Ok(msg) => println!("Read successful: {:?}", msg),

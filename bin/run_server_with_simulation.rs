@@ -2,8 +2,9 @@ use myco_rs::{
     client::Client,
     constants::{DELTA, NUM_CLIENTS},
     dtypes::Key,
-    network::{Command, RemoteServer2Access},
-    server1::Server1, server2::Server2,
+    network::{Command, RemoteServer1Access, RemoteServer2Access},
+    server1::Server1,
+    server2::Server2,
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -12,62 +13,73 @@ use tokio::{self, time};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let s1_addr = "0.0.0.0:8420";
-    let s2_client_addr = "0.0.0.0:8443"; 
-    let s2_s1_addr = "0.0.0.0:8444";
-    let cert_path = "certs/server-cert.pem";
-    let key_path = "certs/server-key.pem";
+    let s1_addr = "http://127.0.0.1:3001";
+    let s2_addr = "http://127.0.0.1:3002";
 
-    // Create fixed key for simulation
-    let mut rng = ChaCha20Rng::from_entropy();
-    let simulation_key = Key::random(&mut rng);
+    for i in 0..10 {
+        let client = reqwest::Client::new();
+        let response = client
+            .post(format!("{}/batch_init", s1_addr))
+            .json(&myco_rs::rpc_types::BatchInitRequest {
+                num_writes: NUM_CLIENTS,
+            })
+            .send()
+            .await?;
 
-    println!("Starting Server1 and Server2...");
+        // Check that the batch init was successful
+        let response = response
+            .json::<myco_rs::rpc_types::BatchInitResponse>()
+            .await?;
+        assert!(response.success);
 
-    // Spawn Server2 task 
-    let s2_handle = tokio::spawn({
-        let cert_path = cert_path.to_string();
-        let key_path = key_path.to_string();
-        async move {
-            println!("Server2 starting...");
-            Server2::run_server_with_simulation(
-                s2_client_addr,
-                s2_s1_addr, 
-                &cert_path,
-                &key_path,
-                simulation_key.clone(),
-            ).await
+        let mut rng = ChaCha20Rng::from_entropy();
+        let simulation_key = Key::random(&mut rng);
+        // Initialize a bunch of clients.
+        let mut simulation_clients = Vec::new();
+        for i in 0..NUM_CLIENTS {
+            let client_name = format!("SimClient_{}", i);
+            let s1_access = Box::new(RemoteServer1Access::new(s1_addr).await?);
+            let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await?);
+            let mut client = Client::new(client_name, s1_access, s2_access);
+            client.setup(&simulation_key)?;
+            simulation_clients.push(client);
         }
-    });
 
-    time::sleep(Duration::from_secs(1)).await;
-
-    let simulation_key = Key::random(&mut rng);
-
-
-    // Spawn Server1 task
-    let s1_handle = tokio::spawn({
-        let cert_path = cert_path.to_string();
-        let key_path = key_path.to_string();
-        async move {
-            println!("Server1 starting...");
-            println!("Initializing {} simulation clients...", NUM_CLIENTS);
-            Server1::run_server_with_simulation(
-                s1_addr,
-                &cert_path,
-                &key_path,
-                simulation_key.clone(),
-            ).await
+        let mut clients = simulation_clients.iter_mut();
+        for (i, client) in clients.enumerate() {
+            println!("Server1: Writing from client {}", i);
+            let message = vec![1u8; 16];
+            if let Err(e) = client.async_write(&message, &simulation_key).await {
+                eprintln!("Error in client write: {:?}", e);
+            }
         }
-    });
 
+        println!("Server1: Batch write to Server1");
 
-    // Wait for both servers
-    let (s1_result, s2_result) = tokio::join!(s1_handle, s2_handle);
-    s1_result.unwrap()?;
-    s2_result.unwrap()?;
+        // Batch write to Server1
+        let response = client
+            .get(format!("{}/batch_write", s1_addr))
+            .send()
+            .await?;
+        let response = response
+            .json::<myco_rs::rpc_types::BatchWriteResponse>()
+            .await?;
+        assert!(response.success);
 
-    println!("Server1 and Server2 finished");
+        // Client should be able to get the prf keys
+        let mut clients = simulation_clients.iter_mut();
+        for (i, client) in clients.enumerate() {
+            println!("Server1: Reading from client {}", i);
+            let res = client
+                .async_read(&simulation_key, client.id.clone(), 0)
+                .await;
+            if let Ok(data) = res {
+                println!("Server1: Client {} read: {:?}", i, data);
+            } else {
+                eprintln!("Error in client read: {:?}", res);
+            }
+        }
+    }
 
     Ok(())
 }

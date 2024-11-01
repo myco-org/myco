@@ -13,10 +13,24 @@ mod e2e_tests {
         sync::{Arc, Mutex},
     };
 
+    use myco_rs::{
+        client::Client,
+        constants::{D, DELTA, NUM_CLIENTS, Z},
+        decrypt,
+        dtypes::{Bucket, Key, Metadata, Path},
+        encrypt,
+        error::OramError,
+        kdf,
+        logging::initialize_logging,
+        network::{LocalServer1Access, LocalServer2Access},
+        prf,
+        server1::Server1,
+        server2::Server2,
+        tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams},
+        trim_zeros, EncryptionType,
+    };
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
-    use myco_rs::{
-        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, decrypt, dtypes::{Bucket, Key, Metadata, Path}, encrypt, error::OramError, kdf, logging::initialize_logging, network::{LocalServer1Access, LocalServer2Access}, prf, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, trim_zeros, EncryptionType };
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
@@ -39,9 +53,9 @@ mod e2e_tests {
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
         let s1_access = Box::new(LocalServer1Access { server: s1 });
-        
+
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access.clone());
-        
+
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
@@ -55,7 +69,7 @@ mod e2e_tests {
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
-        
+
         let mut rng = ChaCha20Rng::from_entropy();
         let k = Key::random(&mut rng);
         alice.setup(&k).expect("Setup failed");
@@ -74,12 +88,12 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access)));
-        
+
         let s2_access_alice = Box::new(LocalServer2Access { server: s2.clone() });
 
         let s1_access_alice = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access_alice, s2_access_alice);
-        
+
         let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
         let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
         let mut bob = Client::new("Bob".to_string(), s1_access_bob, s2_access_bob);
@@ -144,11 +158,11 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access)));
-        
+
         let s2_access_alice = Box::new(LocalServer2Access { server: s2.clone() });
         let s1_access_alice = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access_alice, s2_access_alice);
-        
+
         let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
         let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
         let mut bob = Client::new("Bob".to_string(), s1_access_bob, s2_access_bob);
@@ -252,10 +266,14 @@ mod e2e_tests {
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access.clone(), s2_access.clone());
-        
+
         let s2_access_bob = Box::new(LocalServer2Access { server: s2.clone() });
         let s1_access_bob = Box::new(LocalServer1Access { server: s1.clone() });
-        let mut bob = Client::new("Bob".to_string(), s1_access_bob.clone(), s2_access_bob.clone());
+        let mut bob = Client::new(
+            "Bob".to_string(),
+            s1_access_bob.clone(),
+            s2_access_bob.clone(),
+        );
 
         let mut rng = ChaCha20Rng::from_entropy();
 
@@ -463,8 +481,8 @@ mod e2e_tests {
         );
     }
 
-    #[test]
-    fn test_message_movement() {
+    #[tokio::test]
+    async fn test_message_movement() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
@@ -491,16 +509,17 @@ mod e2e_tests {
         client
             .s1
             .queue_write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
+            .await
             .expect("Initial write failed");
         let k_s1_t = s1.lock().unwrap().k_s1_t.0.clone();
         let l = prf(
             k_s1_t.as_slice(),
             &[f.clone().as_slice(), cs.clone().as_slice()].concat(),
-        ).expect("PRF failed");
+        )
+        .expect("PRF failed");
         let intended_path = Path::from(l);
 
-        s1
-            .lock()
+        s1.lock()
             .unwrap()
             .batch_write()
             .expect("Initial batch write failed");
@@ -558,14 +577,12 @@ mod e2e_tests {
             s1.lock().unwrap().batch_init(1);
 
             // Perform batch_write
-            s1
-                .lock()
+            s1.lock()
                 .unwrap()
                 .batch_write()
                 .expect("Batch write failed");
 
-            let mut new_pathset: tree::SparseBinaryTree<Bucket> =
-                s1.lock().unwrap().pt.clone();
+            let mut new_pathset: tree::SparseBinaryTree<Bucket> = s1.lock().unwrap().pt.clone();
             if new_pathset.packed_indices.contains(&latest_index) {
                 let (lca_bucket, lca_path) =
                     new_pathset.lca(&intended_path).expect("LCA not found");
@@ -713,7 +730,7 @@ mod e2e_tests {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
         let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
-        
+
         // Do a batch init and write to generate metrics
         s1.lock().unwrap().batch_init(1);
         let result = s1.lock().unwrap().batch_write();
@@ -722,8 +739,14 @@ mod e2e_tests {
         // Verify log files exist in the latency_logs directory
         #[cfg(feature = "perf-logging")]
         {
-            assert!(std::path::Path::new("latency_logs/server1_latency.csv").exists(), "Latency log file not found");
-            assert!(std::path::Path::new("latency_logs/server1_bytes.csv").exists(), "Bytes log file not found");
+            assert!(
+                std::path::Path::new("latency_logs/server1_latency.csv").exists(),
+                "Latency log file not found"
+            );
+            assert!(
+                std::path::Path::new("latency_logs/server1_bytes.csv").exists(),
+                "Bytes log file not found"
+            );
         }
     }
 }

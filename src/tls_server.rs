@@ -1,13 +1,17 @@
-use std::sync::Arc;
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
-use tokio_rustls::TlsAcceptor;
 use rustls::{Certificate, Connection, PrivateKey, ServerConfig};
 use std::io::{Read, Write};
+use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
+use tokio_rustls::TlsAcceptor;
 
 use crate::error::OramError;
 
 pub struct TlsServer {
-    acceptor: TlsAcceptor,
+    acceptor: Arc<TlsAcceptor>,
     listener: TcpListener,
     name: String,
 }
@@ -29,7 +33,7 @@ impl TlsServer {
             .into_iter()
             .map(Certificate)
             .collect();
-        
+
         let keys: Vec<PrivateKey> = rustls_pemfile::pkcs8_private_keys(&mut key_reader)?
             .into_iter()
             .map(PrivateKey)
@@ -45,59 +49,61 @@ impl TlsServer {
         let listener = TcpListener::bind(addr).await?;
 
         Ok(Self {
-            acceptor,
+            acceptor: Arc::new(acceptor),
             listener,
             name,
         })
     }
 
-    pub async fn run<F>(&self, handler: F) -> Result<(), OramError> 
+    pub async fn run<F>(&self, handler: F) -> Result<(), OramError>
     where
         F: Fn(&[u8]) -> Result<Vec<u8>, OramError> + Send + Sync + 'static,
     {
         let handler = Arc::new(handler);
-        
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(1000));
+
         loop {
-            let (stream, _) = self.listener.accept().await?;
+            let (stream, addr) = self.listener.accept().await?;
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
             let acceptor = self.acceptor.clone();
             let handler = handler.clone();
-            let name = self.name.clone();
+
             tokio::spawn(async move {
-                let result: Result<(), OramError> = async move {
-                    let mut stream = acceptor.accept(stream).await?;
-
-                    loop {
-                        let mut len_bytes = [0u8; 4];
-
-                        match stream.read_exact(&mut len_bytes).await {
-
-                            Ok(0) => {
-                                break;
-                            }
-                            Ok(_) => {
-                                let len = u32::from_be_bytes(len_bytes);
-                                
-                                let mut command: Vec<u8> = vec![0u8; len as usize];
-                                stream.read_exact(&mut command).await?;
-                                let response = handler(&command)?;
-                                
-                                let len = response.len() as u32;
-                                stream.write_all(&len.to_be_bytes()).await?;
-                                stream.write_all(&response).await?;
-                                stream.flush().await?;
-                            }
-                            Err(e) => {
-                                break;
-                            }
-                        }
-                    }
-                    Ok(())
-                }.await;
-                
-                if let Err(e) = result {
-                    eprintln!("Connection error: {:?}", e);
+                let _permit = permit;
+                if let Err(e) = Self::handle_connection(stream, acceptor, handler).await {
+                    eprintln!("Connection error from {}: {:?}", addr, e);
                 }
             });
         }
     }
-} 
+
+    async fn handle_connection<F>(
+        stream: TcpStream,
+        acceptor: Arc<TlsAcceptor>,
+        handler: Arc<F>,
+    ) -> Result<(), OramError>
+    where
+        F: Fn(&[u8]) -> Result<Vec<u8>, OramError> + Send + Sync + 'static,
+    {
+        let mut stream = acceptor.accept(stream).await?;
+
+        loop {
+            let mut len_bytes = [0u8; 4];
+            if stream.read_exact(&mut len_bytes).await.is_err() {
+                break;
+            }
+
+            let len = u32::from_be_bytes(len_bytes);
+            let mut command = vec![0u8; len as usize];
+            stream.read_exact(&mut command).await?;
+
+            let response = handler(&command)?;
+            stream
+                .write_all(&(response.len() as u32).to_be_bytes())
+                .await?;
+            stream.write_all(&response).await?;
+            stream.flush().await?;
+        }
+        Ok(())
+    }
+}

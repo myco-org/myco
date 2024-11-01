@@ -1,9 +1,10 @@
 pub const DELTA: usize = 1000;
-pub const D: usize = 18;
+pub const D: usize = 1;
 pub const LAMBDA: usize = 128;
-pub const NUM_CLIENTS: usize = DB_SIZE/DELTA;
+// pub const NUM_CLIENTS: usize = DB_SIZE/DELTA;
+pub const NUM_CLIENTS: usize = 1;
 pub const NU: usize = 1; 
-pub const Z: usize = 50;
+pub const Z: usize = 3;
 pub const DB_SIZE: usize = 1 << D;
 
 pub const NONCE_SIZE: usize = 12;
