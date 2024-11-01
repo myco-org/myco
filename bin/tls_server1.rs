@@ -27,13 +27,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     // Start the server with simulation data
     println!("Starting TLS server...");
-    Server1::run_server_with_simulation(
+    Server1::run_server(
         addr, 
         cert_path, 
-        key_path,
-        simulation_key,
-        move |epoch| {
-            println!("Completed epoch {}/{}", epoch, DELTA);
-        }
+        key_path
     ).await.map_err(|e| e.into())
 }

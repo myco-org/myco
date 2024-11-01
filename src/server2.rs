@@ -130,16 +130,16 @@ impl Server2 {
         Ok(())
     }
 
-    pub async fn run_server_with_simulation<F>(
+    pub async fn run_server_with_simulation(
         client_addr: &str,
         s1_addr: &str,
         cert_path: &str,
         key_path: &str,
         simulation_key: Key,
-        progress_callback: F,
+        // progress_callback: F,
     ) -> Result<(), OramError>
-    where
-        F: Fn(usize) + Send + Sync + 'static,
+    // where
+    //     F: Fn(usize) + Send + Sync + 'static,
     {
         let server2 = Arc::new(Mutex::new(Self::new()));
         
@@ -178,7 +178,7 @@ impl Server2 {
                             WriteType::Write(buckets, prf_key) => {
                                 server2_s1.lock().unwrap().write(buckets);
                                 server2_s1.lock().unwrap().add_prf_key(&prf_key);
-                                progress_callback(server2_s1.lock().unwrap().epoch as usize);
+                                // progress_callback(server2_s1.lock().unwrap().epoch as usize);
                                 Ok(serialize(&Command::Success).unwrap())
                             }
                         }

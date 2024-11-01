@@ -92,21 +92,21 @@ impl Server2Access for RemoteServer2Access {
     fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
         println!("Server2Access: Starting read_paths operation");
         let command = Command::Server2Read(ReadType::ReadPaths(indices));
-        let response = self.connection.send(&serialize(&command).unwrap())?;
+        let response = futures::executor::block_on(self.connection.send(&serialize(&command).unwrap()))?;
         println!("Server2Access: Got response from read_paths operation");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
     fn read(&self, path: &Path) -> Result<Vec<Bucket>, OramError> {
         let command = Command::Server2Read(ReadType::Read(path.clone()));
-        let response = self.connection.send(&serialize(&command).unwrap())?;
+        let response = futures::executor::block_on(self.connection.send(&serialize(&command).unwrap()))?;
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
     fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<(), OramError> {
         println!("Server2Access: Starting write operation");
         let command = Command::Server2Write(WriteType::Write(buckets, prf_key));
-        let response = self.connection.send(&serialize(&command).unwrap())?;
+        let response = futures::executor::block_on(self.connection.send(&serialize(&command).unwrap()))?;
         println!("Server2Access: Got response from write operation");
 
         // Deserialize and check for success
@@ -129,19 +129,23 @@ impl Server2Access for RemoteServer2Access {
 
     fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         let command = Command::Server2Read(ReadType::GetPrfKeys);
-        let response = self.connection.send(&serialize(&command).unwrap())?;
+        let response = futures::executor::block_on(self.connection.send(&serialize(&command).unwrap()))?;
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 }
 
 impl RemoteServer2Access {
     pub async fn connect(addr: &str, cert_path: &str) -> Result<Self, OramError> {
+        println!("Server2Access: Connecting to Server2");
         let (host, port) = addr.split_once(':')
             .ok_or(OramError::InvalidServerName)?;
+        println!("Server2Access: Split address into host and port");
         let port = port.parse()
             .map_err(|_| OramError::InvalidServerName)?;
+        println!("Server2Access: Parsed port");
             
         let connection = Arc::new(RemoteConnection::connect(host, port, cert_path).await?);
+        println!("Server2Access: Connected to Server2");
         Ok(Self { 
             connection,
             addr: addr.to_string(),
@@ -218,7 +222,7 @@ impl RemoteConnection {
         Ok(())
     }
 
-    pub fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
+    pub async fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         let mut retries = 3;
         let mut last_error = None;
 
@@ -227,7 +231,6 @@ impl RemoteConnection {
                 let mut stream = self.stream.lock().unwrap();
                 println!("RemoteConnection: Acquired stream lock for command");
                 
-                futures::executor::block_on(async {
                     // Set a timeout for the entire operation
                     let timeout = tokio::time::timeout(
                         std::time::Duration::from_secs(10), 
@@ -260,7 +263,6 @@ impl RemoteConnection {
                             "Operation timed out"
                         ))
                     }
-                })
             };
             println!("RemoteConnection: Released stream lock");
 
@@ -319,7 +321,7 @@ impl Server1Access for LocalServer1Access {
 impl Server1Access for RemoteServer1Access {
     fn queue_write(&self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cs: Vec<u8>) -> Result<(), OramError> {
         let command = Command::Server1Write(ct, f, k_oram_t, cs);
-        let response = self.connection.send(&serialize(&command).unwrap())?;
+        let response = futures::executor::block_on(self.connection.send(&serialize(&command).unwrap()))?;
         
         // Check for success response
         if response == serialize(&Command::Success).unwrap() {

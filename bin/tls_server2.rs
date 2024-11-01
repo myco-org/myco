@@ -21,14 +21,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let simulation_key = Key::random(&mut rng);
     
     println!("Starting TLS server...");
-    Server2::run_server_with_simulation(
+    Server2::run_server(
         client_addr,
         s1_addr,
         cert_path,
-        key_path,
-        simulation_key,
-        move |epoch| {
-            println!("Processed epoch {}/{}", epoch, DELTA);
-        }
+        key_path
     ).await.map_err(|e| e.into())
 }

@@ -319,22 +319,27 @@ impl Server1 {
         Ok(())
     }
 
-    pub async fn run_server_with_simulation<F>(
+    pub async fn run_server_with_simulation(
         addr: &str,
         cert_path: &str,
         key_path: &str,
         simulation_key: Key,
-        progress_callback: F,
+        // progress_callback: F,
     ) -> Result<(), OramError>
-    where
-        F: Fn(usize) + Send + Sync + 'static,
+    // where
+    //     F: Fn(usize) + Send + Sync + 'static,
     {
         #[cfg(feature = "perf-logging")]
         initialize_logging("server1_latency.csv", "server1_bytes.csv");
 
+        println!("Server1: Starting simulation...");
+
         // Initial setup
         let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
+        println!("Server1: Connected to Server2");
         let server1 = Arc::new(Mutex::new(Self::new(Box::new(server2_connection))));
+
+        println!("Server1: Initialized server1");
         
         // Create channel for batch_init completion signal
         let (init_tx, init_rx) = tokio::sync::mpsc::channel(1);
@@ -451,7 +456,7 @@ impl Server1 {
                         eprintln!("Failed to signal batch write");
                     }
                     println!("Completed all client writes for this batch");
-                    progress_callback(server1.lock().unwrap().epoch as usize);
+                    // progress_callback(server1.lock().unwrap().epoch as usize);
                 }
                 println!("Client handler ending...");
             }
