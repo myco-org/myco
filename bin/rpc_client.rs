@@ -2,14 +2,12 @@ use myco_rs::{
     client::Client,
     constants::{DELTA, NUM_CLIENTS},
     dtypes::Key,
-    network::{Command, RemoteServer1Access, RemoteServer2Access},
-    server1::Server1,
-    server2::Server2,
+    network::{RemoteServer1Access, RemoteServer2Access},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
-use std::{error::Error, time::Duration};
-use tokio::{self, time};
+use std::error::Error;
+use tokio::{self};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {

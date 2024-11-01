@@ -30,7 +30,6 @@ pub mod network;
 pub mod server1;
 pub mod server2;
 pub mod tree;
-pub mod tls_server;
 pub mod client;
 pub mod logging;
 pub mod rpc_types;

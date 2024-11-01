@@ -3,7 +3,6 @@ use crate::logging::{initialize_logging, BytesMetric, LatencyMetric};
 use crate::network::{
     Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access,
 };
-use crate::tls_server::TlsServer;
 use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
@@ -480,120 +479,5 @@ impl Server1 {
             });
         });
         pathset.into_iter().collect()
-    }
-
-    pub async fn run_server(addr: &str, cert_path: &str, key_path: &str) -> Result<(), OramError> {
-        let server = TlsServer::new(addr, cert_path, key_path, "Server1".to_string()).await?;
-
-        // Create a dedicated Server2 connection for Server1
-        let server2_connection = RemoteServer2Access::new("localhost:3002")
-            .await
-            .map_err(|_| OramError::NoMessageFound)?;
-        let server1 = Arc::new(Mutex::new(Server1::new(Box::new(server2_connection))));
-        // Initialize with a default number of clients (e.g., 1)
-        {
-            let mut server1_guard = server1.lock().unwrap();
-            server1_guard.batch_init(1);
-        }
-
-        server
-            .run(move |command| {
-                let command: Command =
-                    deserialize(command).map_err(|_| OramError::DeserializationError)?;
-                let mut server1_guard = server1.lock().unwrap();
-
-                match command {
-                    Command::Server1Write(ct, f, k_oram_t, cs) => {
-                        server1_guard.queue_write(ct, f, k_oram_t, cs)?;
-
-                        // Spawn a background task to handle batch write
-                        let server1_clone = server1.clone();
-                        tokio::spawn(async move {
-                            let queue_size = server1_clone.lock().unwrap().message_queue.len();
-                            if queue_size >= 1 {
-                                if let Err(e) = server1_clone.lock().unwrap().batch_write() {
-                                    eprintln!("Error in batch_write: {:?}", e);
-                                }
-                            }
-                        });
-                        let response = serialize(&Command::Success).unwrap();
-
-                        Ok(response)
-                    }
-                    _ => Err(OramError::InvalidCommand),
-                }
-            })
-            .await;
-
-        Ok(())
-    }
-
-    pub async fn run_server_with_simulation(
-        addr: &str,
-        cert_path: &str,
-        key_path: &str,
-        simulation_key: Key,
-        // progress_callback: F,
-    ) -> Result<(), OramError>
-// where
-    //     F: Fn(usize) + Send + Sync + 'static,
-    {
-        #[cfg(feature = "perf-logging")]
-        initialize_logging("server1_latency.csv", "server1_bytes.csv");
-
-        println!("Server1: Starting simulation...");
-
-        // Initial setup
-        let server2_connection = RemoteServer2Access::new("localhost:3002")
-            .await
-            .map_err(|_| OramError::NoMessageFound)?;
-        println!("Server1: Connected to Server2");
-        let server1 = Arc::new(Mutex::new(Self::new(Box::new(server2_connection))));
-
-        println!("Server1: Initialized server1");
-
-        // Create simulation clients once at the start
-        println!("Creating {} simulation clients...", NUM_CLIENTS);
-        let mut simulation_clients = Vec::new();
-        for i in 0..NUM_CLIENTS {
-            let client_name = format!("SimClient_{}", i);
-            let s2_access = Box::new(LocalServer2Access {
-                server: Arc::new(Mutex::new(Server2::new())),
-            });
-            let s1_access = Box::new(LocalServer1Access {
-                server: server1.clone(),
-            });
-            let mut client = Client::new(client_name, s1_access, s2_access);
-            client.setup(&simulation_key)?;
-            simulation_clients.push(client);
-        }
-
-        println!("Starting simulation...");
-
-        // for i in 0..DELTA {
-        // // Run Batch Init
-        // server1.lock().unwrap().batch_init(NUM_CLIENTS);
-
-        println!("Server1: Batch Init complete");
-
-        // Run Client Writes.
-        let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
-            println!("Server1: Writing from client {}", i);
-            let message = vec![1u8; 16];
-            if let Err(e) = client.write(&message, &simulation_key) {
-                eprintln!("Error in client write: {:?}", e);
-            }
-        }
-
-        println!("Server1: Client Writes complete");
-
-        // Run Batch Write
-        server1.lock().unwrap().batch_write()?;
-
-        println!("Server1: Batch Write complete");
-        // }
-
-        Ok(())
     }
 }

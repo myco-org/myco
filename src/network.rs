@@ -207,24 +207,16 @@ impl RemoteServer2Access {
 pub struct RemoteServer1Access {
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
-    // pub(crate) connection: Arc<RemoteConnection>,
 }
 
 impl RemoteServer1Access {
     pub async fn new(server1_addr: &str) -> Result<Self, OramError> {
-        // let connection = RemoteConnection::connect(
-        //     server1_addr.split(':').next().unwrap(),
-        //     server1_addr.split(':').nth(1).unwrap().parse().unwrap(),
-        //     cert_path,
-        // )
-        // .await?;
 
         let client = reqwest::Client::new();
 
         Ok(Self {
             client,
             base_url: server1_addr.to_string(),
-            // connection: Arc::new(connection),
         })
     }
 }
@@ -275,112 +267,8 @@ impl RemoteConnection {
         });
         Ok(())
     }
-
-    pub async fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
-        let mut retries = 3;
-        let mut last_error = None;
-
-        while retries > 0 {
-            let result = {
-                println!("RemoteConnection: Acquired stream lock for command");
-
-                // Set a timeout for the entire operation
-                let timeout = tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
-                    {
-                        let mut stream = self.stream.lock().await;
-                        println!(
-                            "RemoteConnection: Writing command length, {}",
-                            command.len()
-                        );
-                        println!("RemoteConnection: Writing command length bytes");
-                        stream
-                            .write_all(&(command.len() as u32).to_be_bytes())
-                            .await?;
-                        println!("RemoteConnection: Flushed command length bytes");
-                        stream.flush().await?;
-                    }
-
-                    {
-                        let mut stream = self.stream.lock().await;
-                        println!("RemoteConnection: Writing command data");
-                        stream.write_all(command).await?;
-                        println!("RemoteConnection: Flushed command data");
-                        stream.flush().await?;
-                    }
-
-                    {
-                        let mut stream = self.stream.lock().await;
-                        println!("RemoteConnection: Reading response length");
-                        let mut len_bytes = [0u8; 4];
-                        // Try to acquire lock on stream
-                        // Check if stream lock is already held
-                        stream.read_exact(&mut len_bytes).await?;
-                        println!(
-                            "RemoteConnection: Read response length bytes: {:?}",
-                            len_bytes
-                        );
-                        let len = u32::from_be_bytes(len_bytes);
-
-                        println!("RemoteConnection: Reading response data of length {}", len);
-                        let mut response = vec![0u8; len as usize];
-                        stream.read_exact(&mut response).await?;
-
-                        Ok::<Vec<u8>, std::io::Error>(response)
-                    }
-                })
-                .await;
-
-                println!("RemoteConnection: Timeout result: {:?}", timeout);
-
-                match timeout {
-                    Ok(result) => result,
-                    Err(_) => Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "Operation timed out",
-                    )),
-                }
-            };
-            println!("RemoteConnection: Released stream lock");
-
-            match result {
-                Ok(response) => {
-                    println!("RemoteConnection: Successfully completed operation");
-                    return Ok(response);
-                }
-                Err(e) => {
-                    println!("RemoteConnection: Error in send: {:?}", e);
-                    last_error = Some(e);
-                    retries -= 1;
-                    if retries > 0 {
-                        println!(
-                            "RemoteConnection: Retrying in 500ms... ({} retries left)",
-                            retries
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    }
-                }
-            }
-        }
-
-        Err(OramError::IoError(last_error.unwrap_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to send command after multiple retries",
-            )
-        })))
-    }
 }
-
-// impl Drop for RemoteConnection {
-//     fn drop(&mut self) {
-//         // Send a special shutdown command or close the connection gracefully
-//         if let Ok(mut stream) = self.stream.lock().await {
-//             // Best effort to shutdown the connection
-//             let _ = futures::executor::block_on(async { stream.shutdown().await });
-//         }
-//     }
-// }
-
+    
 // Define how we interact with Server1
 #[async_trait]
 pub trait Server1Access: Send {

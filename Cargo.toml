@@ -8,28 +8,16 @@ name = "simulation"
 path = "bin/simulation.rs"
 
 [[bin]]
-name = "tls_server2"
-path = "bin/tls_server2.rs"
+name = "rpc_server1"
+path = "bin/rpc_server1.rs"
 
 [[bin]]
-name = "tls_server1"
-path = "bin/tls_server1.rs"
+name = "rpc_server2"
+path = "bin/rpc_server2.rs"
 
 [[bin]]
-name = "tls_client"
-path = "bin/tls_client.rs"
-
-[[bin]]
-name = "server1"
-path = "bin/server1.rs"
-
-[[bin]]
-name = "server2"
-path = "bin/server2.rs"
-
-[[bin]]
-name = "run_server_with_simulation"
-path = "bin/run_server_with_simulation.rs"
+name = "rpc_client"
+path = "bin/rpc_client.rs"
 
 [dependencies]
 aes = "0.8.4"
