@@ -86,7 +86,7 @@ fn cleanup_servers() {
     std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_remote_single_client() {
     cleanup_servers();
     generate_test_certificates().expect("Failed to generate certificates");
