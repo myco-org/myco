@@ -158,12 +158,13 @@ impl Server1 {
             .par_iter()
             .for_each(|(bucket, metadata_bucket, _)| {
                 if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                    let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
                             let (l, k_oram_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
-                                // Decrypt to get the first layer of decryption (client).
+                                // Real decryption
                                 let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
@@ -172,9 +173,17 @@ impl Server1 {
                                     *t_exp,
                                     l.clone(),
                                 ));
+                                real_decrypt_count += 1;
                             }
                         }
                     });
+
+                    // Perform fake decryptions
+                    let fake_decrypt_count = Z - real_decrypt_count;
+                    for _ in 0..fake_decrypt_count {
+                        // Fake decryption
+                        let _ = decrypt(&[0u8; 32], &[0u8; 32]).unwrap_or_default();
+                    }
                 }
             });
 
@@ -188,6 +197,7 @@ impl Server1 {
                 let original_idx = self.pathset_indices[idx];
 
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
+                let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
                     for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
                         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
@@ -207,7 +217,16 @@ impl Server1 {
                                 *t_exp,
                             );
                         }
+                        real_encrypt_count += 1;
                     }
+                }
+
+                // Perform fake encryptions
+                let fake_encrypt_count = Z - real_encrypt_count;
+                for _ in 0..fake_encrypt_count {
+                    // Fake encryption
+                    let _ = encrypt(&[0u8; 32], &[0u8; 32], EncryptionType::DoubleEncrypt)
+                        .unwrap_or_default();
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
@@ -299,12 +318,13 @@ impl Server1 {
             .par_iter()
             .for_each(|(bucket, metadata_bucket, _)| {
                 if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                    let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
                             let (l, k_oram_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
-                                // Decrypt to get the first layer of decryption (client).
+                                // Real decryption
                                 let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
@@ -313,12 +333,24 @@ impl Server1 {
                                     *t_exp,
                                     l.clone(),
                                 ));
+                                real_decrypt_count += 1;
                             }
                         }
                     });
+
+                    // Perform fake decryptions to prevent timing attacks
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        let fake_decrypt_count = Z - real_decrypt_count;
+                        for _ in 0..fake_decrypt_count {
+                        // Fake decryption
+                            let _ = decrypt(&[0u8; 32], &[0u8; 32]).unwrap_or_default();
+                        }
+                    }
                 }
             });
         queue_old_buckets_latency.finish();
+
         // This enumerated index doesn't match the index inside of the message queue.
         let process_queued_buckets_latency = LatencyMetric::new("server1_batch_write_process_queued_buckets");
         self.pt
@@ -330,6 +362,7 @@ impl Server1 {
                 let original_idx = self.pathset_indices[idx];
 
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
+                let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
                     for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
                         let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
@@ -349,7 +382,18 @@ impl Server1 {
                                 *t_exp,
                             );
                         }
+                        real_encrypt_count += 1;
                     }
+                }
+
+                // Perform fake encryptions to prevent timing attacks
+                #[cfg(not(feature = "no-enc"))]
+                {
+                    let fake_encrypt_count = Z - real_encrypt_count;
+                    for _ in 0..fake_encrypt_count {
+                    // Fake encryption
+                    let _ = encrypt(&[0u8; 32], &[0u8; 32], EncryptionType::DoubleEncrypt)
+                        .unwrap_or_default();
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
@@ -399,9 +443,11 @@ impl Server1 {
                         metadata_bucket.len(),
                         Z
                     );
+                    }
                 }
             });
         process_queued_buckets_latency.finish();
+
         // Reset the message queue
         self.message_queue.clear();
 
