@@ -40,8 +40,10 @@ tokio-rustls = "0.24"
 rustls = "0.21"
 rustls-pemfile = "1.0"
 futures = "0.3"
+lazy_static = "1.4.0"
 
 [features]
 simulation = []
 no-enc = []
 network = []
+perf-logging = []

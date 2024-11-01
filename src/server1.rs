@@ -17,6 +17,7 @@ use rayon::iter::{
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use crate::logging::{LatencyMetric, BytesMetric, initialize_logging};
 
 pub struct Server1 {
     pub epoch: u64,
@@ -105,6 +106,20 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
+        #[cfg(feature = "perf-logging")]
+        let total_latency = LatencyMetric::new("batch_write_total");
+
+        // Log the size of data being processed
+        #[cfg(feature = "perf-logging")]
+        BytesMetric::new(
+            "batch_write_data_size", 
+            self.p.packed_buckets.len() * std::mem::size_of::<Bucket>()
+        ).log();
+
+        // Measure just the bucket processing time
+        #[cfg(feature = "perf-logging")]
+        let bucket_latency = LatencyMetric::new("bucket_processing");
+
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -218,6 +233,9 @@ impl Server1 {
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
 
+        #[cfg(feature = "perf-logging")]
+        bucket_latency.finish();
+
         // Reset the message queue
         self.message_queue.clear();
 
@@ -227,17 +245,22 @@ impl Server1 {
 
         println!("Server1: Writing to Server2");
         let write_result = self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone());
-        match write_result {
+        let result = match write_result {
             Ok(_) => {
                 println!("Server1: Successfully wrote to Server2");
                 self.epoch += 1;
+
+                #[cfg(feature = "perf-logging")]
+                total_latency.finish();
                 Ok(())
             },
             Err(e) => {
                 println!("Server1: Error writing to Server2: {:?}", e);
                 Err(e)
             }
-        }
+        };
+
+        result
     }
 
     pub fn get_path_indices(&self, paths: Vec<Path>) -> Vec<usize> {
@@ -306,6 +329,9 @@ impl Server1 {
     where
         F: Fn(usize) + Send + Sync + 'static,
     {
+        #[cfg(feature = "perf-logging")]
+        initialize_logging("server1_latency.csv", "server1_bytes.csv");
+
         // Initial setup
         let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
         let server1 = Arc::new(Mutex::new(Self::new(Box::new(server2_connection))));

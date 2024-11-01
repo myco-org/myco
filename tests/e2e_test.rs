@@ -16,7 +16,7 @@ mod e2e_tests {
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
     use myco_rs::{
-        constants::{D, DELTA, NUM_CLIENTS, Z}, decrypt, dtypes::{Bucket, Metadata, Path, Key}, encrypt, error::OramError, kdf, network::{LocalServer1Access, LocalServer2Access}, prf, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, trim_zeros, client::Client, EncryptionType };
+        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, decrypt, dtypes::{Bucket, Key, Metadata, Path}, encrypt, error::OramError, kdf, logging::initialize_logging, network::{LocalServer1Access, LocalServer2Access}, prf, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, trim_zeros, EncryptionType };
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
@@ -702,5 +702,28 @@ mod e2e_tests {
         s2.lock().unwrap().tree = server2_tree_deserialized;
 
         test_protocol_execution_with_params(s1, s2, num_clients, num_epochs as usize);
+    }
+
+    #[test]
+    fn test_batch_write_logging() {
+        // Initialize logging first
+        #[cfg(feature = "perf-logging")]
+        initialize_logging("server1_latency.csv", "server1_bytes.csv");
+
+        let s2 = Arc::new(Mutex::new(Server2::new()));
+        let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
+        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+        
+        // Do a batch init and write to generate metrics
+        s1.lock().unwrap().batch_init(1);
+        let result = s1.lock().unwrap().batch_write();
+        assert!(result.is_ok(), "Batch write failed");
+
+        // Verify log files exist in the latency_logs directory
+        #[cfg(feature = "perf-logging")]
+        {
+            assert!(std::path::Path::new("latency_logs/server1_latency.csv").exists(), "Latency log file not found");
+            assert!(std::path::Path::new("latency_logs/server1_bytes.csv").exists(), "Bytes log file not found");
+        }
     }
 }
