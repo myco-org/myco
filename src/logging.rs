@@ -13,6 +13,8 @@ lazy_static! {
 pub struct LatencyMetric {
     operation: String,
     start_time: Instant,
+    accumulated_duration: Duration,
+    is_paused: bool,
 }
 
 pub struct BytesMetric {
@@ -29,18 +31,39 @@ impl LatencyMetric {
         Self {
             operation: operation.to_string(),
             start_time: Instant::now(),
+            accumulated_duration: Duration::from_secs(0),
+            is_paused: false,
+        }
+    }
+
+    pub fn pause(&mut self) {
+        if !self.is_paused {
+            self.accumulated_duration += self.start_time.elapsed();
+            self.is_paused = true;
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if self.is_paused {
+            self.start_time = Instant::now();
+            self.is_paused = false;
         }
     }
 
     pub fn finish(self) {
         #[cfg(feature = "perf-logging")]
         {
-            let duration = self.start_time.elapsed();
+            let final_duration = if self.is_paused {
+                self.accumulated_duration
+            } else {
+                self.accumulated_duration + self.start_time.elapsed()
+            };
+
             log_latency(&format!(
                 "{},{},{}\n",
                 self.operation,
-                duration.as_micros(),
-                duration.as_millis(),
+                final_duration.as_micros(),
+                final_duration.as_millis(),
             ));
         }
     }
@@ -94,10 +117,10 @@ pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
     #[cfg(feature = "perf-logging")]
     {
         // Create logs directory if it doesn't exist
-        std::fs::create_dir_all("latency_logs").expect("Failed to create logs directory");
+        std::fs::create_dir_all("logs").expect("Failed to create logs directory");
         
         // Initialize latency log with directory prefix
-        let latency_file_path = format!("latency_logs/{}", latency_path);
+        let latency_file_path = format!("logs/{}", latency_path);
         let mut latency_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -111,7 +134,7 @@ pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
         *LATENCY_LOG.lock().unwrap() = Some(latency_file);
 
         // Initialize bytes log with directory prefix
-        let bytes_file_path = format!("latency_logs/{}", bytes_path);
+        let bytes_file_path = format!("logs/{}", bytes_path);
         let mut bytes_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -125,7 +148,7 @@ pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
         *BYTES_LOG.lock().unwrap() = Some(bytes_file);
 
         // Initialize timestamp log
-        let timestamp_file_path = format!("latency_logs/timestamps.csv");
+        let timestamp_file_path = format!("logs/timestamps.csv");
         let mut timestamp_file = OpenOptions::new()
             .create(true)
             .append(true)

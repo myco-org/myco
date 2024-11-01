@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::get_path_indices;
 use crate::logging::{initialize_logging, BytesMetric, LatencyMetric};
 use crate::network::{
     Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access,
@@ -51,19 +52,22 @@ impl Server1 {
     }
 
     pub async fn async_batch_init(&mut self, num_clients: usize) {
+        let end_to_end_latency = LatencyMetric::new("server1_batch_init_end_to_end");
+        let mut local_latency = LatencyMetric::new("server1_batch_init_local");
         let mut rng = ChaCha20Rng::from_entropy();
 
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
-        self.pathset_indices = self.get_path_indices(paths);
+        self.pathset_indices = get_path_indices(paths);
 
-        println!("Server1: Reading paths from Server2");
+        local_latency.pause();
         let buckets: Vec<Bucket> = self
             .s2
             .read_paths(self.pathset_indices.clone())
             .await
             .unwrap();
+        local_latency.resume();
         let bucket_size = buckets.len();
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
@@ -77,11 +81,8 @@ impl Server1 {
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
-        println!(
-            "Server1: Initialized batch for epoch {}/{}",
-            self.epoch + 1,
-            DELTA
-        );
+        end_to_end_latency.finish();
+        local_latency.finish();
     }
 
     pub fn batch_init(&mut self, num_clients: usize) {
@@ -90,7 +91,7 @@ impl Server1 {
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
-        self.pathset_indices = self.get_path_indices(paths);
+        self.pathset_indices = get_path_indices(paths);
 
         let buckets: Vec<Bucket> =
             futures::executor::block_on(self.s2.read_paths(self.pathset_indices.clone())).unwrap();
@@ -147,21 +148,6 @@ impl Server1 {
     }
 
     pub fn batch_write(&mut self) -> Result<(), OramError> {
-        #[cfg(feature = "perf-logging")]
-        let total_latency = LatencyMetric::new("batch_write_total");
-
-        // Log the size of data being processed
-        #[cfg(feature = "perf-logging")]
-        BytesMetric::new(
-            "batch_write_data_size",
-            self.p.packed_buckets.len() * std::mem::size_of::<Bucket>(),
-        )
-        .log();
-
-        // Measure just the bucket processing time
-        #[cfg(feature = "perf-logging")]
-        let bucket_latency = LatencyMetric::new("bucket_processing");
-
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -274,9 +260,6 @@ impl Server1 {
                 }
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
-
-        #[cfg(feature = "perf-logging")]
-        bucket_latency.finish();
 
         // Reset the message queue
         self.message_queue.clear();
@@ -291,11 +274,7 @@ impl Server1 {
         );
         let result = match write_result {
             Ok(_) => {
-                println!("Server1: Successfully wrote to Server2");
                 self.epoch += 1;
-
-                #[cfg(feature = "perf-logging")]
-                total_latency.finish();
                 Ok(())
             }
             Err(e) => {
@@ -308,26 +287,13 @@ impl Server1 {
     }
 
     pub async fn async_batch_write(&mut self) -> Result<(), OramError> {
-        #[cfg(feature = "perf-logging")]
-        let total_latency = LatencyMetric::new("batch_write_total");
-
-        // Log the size of data being processed
-        #[cfg(feature = "perf-logging")]
-        BytesMetric::new(
-            "batch_write_data_size",
-            self.p.packed_buckets.len() * std::mem::size_of::<Bucket>(),
-        )
-        .log();
-
-        // Measure just the bucket processing time
-        #[cfg(feature = "perf-logging")]
-        let bucket_latency = LatencyMetric::new("bucket_processing");
-
+        let end_to_end_latency = LatencyMetric::new("server1_batch_write_end_to_end");  
+        let mut local_latency = LatencyMetric::new("server1_batch_write_local");
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
         // Measure processing of buckets and metadata
-        let bucket_processing_start = Instant::now();
+        let queue_old_buckets_latency = LatencyMetric::new("server1_batch_write_queue_old_buckets");
         self.p
             .zip_with_binary_tree(&self.metadata)
             .par_iter()
@@ -352,8 +318,9 @@ impl Server1 {
                     });
                 }
             });
-
+        queue_old_buckets_latency.finish();
         // This enumerated index doesn't match the index inside of the message queue.
+        let process_queued_buckets_latency = LatencyMetric::new("server1_batch_write_process_queued_buckets");
         self.pt
             .zip_mut(&mut self.metadata_pt)
             .par_iter_mut()
@@ -434,18 +401,18 @@ impl Server1 {
                     );
                 }
             });
-        let bucket_processing_duration = bucket_processing_start.elapsed();
-
-        #[cfg(feature = "perf-logging")]
-        bucket_latency.finish();
-
+        process_queued_buckets_latency.finish();
         // Reset the message queue
         self.message_queue.clear();
 
         // Measure metadata overwrite time
+        let metadata_overwrite_latency = LatencyMetric::new("server1_batch_write_metadata_overwrite");
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
+        metadata_overwrite_latency.finish();
 
-        println!("Server1: Writing to Server2");
+        local_latency.finish();
+
+        let write_to_server2_latency = LatencyMetric::new("server1_batch_write_write_to_server2");
         let write_result = self
             .s2
             .write(self.pt.packed_buckets.clone(), self.k_s1_t.clone())
@@ -454,9 +421,8 @@ impl Server1 {
             Ok(_) => {
                 println!("Server1: Successfully wrote to Server2");
                 self.epoch += 1;
-
-                #[cfg(feature = "perf-logging")]
-                total_latency.finish();
+                end_to_end_latency.finish();
+                write_to_server2_latency.finish();
                 Ok(())
             }
             Err(e) => {
@@ -466,18 +432,5 @@ impl Server1 {
         };
 
         result.map_err(|_| OramError::NoMessageFound)
-    }
-
-    pub fn get_path_indices(&self, paths: Vec<Path>) -> Vec<usize> {
-        let mut pathset: HashSet<usize> = HashSet::new();
-        pathset.insert(1);
-        paths.iter().for_each(|p| {
-            p.clone().into_iter().fold(1, |acc, d| {
-                let idx = 2 * acc + u8::from(d) as usize;
-                pathset.insert(idx);
-                idx
-            });
-        });
-        pathset.into_iter().collect()
     }
 }

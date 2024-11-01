@@ -230,6 +230,10 @@ impl Bucket {
     pub fn shuffle<R: RngCore + Rng>(&mut self, rng: &mut R) {
         self.0.shuffle(rng);
     }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Block> {
+        self.0.iter()
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]

@@ -21,6 +21,11 @@ pub struct ReadPathsRequest {
     pub indices: Vec<usize>,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ReadPathsClientRequest {
+    pub indices: Vec<usize>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ReadPathsResponse {
     pub buckets: Vec<Bucket>,

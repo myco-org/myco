@@ -7,10 +7,7 @@ use bincode::{deserialize, serialize};
 use tokio::stream;
 
 use crate::{
-    error::OramError,
-    network::{Command, ReadType, WriteType},
-    tree::BinaryTree,
-    Bucket, Key, Path, D, DELTA,
+    error::OramError, logging::LatencyMetric, network::{Command, ReadType, WriteType}, tree::BinaryTree, Bucket, Key, Path, D, DELTA
 };
 
 pub struct Server2 {
@@ -35,7 +32,9 @@ impl Server2 {
 
     /// l is the leaf block.
     pub fn read(&self, l: &Path) -> Result<Vec<Bucket>, OramError> {
+        let read_latency = LatencyMetric::new("server2_read");
         let buckets = self.tree.get_all_nodes_along_path(l);
+        read_latency.finish();
         Ok(buckets)
     }
 
@@ -45,6 +44,7 @@ impl Server2 {
     }
 
     pub fn write(&mut self, packed_buckets: Vec<Bucket>) {
+        let write_latency = LatencyMetric::new("server2_write");
         // Ensure the number of elements in packed_buckets matches the number of pathset_indices
         assert_eq!(
             self.pathset_indices.len(),
@@ -59,6 +59,7 @@ impl Server2 {
 
         // Increment the epoch
         self.epoch += 1;
+        write_latency.finish();
     }
 
     pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
@@ -66,22 +67,35 @@ impl Server2 {
     }
 
     pub fn add_prf_key(&mut self, key: &Key) {
+        let add_prf_key_latency = LatencyMetric::new("server2_add_prf_key");
         self.prf_keys.push(key.clone());
 
         if self.epoch >= DELTA as u64 {
             self.prf_keys.remove(0);
         }
+        add_prf_key_latency.finish();
     }
 
     /// This is S2's pathset indices. When we read the paths from the pathset, we also update the pathset indices here.
     pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
+        let read_paths_latency = LatencyMetric::new("server2_read_paths");
         self.pathset_indices = pathset.clone();
 
         let buckets: Vec<Bucket> = pathset
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
             .collect();
+        read_paths_latency.finish();
+        Ok(buckets)
+    }
 
+    pub fn read_paths_client(&self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
+        let read_paths_latency = LatencyMetric::new("server2_read_paths_client");
+        let buckets: Vec<Bucket> = pathset
+            .iter()
+            .map(|i| self.tree.value[*i].clone().unwrap())
+            .collect();
+        read_paths_latency.finish();
         Ok(buckets)
     }
 }

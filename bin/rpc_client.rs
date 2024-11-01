@@ -1,6 +1,6 @@
 use myco_rs::{
     client::Client,
-    constants::{DELTA, NUM_CLIENTS},
+    constants::{BATCH_SIZE, DELTA, NUM_CLIENTS},
     dtypes::Key,
     network::{RemoteServer1Access, RemoteServer2Access},
 };
@@ -8,6 +8,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use std::error::Error;
 use tokio::{self};
+use myco_rs::logging::{initialize_logging};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -50,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (i, client) in clients.enumerate() {
             println!("Server1: Writing from client {}", i);
             let message = vec![1u8; 16];
-            if let Err(e) = client.async_write(&message, &simulation_key).await {
+            if let Err(e) = client.async_write(&message, &simulation_key.clone()).await {
                 eprintln!("Error in client write: {:?}", e);
             }
         }
@@ -72,7 +73,63 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (i, client) in clients.enumerate() {
             println!("Server1: Reading from client {}", i);
             let res = client
-                .async_read(&simulation_key, client.id.clone(), 0)
+                .async_read(vec![simulation_key.clone(), simulation_key.clone()], client.id.clone(), 0)
+                .await;
+            if let Ok(data) = res {
+                println!("Server1: Client {} read: {:?}", i, data);
+            } else {
+                eprintln!("Error in client read: {:?}", res);
+            }
+        }
+    }
+
+    // Initialize logging for the final iteration
+    initialize_logging("final_iteration_latency.csv", "final_iteration_bytes.csv");
+
+    // Run one final iteration with logging enabled
+    {        
+        let client = reqwest::Client::new();
+        let request = myco_rs::rpc_types::BatchInitRequest {
+            num_writes: NUM_CLIENTS,
+        };
+        let request_bytes = bincode::serialize(&request).unwrap();
+        
+        let response = client
+            .post(format!("{}/batch_init", s1_addr))
+            .header("Content-Type", "application/octet-stream")
+            .body(request_bytes)
+            .send()
+            .await?;
+
+        let response_bytes = response.bytes().await?;
+        
+        let response: myco_rs::rpc_types::BatchInitResponse =
+            bincode::deserialize(&response_bytes).unwrap();
+        assert!(response.success);
+
+        let mut clients = simulation_clients.iter_mut();
+        for (i, client) in clients.enumerate() {
+            let message = vec![1u8; 16];
+            if let Err(e) = client.async_write(&message, &simulation_key.clone()).await {
+                eprintln!("Error in client write: {:?}", e);
+            }
+        }
+
+        let response = client
+            .get(format!("{}/batch_write", s1_addr))
+            .send()
+            .await?;
+        let response_bytes = response.bytes().await?;
+        
+        let response: myco_rs::rpc_types::BatchWriteResponse =
+            bincode::deserialize(&response_bytes).unwrap();
+        assert!(response.success);
+
+        let mut clients = simulation_clients.iter_mut();
+        for (i, client) in clients.enumerate() {
+            println!("Server1: Reading from client {}", i);
+            let res = client
+                .async_read(vec![simulation_key.clone(), simulation_key.clone()], client.id.clone(), 0)
                 .await;
             if let Ok(data) = res {
                 println!("Server1: Client {} read: {:?}", i, data);

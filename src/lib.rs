@@ -15,6 +15,7 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
 
+use std::collections::HashSet;
 use std::{
     collections::HashMap,
     num::NonZeroU32,
@@ -158,6 +159,19 @@ pub fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
         .cloned()
         .collect();
     buf.into_iter().rev().collect()
+}
+
+pub fn get_path_indices(paths: Vec<Path>) -> Vec<usize> {
+    let mut pathset: HashSet<usize> = HashSet::new();
+    pathset.insert(1);
+    paths.iter().for_each(|p| {
+        p.clone().into_iter().fold(1, |acc, d| {
+            let idx = 2 * acc + u8::from(d) as usize;
+            pathset.insert(idx);
+            idx
+        });
+    });
+    pathset.into_iter().collect()
 }
 
 /// Helper function to calculate the bucket usage of the server.

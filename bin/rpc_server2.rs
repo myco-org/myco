@@ -16,6 +16,7 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use myco_rs::rpc_types::ReadPathsClientRequest;
 use myco_rs::{
     dtypes::{Bucket, Key, Path},
     network::RemoteServer2Access,
@@ -46,6 +47,7 @@ struct Ports {
 #[derive(Clone)]
 struct AppState {
     server2: Arc<RwLock<Server2>>,
+    write_count: Arc<Mutex<usize>>,
 }
 
 #[tokio::main]
@@ -78,10 +80,11 @@ async fn main() {
     let server2 = Server2::new();
     let state = AppState {
         server2: Arc::new(RwLock::new(server2)),
+        write_count: Arc::new(Mutex::new(0)),
     };
     let app = Router::new()
         .route("/read_paths", post(handle_read_paths))
-        .route("/read", post(handle_read))
+        .route("/read_paths_client", post(handle_read_paths_client))
         .route("/write", post(handle_write))
         .route("/get_prf_keys", get(handle_get_prf_keys))
         .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 256))) // Set the max request body size.
@@ -113,23 +116,38 @@ async fn handle_read_paths(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn handle_read(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
-    let request: ReadRequest = bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+async fn handle_read_paths_client(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    let request: ReadPathsClientRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
     let buckets = state
         .server2
         .read()
         .await
-        .read(&request.path)
+        .read_paths_client(request.indices)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    bincode::serialize(&ReadResponse { buckets })
+    bincode::serialize(&ReadPathsResponse { buckets })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
     println!("Server2: Writing to Server2");
+    
+    // Increment counter and check if we should start logging
+    {
+        let mut count = state.write_count.lock().unwrap();
+        *count += 1;
+        
+        if *count == myco_rs::constants::DELTA {
+            myco_rs::logging::initialize_logging(
+                "server2_latency.csv",
+                "server2_bytes.csv"
+            );
+        }
+    }
+
     let request: WriteRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -142,7 +160,6 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
 }
 
 async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
-    println!("Server2: Getting PRF keys");
     let keys = state
         .server2
         .read()

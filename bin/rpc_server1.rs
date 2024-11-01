@@ -36,6 +36,7 @@ struct Ports {
 #[derive(Clone)]
 struct AppState {
     server1: Arc<Mutex<Server1>>,
+    batch_write_count: Arc<Mutex<usize>>,
 }
 
 #[tokio::main]
@@ -74,6 +75,7 @@ async fn main() {
     let server1 = Server1::new(s2_access);
     let state = AppState {
         server1: Arc::new(Mutex::new(server1)),
+        batch_write_count: Arc::new(Mutex::new(0)),
     };
 
     let app = Router::new()
@@ -110,7 +112,19 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
-    // TODO: This should not need a Mutex/RwLock once Server1 is refactored to make the queue_write method threadsafe with DashMap.
+    // Increment counter and check if we should start logging
+    {
+        let mut count = state.batch_write_count.lock().await;
+        *count += 1;
+        
+        if *count == myco_rs::constants::DELTA {
+            myco_rs::logging::initialize_logging(
+                "server1_latency.csv",
+                "server1_bytes.csv"
+            );
+        }
+    }
+
     state
         .server1
         .lock()

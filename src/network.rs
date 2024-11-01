@@ -17,9 +17,9 @@ use tokio::{
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
+use crate::logging::BytesMetric;
 use crate::rpc_types::{
-    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsRequest, ReadPathsResponse,
-    ReadRequest, ReadResponse, WriteRequest, WriteResponse,
+    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse
 };
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
 
@@ -64,7 +64,7 @@ pub(crate) trait Network {
 #[async_trait]
 pub trait Server2Access: Send + Sync {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
-    async fn read(&self, path: &Path) -> Result<Vec<Bucket>>;
+    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
@@ -85,8 +85,12 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
-    async fn read(&self, path: &Path) -> Result<Vec<Bucket>> {
-        self.server.lock().unwrap().read(path).map_err(|e| e.into())
+    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
+        self.server
+            .lock()
+            .unwrap()
+            .read_paths(indices)
+            .map_err(|e| e.into())
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
@@ -109,9 +113,6 @@ impl Server2Access for LocalServer2Access {
 pub struct RemoteServer2Access {
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
-    // pub(crate) connection: Arc<RemoteConnection>,
-    // addr: String,
-    // cert_path: String,
 }
 
 #[async_trait]
@@ -122,9 +123,9 @@ impl Server2Access for RemoteServer2Access {
         Ok(response.buckets)
     }
 
-    async fn read(&self, path: &Path) -> Result<Vec<Bucket>> {
-        let request = ReadRequest { path: path.clone() };
-        let response: ReadResponse = self.post_bincode("read", &request).await?;
+    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
+        let request = ReadPathsClientRequest { indices };
+        let response: ReadPathsResponse = self.post_bincode("read_paths_client", &request).await?;
         Ok(response.buckets)
     }
 
@@ -178,6 +179,10 @@ impl RemoteServer2Access {
         let request_bytes =
             bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
 
+        
+        let request_bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), request_bytes.len());
+        request_bytes_metric.log();
+
         let response = self
             .client
             .post(&format!("{}/{}", self.base_url, endpoint))
@@ -218,54 +223,6 @@ impl RemoteServer1Access {
             client,
             base_url: server1_addr.to_string(),
         })
-    }
-}
-pub struct RemoteConnection {
-    stream: Arc<TokioMutex<TlsStream<TcpStream>>>,
-    server_name: ServerName,
-}
-
-impl RemoteConnection {
-    pub async fn connect(host: &str, port: u16, cert_path: &str) -> Result<Self, OramError> {
-        // Load and parse certificate
-        let cert_file = std::fs::File::open(cert_path)?;
-        let mut reader = std::io::BufReader::new(cert_file);
-        let certs: Vec<Certificate> = rustls_pemfile::certs(&mut reader)?
-            .into_iter()
-            .map(Certificate)
-            .collect();
-
-        // Connect TCP first
-        let stream = TcpStream::connect((host, port)).await?;
-
-        // Then do TLS handshake
-        let mut root_store = RootCertStore::empty();
-        for cert in certs {
-            root_store.add(&cert)?;
-        }
-
-        let config = rustls::ClientConfig::builder()
-            .with_safe_defaults()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-
-        let connector = TlsConnector::from(Arc::new(config));
-        let server_name = ServerName::try_from(host).map_err(|_| OramError::InvalidServerName)?;
-
-        let stream = connector.connect(server_name.clone(), stream).await?;
-
-        Ok(Self {
-            stream: Arc::new(TokioMutex::new(stream)),
-            server_name,
-        })
-    }
-
-    pub async fn close(&self) -> Result<(), OramError> {
-        let mut stream = self.stream.lock().await;
-        futures::executor::block_on(async {
-            let _ = stream.shutdown().await;
-        });
-        Ok(())
     }
 }
     
@@ -315,7 +272,10 @@ impl Server1Access for RemoteServer1Access {
             k_oram_t,
             cs,
         };
+
         let request_bytes = serialize(&queue_write_request).unwrap();
+        let queue_write_bytes_metric = BytesMetric::new("queue_write_bytes", request_bytes.len());
+        queue_write_bytes_metric.log();
         let response = self
             .client
             .post(&format!("{}/queue_write", self.base_url))
