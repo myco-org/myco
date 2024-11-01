@@ -1061,6 +1061,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-rustls 0.24.1",
+ "tower 0.5.1",
  "tracing",
  "tracing-subscriber",
 ]

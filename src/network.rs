@@ -117,88 +117,25 @@ pub struct RemoteServer2Access {
 #[async_trait]
 impl Server2Access for RemoteServer2Access {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
-        // Send a GET request to the server.
-        let read_paths_request = ReadPathsRequest { indices };
-        println!("URL: {}", &format!("{}/read_paths", self.base_url));
-        let response = self
-            .client
-            .post(&format!("{}/read_paths", self.base_url))
-            .json(&read_paths_request)
-            .send()
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!("Failed to send read paths request to Server2: {:?}", e)
-            })?;
-        let response_json: ReadPathsResponse = response.json().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to parse response from Server2",
-            ))
-        })?;
-        Ok(response_json.buckets)
+        let request = ReadPathsRequest { indices };
+        let response: ReadPathsResponse = self.post_bincode("read_paths", &request).await?;
+        Ok(response.buckets)
     }
 
     async fn read(&self, path: &Path) -> Result<Vec<Bucket>> {
-        let read_request = ReadRequest { path: path.clone() };
-        let response = self
-            .client
-            .post(&format!("{}/read", self.base_url))
-            .json(&read_request)
-            .send()
-            .await
-            .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to send read request to Server2",
-                ))
-            })?;
-        let response_json: ReadResponse = response.json().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to parse read response from Server2",
-            ))
-        })?;
-        Ok(response_json.buckets)
+        let request = ReadRequest { path: path.clone() };
+        let response: ReadResponse = self.post_bincode("read", &request).await?;
+        Ok(response.buckets)
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
-        let write_request = WriteRequest { buckets, prf_key };
-        // println!("Write request: {:?}", write_request);
-        println!("URL: {}", &format!("{}/write", self.base_url));
-        let response = self
-            .client
-            .post(&format!("{}/write", self.base_url))
-            .json(&write_request)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to send write request to Server2: {:?}", e))?;
-
-        // Check if the response is an error.
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!(
-                "Server2 reported failure in write operation: {}",
-                response.status()
-            ));
-        }
-        let write_response: WriteResponse = response.json().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to parse write response from Server2",
-            ))
-        })?;
-        println!("Server2Access: Got response from write operation");
-        if write_response.success {
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!(
-                "Server2 reported failure in write operation"
-            ))
-        }
+        let request = WriteRequest { buckets, prf_key };
+        let _: WriteResponse = self.post_bincode("write", &request).await?;
+        Ok(())
     }
 
     async fn get_prf_keys(&self) -> Result<Vec<Key>> {
-        let response = self
+        let response: GetPrfKeysResponse = self
             .client
             .get(&format!("{}/get_prf_keys", self.base_url))
             .send()
@@ -206,45 +143,64 @@ impl Server2Access for RemoteServer2Access {
             .map_err(|_| {
                 OramError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
-                    "Failed to send get prf keys request to Server2",
+                    "Failed to send request",
                 ))
+            })?
+            .bytes()
+            .await
+            .map_err(|_| {
+                OramError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to get response bytes",
+                ))
+            })
+            .and_then(|bytes| {
+                bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)
             })?;
-        let get_prf_keys_response: GetPrfKeysResponse = response.json().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to parse get prf keys response from Server2",
-            ))
-        })?;
-        Ok(get_prf_keys_response.keys)
+
+        Ok(response.keys)
     }
 }
 
 impl RemoteServer2Access {
-    pub async fn new(url: &str) -> Result<Self> {
-        let client = reqwest::Client::new();
+    pub async fn new(base_url: &str) -> Result<Self, OramError> {
         Ok(Self {
-            client,
-            base_url: url.to_string(),
-            // connection: Arc::new(RemoteConnection::connect(url, cert_path).await?),
-            // addr: url.to_string(),
-            // cert_path: cert_path.to_string(),
+            client: reqwest::Client::new(),
+            base_url: base_url.to_string(),
         })
     }
-    // pub async fn connect(addr: &str, cert_path: &str) -> Result<Self, OramError> {
-    //     println!("Server2Access: Connecting to Server2");
-    //     let (host, port) = addr.split_once(':').ok_or(OramError::InvalidServerName)?;
-    //     println!("Server2Access: Split address into host and port");
-    //     let port = port.parse().map_err(|_| OramError::InvalidServerName)?;
-    //     println!("Server2Access: Parsed port");
 
-    //     let connection = Arc::new(RemoteConnection::connect(host, port, cert_path).await?);
-    //     println!("Server2Access: Connected to Server2");
-    //     Ok(Self {
-    //         connection,
-    //         addr: addr.to_string(),
-    //         cert_path: cert_path.to_string(),
-    //     })
-    // }
+    async fn post_bincode<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        endpoint: &str,
+        payload: &T,
+    ) -> Result<R, OramError> {
+        let request_bytes =
+            bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
+
+        let response = self
+            .client
+            .post(&format!("{}/{}", self.base_url, endpoint))
+            .header("Content-Type", "application/octet-stream")
+            .body(request_bytes)
+            .send()
+            .await
+            .map_err(|_| {
+                OramError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to send request",
+                ))
+            })?;
+
+        let bytes = response.bytes().await.map_err(|_| {
+            OramError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to get response bytes",
+            ))
+        })?;
+
+        bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)
+    }
 }
 
 // Remote access - serialized network access
@@ -471,10 +427,12 @@ impl Server1Access for RemoteServer1Access {
             k_oram_t,
             cs,
         };
+        let request_bytes = serialize(&queue_write_request).unwrap();
         let response = self
             .client
             .post(&format!("{}/queue_write", self.base_url))
-            .json(&queue_write_request)
+            .header("Content-Type", "application/octet-stream")
+            .body(request_bytes)
             .send()
             .await
             .map_err(|_| {
@@ -484,12 +442,8 @@ impl Server1Access for RemoteServer1Access {
                 ))
             })?;
 
-        let queue_write_response: QueueWriteResponse = response.json().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to parse response from Server1",
-            ))
-        })?;
+        let queue_write_response: QueueWriteResponse =
+            deserialize(&response.bytes().await.unwrap()).unwrap();
 
         // Check for success response
         if queue_write_response.success {

@@ -6,6 +6,7 @@
 
 #![allow(unused_imports)]
 
+use axum::body::Bytes;
 use axum::{
     extract::State,
     handler::HandlerWithoutStateExt,
@@ -32,6 +33,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::RwLock;
+use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[allow(dead_code)]
@@ -82,6 +84,7 @@ async fn main() {
         .route("/read", post(handle_read))
         .route("/write", post(handle_write))
         .route("/get_prf_keys", get(handle_get_prf_keys))
+        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 256))) // Set the max request body size.
         .with_state(state);
 
     // run tcp server
@@ -93,37 +96,61 @@ async fn main() {
 
 async fn handle_read_paths(
     State(state): State<AppState>,
-    Json(request): Json<ReadPathsRequest>,
-) -> Json<ReadPathsResponse> {
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    let request: ReadPathsRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
     let buckets = state
         .server2
         .write()
         .await
         .read_paths(request.indices)
-        .unwrap();
-    Json(ReadPathsResponse { buckets })
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bincode::serialize(&ReadPathsResponse { buckets })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn handle_read(
-    State(state): State<AppState>,
-    Json(request): Json<ReadRequest>,
-) -> Json<ReadResponse> {
-    let buckets = state.server2.read().await.read(&request.path).unwrap();
-    Json(ReadResponse { buckets })
+async fn handle_read(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    let request: ReadRequest = bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let buckets = state
+        .server2
+        .read()
+        .await
+        .read(&request.path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bincode::serialize(&ReadResponse { buckets })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn handle_write(
-    State(state): State<AppState>,
-    Json(request): Json<WriteRequest>,
-) -> Json<WriteResponse> {
+async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
     println!("Server2: Writing to Server2");
+    let request: WriteRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
     state.server2.write().await.write(request.buckets);
     state.server2.write().await.add_prf_key(&request.prf_key);
-    Json(WriteResponse { success: true })
+
+    bincode::serialize(&WriteResponse { success: true })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn handle_get_prf_keys(State(state): State<AppState>) -> Json<GetPrfKeysResponse> {
+async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Server2: Getting PRF keys");
-    let keys = state.server2.read().await.get_prf_keys().unwrap();
-    Json(GetPrfKeysResponse { keys })
+    let keys = state
+        .server2
+        .read()
+        .await
+        .get_prf_keys()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bincode::serialize(&GetPrfKeysResponse { keys })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
