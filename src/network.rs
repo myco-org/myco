@@ -90,8 +90,10 @@ pub struct RemoteServer2Access {
 
 impl Server2Access for RemoteServer2Access {
     fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
+        println!("Server2Access: Starting read_paths operation");
         let command = Command::Server2Read(ReadType::ReadPaths(indices));
         let response = self.connection.send(&serialize(&command).unwrap())?;
+        println!("Server2Access: Got response from read_paths operation");
         deserialize(&response).map_err(|_| OramError::DeserializationError)
     }
 
@@ -102,17 +104,21 @@ impl Server2Access for RemoteServer2Access {
     }
 
     fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<(), OramError> {
+        println!("Server2Access: Starting write operation");
         let command = Command::Server2Write(WriteType::Write(buckets, prf_key));
         let response = self.connection.send(&serialize(&command).unwrap())?;
+        println!("Server2Access: Got response from write operation");
 
         // Deserialize and check for success
         let response_command: Command = deserialize(&response)
             .map_err(|_| OramError::DeserializationError)?;
         match response_command {
             Command::Success => {
+                println!("Server2Access: Write operation successful");
                 Ok(())
             }
             _ => {
+                println!("Server2Access: Unexpected response from Server2");
                 Err(OramError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Unexpected response from Server2"
@@ -211,42 +217,64 @@ impl RemoteConnection {
         }
         Ok(())
     }
-}
 
-impl Network for RemoteConnection {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
+    pub fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError> {
         let mut retries = 3;
         let mut last_error = None;
 
         while retries > 0 {
             let result = {
-                let mut stream: std::sync::MutexGuard<'_, TlsStream<TcpStream>> = self.stream.lock().unwrap();
+                let mut stream = self.stream.lock().unwrap();
+                println!("RemoteConnection: Acquired stream lock for command");
                 
                 futures::executor::block_on(async {
-                    stream.write_all(&(command.len() as u32).to_be_bytes()).await?;
-                    stream.write_all(command).await?;
-                    stream.flush().await?;
-                    // Read the response length
-                    let mut len_bytes = [0u8; 4];
-                    stream.read_exact(&mut len_bytes).await?;
-                    let len = u32::from_be_bytes(len_bytes);
-                    
-                    let mut response = vec![0u8; len as usize];
-                    stream.read_exact(&mut response).await?;
-                    
-                    Ok::<Vec<u8>, std::io::Error>(response)
+                    // Set a timeout for the entire operation
+                    let timeout = tokio::time::timeout(
+                        std::time::Duration::from_secs(10), 
+                        async {
+                            println!("RemoteConnection: Writing command length");
+                            stream.write_all(&(command.len() as u32).to_be_bytes()).await?;
+                            stream.flush().await?;
+                            
+                            println!("RemoteConnection: Writing command data");
+                            stream.write_all(command).await?;
+                            stream.flush().await?;
+                            
+                            println!("RemoteConnection: Reading response length");
+                            let mut len_bytes = [0u8; 4];
+                            stream.read_exact(&mut len_bytes).await?;
+                            let len = u32::from_be_bytes(len_bytes);
+                            
+                            println!("RemoteConnection: Reading response data of length {}", len);
+                            let mut response = vec![0u8; len as usize];
+                            stream.read_exact(&mut response).await?;
+                            
+                            Ok::<Vec<u8>, std::io::Error>(response)
+                        }
+                    ).await;
+
+                    match timeout {
+                        Ok(result) => result,
+                        Err(_) => Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "Operation timed out"
+                        ))
+                    }
                 })
             };
+            println!("RemoteConnection: Released stream lock");
 
             match result {
                 Ok(response) => {
-
-                    return Ok(response);
-                }
+                    println!("RemoteConnection: Successfully completed operation");
+                    return Ok(response)
+                },
                 Err(e) => {
+                    println!("RemoteConnection: Error in send: {:?}", e);
                     last_error = Some(e);
                     retries -= 1;
                     if retries > 0 {
+                        println!("RemoteConnection: Retrying in 500ms... ({} retries left)", retries);
                         std::thread::sleep(std::time::Duration::from_millis(500));
                     }
                 }
@@ -272,7 +300,7 @@ impl Drop for RemoteConnection {
 }
 
 // Define how we interact with Server1
-pub trait Server1Access {
+pub trait Server1Access: Send {
     fn queue_write(&self, ct: Vec<u8>, f: Vec<u8>, k_oram_t: Key, cs: Vec<u8>) -> Result<(), OramError>;
 }
 

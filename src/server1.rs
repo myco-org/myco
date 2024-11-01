@@ -1,4 +1,5 @@
-use crate::network::{Command, RemoteServer2Access, Server2Access};
+use crate::client::Client;
+use crate::network::{Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access};
 use crate::tls_server::TlsServer;
 use crate::tree::SparseBinaryTree;
 use crate::{
@@ -68,6 +69,7 @@ impl Server1 {
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
+        println!("Server1: Initialized batch for epoch {}/{}", self.epoch + 1, DELTA);
     }
 
     /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
@@ -222,12 +224,17 @@ impl Server1 {
         // Measure metadata overwrite time
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
 
-        match self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()) {
+
+        println!("Server1: Writing to Server2");
+        let write_result = self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone());
+        match write_result {
             Ok(_) => {
+                println!("Server1: Successfully wrote to Server2");
                 self.epoch += 1;
                 Ok(())
             },
             Err(e) => {
+                println!("Server1: Error writing to Server2: {:?}", e);
                 Err(e)
             }
         }
@@ -285,6 +292,155 @@ impl Server1 {
                 _ => Err(OramError::InvalidCommand),
             }   
         }).await;
+
+        Ok(())
+    }
+
+    pub async fn run_server_with_simulation<F>(
+        addr: &str,
+        cert_path: &str,
+        key_path: &str,
+        simulation_key: Key,
+        progress_callback: F,
+    ) -> Result<(), OramError>
+    where
+        F: Fn(usize) + Send + Sync + 'static,
+    {
+        // Initial setup
+        let server2_connection = RemoteServer2Access::connect("localhost:8444", cert_path).await?;
+        let server1 = Arc::new(Mutex::new(Self::new(Box::new(server2_connection))));
+        
+        // Create channel for batch_init completion signal
+        let (init_tx, init_rx) = tokio::sync::mpsc::channel(1);
+        let (batch_tx, mut batch_rx) = tokio::sync::mpsc::channel(1);
+        
+        // Create simulation clients once at the start
+        println!("Creating {} simulation clients...", NUM_CLIENTS);
+        let mut simulation_clients = Vec::new();
+        for i in 0..NUM_CLIENTS {
+            let client_name = format!("SimClient_{}", i);
+            let s2_access = Box::new(LocalServer2Access { 
+                server: Arc::new(Mutex::new(Server2::new()))
+            });
+            let s1_access = Box::new(LocalServer1Access { server: server1.clone() });
+            let mut client = Client::new(client_name, s1_access, s2_access);
+            client.setup(&simulation_key)?;
+            simulation_clients.push(client);
+        }
+
+        println!("Starting simulation...");
+
+        // Create a future that will complete when we want to shut down
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        
+        // Spawn tasks without immediately aborting them
+        let init_handle = tokio::spawn({
+            let server1 = server1.clone();
+            let init_tx = init_tx.clone(); // Clone for init_handle
+            async move {
+                loop {
+                    let should_init = {
+                        let server = server1.lock().unwrap();
+                        // Check if we need to initialize a new batch
+                        server.message_queue.is_empty() && server.epoch < DELTA as u64
+                    };
+
+                    if should_init {
+                        println!("Server1: Starting new epoch {}/{}", server1.lock().unwrap().epoch + 1, DELTA);
+                        {
+                            let mut server = server1.lock().unwrap();
+                            server.batch_init(NUM_CLIENTS);
+                        }
+                        println!("Server1: batch_init complete, signaling for client writes");
+                        
+                        if init_tx.send(()).await.is_err() {
+                            println!("Server1: Failed to signal batch_init completion");
+                            break;
+                        }
+                    }
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                }
+            }
+        });
+
+        let write_handle = tokio::spawn({
+            let server1 = server1.clone();
+            let init_tx = init_tx.clone(); // Clone for write_handle
+            async move {
+                while let Some(()) = batch_rx.recv().await {
+                    println!("Server1: Received batch write signal");
+                    
+                    let result = tokio::time::timeout(
+                        std::time::Duration::from_secs(30),
+                        async {
+                            let mut server = server1.lock().unwrap();
+                            println!("Server1: Preparing batch write...");
+                            let buckets = server.pt.packed_buckets.clone();
+                            let key = server.k_s1_t.clone();
+                            drop(server);
+                            
+                            let write_result = server1.lock().unwrap().s2.write(buckets, key);
+                            
+                            if let Ok(_) = write_result {
+                                let mut server = server1.lock().unwrap();
+                                server.epoch += 1;
+                                println!("Server1: Successfully incremented epoch to {}", server.epoch);
+                            }
+                            
+                            write_result
+                        }
+                    ).await;
+                    
+                    match result {
+                        Ok(Ok(_)) => {
+                            println!("Server1: Successfully completed batch write");
+                            // Signal for next batch_init
+                            if let Err(e) = init_tx.send(()).await {
+                                eprintln!("Failed to signal next batch_init: {:?}", e);
+                            }
+                        },
+                        Ok(Err(e)) => eprintln!("Server1: Error in batch_write: {:?}", e),
+                        Err(_) => eprintln!("Server1: Timeout writing to Server2"),
+                    }
+                }
+            }
+        });
+
+        let clients_handle = tokio::spawn({
+            let batch_tx = batch_tx;
+            async move {
+                let mut init_rx = init_rx;
+                while let Some(()) = init_rx.recv().await {
+                    println!("Starting writes for {} clients...", NUM_CLIENTS);
+                    let mut clients = simulation_clients.iter_mut();
+                    for (i, client) in clients.enumerate() {
+                        let message = vec![1u8; 16];
+                        if let Err(e) = client.write(&message, &simulation_key) {
+                            eprintln!("Error in client write: {:?}", e);
+                        }
+                    }
+                    // Signal batch write after all clients have written
+                    if batch_tx.send(()).await.is_err() {
+                        eprintln!("Failed to signal batch write");
+                    }
+                    println!("Completed all client writes for this batch");
+                    progress_callback(server1.lock().unwrap().epoch as usize);
+                }
+                println!("Client handler ending...");
+            }
+        });
+
+        // Wait for shutdown signal
+        let _ = shutdown_rx.await;
+
+        // Clean up gracefully
+        init_handle.abort();
+        write_handle.abort();
+        clients_handle.abort();
+
+        // Wait for all handles to complete
+        let _ = tokio::try_join!(init_handle, write_handle, clients_handle);
 
         Ok(())
     }

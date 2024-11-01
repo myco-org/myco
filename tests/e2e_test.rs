@@ -16,7 +16,7 @@ mod e2e_tests {
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
     use myco_rs::{
-        constants::{D, DELTA, NUM_WRITES_PER_EPOCH, Z}, decrypt, dtypes::{Bucket, Metadata, Path, Key}, encrypt, error::OramError, kdf, network::{LocalServer1Access, LocalServer2Access}, prf, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, trim_zeros, client::Client, EncryptionType };
+        constants::{D, DELTA, NUM_CLIENTS, Z}, decrypt, dtypes::{Bucket, Metadata, Path, Key}, encrypt, error::OramError, kdf, network::{LocalServer1Access, LocalServer2Access}, prf, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, trim_zeros, client::Client, EncryptionType };
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
@@ -660,8 +660,8 @@ mod e2e_tests {
     fn test_create_serialized_full_db() {
         use super::*;
 
-        let num_clients = NUM_WRITES_PER_EPOCH;
-        let num_epochs = DELTA;
+        let num_clients = NUM_CLIENTS;
+        let num_epochs = 15;
 
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
@@ -678,7 +678,7 @@ mod e2e_tests {
             bucket_size: Z,
             num_iters: DELTA as usize,
             depth: D,
-            num_clients: NUM_WRITES_PER_EPOCH,
+            num_clients: NUM_CLIENTS,
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("Time went backwards")

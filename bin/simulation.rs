@@ -6,10 +6,8 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
-mod tls_server1;
-
 use myco_rs::{
-    calculate_bucket_usage, constants::{DELTA, NUM_WRITES_PER_EPOCH, DB_SIZE}, dtypes::Key, server1::Server1, server2::Server2, client::Client
+    calculate_bucket_usage, constants::{DELTA, NUM_CLIENTS, DB_SIZE}, dtypes::Key, server1::Server1, server2::Server2, client::Client
 };
 use rand::{Rng, SeedableRng};
 use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
@@ -227,7 +225,7 @@ fn run_local_latency_benchmark() {
     // Setup multiple clients
     let mut clients = Vec::new();
     let mut keys = Vec::new();
-    for i in 0..NUM_WRITES_PER_EPOCH {
+    for i in 0..NUM_CLIENTS {
         let key = Key::random(&mut rng);
         let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
         client.setup(&key).expect("Setup failed");
@@ -241,7 +239,7 @@ fn run_local_latency_benchmark() {
     for epoch in 0..DELTA {
         println!("Epoch: {}/{}", epoch, DELTA);
 
-        s1.lock().unwrap().batch_init(NUM_WRITES_PER_EPOCH);
+        s1.lock().unwrap().batch_init(NUM_CLIENTS);
         
         // Have each client perform a write
         clients.iter_mut()
@@ -254,7 +252,7 @@ fn run_local_latency_benchmark() {
                 #[cfg(not(feature = "no-enc"))]
                 client.write(&message, key).expect("Write failed");
                 
-                if (epoch * NUM_WRITES_PER_EPOCH + client_idx) % 1000 == 0 {
+                if (epoch * NUM_CLIENTS + client_idx) % 1000 == 0 {
                     println!("Progress: Write {} in epoch {}", client_idx, epoch);
                 }
             });
@@ -274,7 +272,7 @@ fn run_local_latency_benchmark() {
 
         // Measure batch_init
         let start = std::time::Instant::now();
-        s1.lock().unwrap().batch_init(NUM_WRITES_PER_EPOCH);
+        s1.lock().unwrap().batch_init(NUM_CLIENTS);
         batch_init_times.push(start.elapsed());
 
         // Measure write
@@ -339,7 +337,7 @@ fn main() {
     
     match simulation_type.as_str() {
         "single" => run_single_client_simulation(262144),
-        "multi" => run_multi_client_simulation(NUM_WRITES_PER_EPOCH, DELTA),
+        "multi" => run_multi_client_simulation(NUM_CLIENTS, DELTA),
         "benchmark" => run_local_latency_benchmark(),
         _ => panic!("Unknown simulation type. Use: single, multi, or benchmark"),
     }

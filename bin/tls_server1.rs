@@ -1,5 +1,14 @@
-use myco_rs::server1::Server1;
+use myco_rs::{
+    client::Client,
+    constants::{DELTA, NUM_CLIENTS},
+    dtypes::Key,
+    network::{Command, RemoteServer2Access},
+    server1::Server1,
+};
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use std::error::Error;
+use tokio;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -7,5 +16,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let cert_path = "certs/server-cert.pem";
     let key_path = "certs/server-key.pem";
     
-    Server1::run_server(addr, cert_path, key_path).await.map_err(|e| e.into())
+    println!("Server1 starting...");
+    
+    // Create a fixed key for simulation
+    let mut rng = ChaCha20Rng::from_entropy();
+    let simulation_key = Key::random(&mut rng);
+    
+    // Initialize simulation clients
+    println!("Initializing {} simulation clients...", NUM_CLIENTS);
+    
+    // Start the server with simulation data
+    println!("Starting TLS server...");
+    Server1::run_server_with_simulation(
+        addr, 
+        cert_path, 
+        key_path,
+        simulation_key,
+        move |epoch| {
+            println!("Completed epoch {}/{}", epoch, DELTA);
+        }
+    ).await.map_err(|e| e.into())
 }

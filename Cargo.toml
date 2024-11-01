@@ -15,6 +15,10 @@ path = "bin/tls_server2.rs"
 name = "tls_server1"
 path = "bin/tls_server1.rs"
 
+[[bin]]
+name = "tls_client"
+path = "bin/tls_client.rs"
+
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"
