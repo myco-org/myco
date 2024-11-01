@@ -101,7 +101,7 @@ pub fn encrypt(
     {
         // In no-enc mode, just pad the message and return it
         return Ok(match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
             EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
         });
     }
@@ -112,7 +112,7 @@ pub fn encrypt(
         let binding = rand::thread_rng().gen::<[u8; 12]>();
         let nonce = Nonce::from_slice(&binding);
         let mut buffer = match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
             EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
         };
 

@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 lazy_static! {
     static ref LATENCY_LOG: Mutex<Option<File>> = Mutex::new(None);
     static ref BYTES_LOG: Mutex<Option<File>> = Mutex::new(None);
-    static ref TIMESTAMP_LOG: Mutex<Option<File>> = Mutex::new(None);
 }
 
 pub struct LatencyMetric {
@@ -21,11 +20,6 @@ pub struct BytesMetric {
     operation: String,
     bytes: usize,
 }
-
-pub struct TimestampMetric {
-    operation: String,
-}
-
 impl LatencyMetric {
     pub fn new(operation: &str) -> Self {
         Self {
@@ -89,38 +83,21 @@ impl BytesMetric {
     }
 }
 
-impl TimestampMetric {
-    pub fn new(operation: &str) -> Self {
-        Self {
-            operation: operation.to_string(),
-        }
-    }
-
-    pub fn log(self) {
-        #[cfg(feature = "perf-logging")]
-        {
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap();
-            
-            log_timestamp(&format!(
-                "{},{}.{:09}\n",
-                self.operation,
-                timestamp.as_secs(),
-                timestamp.subsec_nanos(),
-            ));
-        }
-    }
-}
-
 pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
     #[cfg(feature = "perf-logging")]
     {
         // Create logs directory if it doesn't exist
         std::fs::create_dir_all("logs").expect("Failed to create logs directory");
         
-        // Initialize latency log with directory prefix
-        let latency_file_path = format!("logs/{}", latency_path);
+        // Create filename prefix with constants
+        let constants_prefix = format!("B{}_Z{}_D{}_BATCH{}_", 
+            crate::constants::BLOCK_SIZE,
+            crate::constants::Z,
+            crate::constants::D,
+            crate::constants::BATCH_SIZE);
+        
+        // Initialize latency log with directory prefix and constants
+        let latency_file_path = format!("logs/{}{}", constants_prefix, latency_path);
         let mut latency_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -133,8 +110,8 @@ pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
         }
         *LATENCY_LOG.lock().unwrap() = Some(latency_file);
 
-        // Initialize bytes log with directory prefix
-        let bytes_file_path = format!("logs/{}", bytes_path);
+        // Initialize bytes log with directory prefix and constants
+        let bytes_file_path = format!("logs/{}{}", constants_prefix, bytes_path);
         let mut bytes_file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -146,20 +123,6 @@ pub fn initialize_logging(latency_path: &str, bytes_path: &str) {
             writeln!(bytes_file, "operation,bytes").unwrap();
         }
         *BYTES_LOG.lock().unwrap() = Some(bytes_file);
-
-        // Initialize timestamp log
-        let timestamp_file_path = format!("logs/timestamps.csv");
-        let mut timestamp_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&timestamp_file_path)
-            .expect("Failed to open timestamp log file");
-        
-        // Write CSV header if file is empty
-        if timestamp_file.metadata().unwrap().len() == 0 {
-            writeln!(timestamp_file, "operation,unix_timestamp").unwrap();
-        }
-        *TIMESTAMP_LOG.lock().unwrap() = Some(timestamp_file);
     }
 }
 
@@ -182,13 +145,3 @@ fn log_bytes(message: &str) {
         }
     }
 }
-
-fn log_timestamp(message: &str) {
-    #[cfg(feature = "perf-logging")]
-    {
-        if let Some(file) = &mut *TIMESTAMP_LOG.lock().unwrap() {
-            file.write_all(message.as_bytes()).expect("Failed to write to timestamp log");
-            file.flush().expect("Failed to flush timestamp log");
-        }
-    }
-} 

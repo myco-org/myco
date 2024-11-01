@@ -2,4 +2,4 @@
 db/
 certs/
 test_sims/
-latency_logs/
+logs/

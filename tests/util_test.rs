@@ -3,6 +3,7 @@ use myco_rs::dtypes::Key;
 use myco_rs::constants::BLOCK_SIZE;
 #[cfg(test)]
 mod util_tests {
+    use myco_rs::constants::INNER_BLOCK_SIZE;
     use rand::{seq::SliceRandom, thread_rng, RngCore, SeedableRng};
 
     #[test]
@@ -61,7 +62,7 @@ mod util_tests {
         let random_key = Key::random(&mut rng);
 
         // Test with different message lengths
-        let message_lengths: Vec<usize> = (0..BLOCK_SIZE).collect();
+        let message_lengths: Vec<usize> = (0..INNER_BLOCK_SIZE).collect();
 
         for &length in &message_lengths {
             let random_message: Vec<u8> = (0..length)

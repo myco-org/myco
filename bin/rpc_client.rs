@@ -4,19 +4,29 @@ use myco_rs::{
     dtypes::Key,
     network::{RemoteServer1Access, RemoteServer2Access},
 };
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::error::Error;
 use tokio::{self};
 use myco_rs::logging::{initialize_logging};
 
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let s1_addr = "http://127.0.0.1:3001";
-    let s2_addr = "http://127.0.0.1:3002";
+    let args: Vec<String> = std::env::args().collect();
+    let binding1 = "http://127.0.0.1:3001".to_string();
+    let binding2 = "http://127.0.0.1:3002".to_string();
+    let s1_addr = args.get(1).unwrap_or(&binding1);
+    let s2_addr = args.get(2).unwrap_or(&binding2);
 
     let mut rng = ChaCha20Rng::from_entropy();
-    let simulation_key = Key::random(&mut rng);
+
+    // Generate BATCH_SIZE different random keys
+    let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
+    for _ in 0..BATCH_SIZE {
+        simulation_keys.push(Key::random(&mut rng));
+    }
     // Initialize a bunch of clients.
     let mut simulation_clients = Vec::new();
     for i in 0..NUM_CLIENTS {
@@ -24,7 +34,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let s1_access = Box::new(RemoteServer1Access::new(s1_addr).await?);
         let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await?);
         let mut client = Client::new(client_name, s1_access, s2_access);
-        client.setup(&simulation_key)?;
+        for key in simulation_keys.iter() {
+            client.setup(key)?;
+        }
         simulation_clients.push(client);
     }
 
@@ -51,7 +63,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (i, client) in clients.enumerate() {
             println!("Server1: Writing from client {}", i);
             let message = vec![1u8; 16];
-            if let Err(e) = client.async_write(&message, &simulation_key.clone()).await {
+
+            // Choose a random index from 0 to batchsize and write to that client
+            let random_index = rng.gen_range(0..BATCH_SIZE);    
+            if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
                 eprintln!("Error in client write: {:?}", e);
             }
         }
@@ -73,7 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         for (i, client) in clients.enumerate() {
             println!("Server1: Reading from client {}", i);
             let res = client
-                .async_read(vec![simulation_key.clone(), simulation_key.clone()], client.id.clone(), 0)
+                .async_read(simulation_keys.clone(), client.id.clone(), 0)
                 .await;
             if let Ok(data) = res {
                 println!("Server1: Client {} read: {:?}", i, data);
@@ -110,7 +125,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut clients = simulation_clients.iter_mut();
         for (i, client) in clients.enumerate() {
             let message = vec![1u8; 16];
-            if let Err(e) = client.async_write(&message, &simulation_key.clone()).await {
+            // Choose a random index from 0 to batchsize and write to that client
+            let random_index = rng.gen_range(0..BATCH_SIZE);
+            if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
                 eprintln!("Error in client write: {:?}", e);
             }
         }
@@ -128,8 +145,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut clients = simulation_clients.iter_mut();
         for (i, client) in clients.enumerate() {
             println!("Server1: Reading from client {}", i);
+            // Generate BATCH_SIZE different random keys
+            let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
+            for _ in 0..BATCH_SIZE {
+                simulation_keys.push(Key::random(&mut rng));
+            }
             let res = client
-                .async_read(vec![simulation_key.clone(), simulation_key.clone()], client.id.clone(), 0)
+                .async_read(simulation_keys, client.id.clone(), 0)
                 .await;
             if let Ok(data) = res {
                 println!("Server1: Client {} read: {:?}", i, data);

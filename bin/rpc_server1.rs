@@ -49,9 +49,16 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let args: Vec<String> = std::env::args().collect();
+    let http_port = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3001);
+    let https_port = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(7878);
+    let s2_addr = args.get(3)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
+
     let ports = Ports {
-        http: 3001,
-        https: 7878,
+        http: http_port,
+        https: https_port,
     };
 
     // configure certificate and private key used by https
@@ -66,9 +73,9 @@ async fn main() {
     .await
     .unwrap();
 
-    // Initialize Server1 with Server2 access
+    // Initialize Server1 with Server2 access using the provided or default address
     let s2_access = Box::new(
-        RemoteServer2Access::new("http://127.0.0.1:3002")
+        RemoteServer2Access::new(&s2_addr)
             .await
             .unwrap(),
     );

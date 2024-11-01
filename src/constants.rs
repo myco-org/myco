@@ -10,4 +10,5 @@ pub const BATCH_SIZE: usize = 2;
 pub const NONCE_SIZE: usize = 12;
 pub const TAG_SIZE: usize = 16;
 pub const BLOCK_SIZE: usize = INNER_BLOCK_SIZE + NONCE_SIZE + TAG_SIZE;
-pub const INNER_BLOCK_SIZE: usize = 48 + NONCE_SIZE + TAG_SIZE;
+pub const INNER_BLOCK_SIZE: usize = MESSAGE_SIZE + NONCE_SIZE + TAG_SIZE;
+pub const MESSAGE_SIZE: usize = 228;
