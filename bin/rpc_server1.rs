@@ -57,6 +57,8 @@ async fn main() {
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
 
+
+    println!("s2_addr: {}", s2_addr);
     let ports = Ports {
         http: http_port,
         https: https_port,
@@ -107,6 +109,7 @@ async fn main() {
 
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    println!("Received request: /queue_write");
     let request: QueueWriteRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -125,6 +128,7 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
+    println!("Received request: /batch_write");
     // Increment counter and check if we should start logging
     {
         let mut count = state.batch_write_count.lock().await;
@@ -153,6 +157,7 @@ async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode>
 
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    println!("Received request: /batch_init");
     let request: BatchInitRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
