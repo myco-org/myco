@@ -99,7 +99,7 @@ async fn main() {
         .with_state(state);
 
     // run tcp server
-    let addr = SocketAddr::from(([127, 0, 0, 1], ports.http));
+    let addr = SocketAddr::from(([0, 0, 0, 0], ports.http));
     tracing::debug!("listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
