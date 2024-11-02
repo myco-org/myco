@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         simulation_clients.push(client);
     }
 
-    for i in 0..1000 {
+    for i in 0..DELTA {
         println!("Starting epoch: {}", i);
         let client = reqwest::Client::new();
         let request = myco_rs::rpc_types::BatchInitRequest {
@@ -89,19 +89,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bincode::deserialize(&response_bytes).unwrap();
         assert!(response.success);
 
-        // // Client should be able to get the prf keys
-        let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
-            println!("Server1: Reading from client {}", i);
-            let res = client
-                .async_read(simulation_keys.clone(), client.id.clone(), 0)
-                .await;
-            if let Ok(data) = res {
-                println!("Server1: Client {} read: {:?}", i, data);
-            } else {
-                eprintln!("Error in client read: {:?}", res);
-            }
-        }
+        // // // Client should be able to get the prf keys
+        // let mut clients = simulation_clients.iter_mut();
+        // for (i, client) in clients.enumerate() {
+        //     println!("Server1: Reading from client {}", i);
+        //     let res = client
+        //         .async_read(simulation_keys.clone(), client.id.clone(), 0)
+        //         .await;
+        //     if let Ok(data) = res {
+        //         println!("Server1: Client {} read: {:?}", i, data);
+        //     } else {
+        //         eprintln!("Error in client read: {:?}", res);
+        //     }
+        // }
     }
 
     // Initialize logging for the final iteration
