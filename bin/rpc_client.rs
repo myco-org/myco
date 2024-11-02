@@ -9,6 +9,7 @@ use rand_chacha::ChaCha20Rng;
 use std::error::Error;
 use tokio::{self};
 use myco_rs::logging::{initialize_logging};
+use futures::future::join_all;
 
 
 
@@ -60,16 +61,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         assert!(response.success);
 
         let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
-            println!("Server1: Writing from client {}", i);
+        let write_futures = clients.enumerate().map(|(i, client)| {
             let message = vec![1u8; 16];
-
-            // Choose a random index from 0 to batchsize and write to that client
-            let random_index = rng.gen_range(0..BATCH_SIZE);    
-            if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
-                eprintln!("Error in client write: {:?}", e);
+            let simulation_keys_clone = simulation_keys.clone();
+            let random_index = rng.gen_range(0..BATCH_SIZE);
+            async move {
+                println!("Server1: Writing from client {}", i);
+                if let Err(e) = client.async_write(&message, &simulation_keys_clone[random_index]).await {
+                    eprintln!("Error in client write: {:?}", e);
+                }
             }
-        }
+        });
+
+        // Run all write operations in parallel
+        join_all(write_futures).await;
 
         println!("Server1: Batch write to Server1");
 
@@ -83,19 +88,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bincode::deserialize(&response_bytes).unwrap();
         assert!(response.success);
 
-        // Client should be able to get the prf keys
-        let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
-            println!("Server1: Reading from client {}", i);
-            let res = client
-                .async_read(simulation_keys.clone(), client.id.clone(), 0)
-                .await;
-            if let Ok(data) = res {
-                println!("Server1: Client {} read: {:?}", i, data);
-            } else {
-                eprintln!("Error in client read: {:?}", res);
-            }
-        }
+        // // Client should be able to get the prf keys
+        // let mut clients = simulation_clients.iter_mut();
+        // for (i, client) in clients.enumerate() {
+        //     println!("Server1: Reading from client {}", i);
+        //     let res = client
+        //         .async_read(simulation_keys.clone(), client.id.clone(), 0)
+        //         .await;
+        //     if let Ok(data) = res {
+        //         println!("Server1: Client {} read: {:?}", i, data);
+        //     } else {
+        //         eprintln!("Error in client read: {:?}", res);
+        //     }
+        // }
     }
 
     // Initialize logging for the final iteration
