@@ -165,8 +165,16 @@ impl Server2Access for RemoteServer2Access {
 
 impl RemoteServer2Access {
     pub async fn new(base_url: &str) -> Result<Self, OramError> {
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|_| OramError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to create HTTP client",
+            )))?;
+
         Ok(Self {
-            client: reqwest::Client::new(),
+            client,
             base_url: base_url.to_string(),
         })
     }
@@ -216,8 +224,13 @@ pub struct RemoteServer1Access {
 
 impl RemoteServer1Access {
     pub async fn new(server1_addr: &str) -> Result<Self, OramError> {
-
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .map_err(|_| OramError::IoError(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to create HTTP client",
+            )))?;
 
         Ok(Self {
             client,

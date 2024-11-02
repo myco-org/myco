@@ -54,13 +54,13 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
     let s2_addr = args.get(1)
         .map(|s| s.to_string())
-        .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
+        .unwrap_or_else(|| "https://127.0.0.1:3003".to_string());
 
 
     println!("s2_addr: {}", s2_addr);
     let ports = Ports {
-        http: 3001,
-        https: 7878,
+        http: 3002,
+        https: 3001,
     };
 
     // configure certificate and private key used by https
@@ -101,10 +101,13 @@ async fn main() {
         .with_state(state);
 
     // run tcp server
-    let addr = SocketAddr::from(([0, 0, 0, 0], ports.http));
+    let addr = SocketAddr::from(([0, 0, 0, 0], ports.https));
     tracing::debug!("listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = std::net::TcpListener::bind(addr).unwrap();
+    axum_server::from_tcp_rustls(listener, config)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
 
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.

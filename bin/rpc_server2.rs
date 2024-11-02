@@ -66,8 +66,8 @@ async fn main() {
         .init();
 
     let ports = Ports {
-        http: 3002,
-        https: 3001,
+        http: 3004,
+        https: 3003,
     };
 
     // configure certificate and private key used by https
@@ -103,10 +103,13 @@ async fn main() {
         .with_state(state);
 
     // run tcp server
-    let addr = SocketAddr::from(([0, 0, 0, 0], ports.http));
+    let addr = SocketAddr::from(([0, 0, 0, 0], ports.https));
     tracing::debug!("listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    let listener = std::net::TcpListener::bind(addr).unwrap();
+    axum_server::from_tcp_rustls(listener, config)
+        .serve(app.into_make_service())
+        .await
+        .unwrap();
 }
 
 
