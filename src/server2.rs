@@ -4,6 +4,8 @@ use std::{
 };
 
 use bincode::{deserialize, serialize};
+use rand_chacha::ChaCha20Rng;
+use rand::SeedableRng;
 use tokio::stream;
 
 use crate::{
@@ -22,14 +24,23 @@ impl Server2 {
         let mut tree = BinaryTree::new_with_depth(D);
         
         #[cfg(feature = "perf-logging")]
-        tree.fill(Bucket::new_random());
+        let (tree, prf_keys) = {
+            tree.fill(Bucket::new_random());
+            // Initialize DELTA random PRF keys
+            let mut rng = ChaCha20Rng::from_entropy();
+            let prf_keys = (0..DELTA).map(|_| Key::random(&mut rng)).collect();
+            (tree, prf_keys)
+        };
         
         #[cfg(not(feature = "perf-logging"))]
-        tree.fill(Bucket::default());
+        let (tree, prf_keys) = {
+            tree.fill(Bucket::default());
+            (tree, vec![])
+        };
 
         Server2 {
             tree,
-            prf_keys: vec![],
+            prf_keys,
             epoch: 0,
             pathset_indices: vec![],
         }

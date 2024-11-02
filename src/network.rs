@@ -195,6 +195,9 @@ impl RemoteServer2Access {
             endpoint
         };
 
+        let request_bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), request_bytes.len());
+        request_bytes_metric.log();
+
         let response = self
             .client
             .post(&format!("{}/{}", self.base_url, endpoint_path))
@@ -215,9 +218,6 @@ impl RemoteServer2Access {
                 "Failed to get response bytes",
             ))
         })?;
-
-        let bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), bytes.len());
-        bytes_metric.log();
 
         let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
         Ok(response)

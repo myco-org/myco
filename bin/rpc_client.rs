@@ -99,11 +99,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let res = client
                         .async_read(simulation_keys_subset, client.id.clone(), 0, batch_size)
                         .await;
-                    if let Ok(data) = res {
-                        println!("Server1: Client 0 read with batch_size {}: {:?}", batch_size, data);
-                    } else {
-                        eprintln!("Error in client read with batch_size {}: {:?}", batch_size, res);
-                    }
                 }
             }
         }

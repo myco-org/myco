@@ -135,11 +135,22 @@ async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode>
         let mut count = state.batch_write_count.lock().await;
         *count += 1;
         
-        // Initialize logging immediately
+        // Initialize logging only at the start
         if *count == 1 {
             myco_rs::logging::initialize_logging("server1_latency.csv", "server1_bytes.csv");
-        } else if *count == LATENCY_BENCH_COUNT {
+        } 
+        // Calculate averages only once and exit
+        else if *count == LATENCY_BENCH_COUNT {
             myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
+            return bincode::serialize(&BatchWriteResponse { success: true })
+                .map(Bytes::from)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
+        }
+        // Skip logging for requests after LATENCY_BENCH_COUNT
+        else if *count > LATENCY_BENCH_COUNT {
+            return bincode::serialize(&BatchWriteResponse { success: true })
+                .map(Bytes::from)
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
         }
     }
 
