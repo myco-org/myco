@@ -109,6 +109,7 @@ async fn handle_read_paths(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
+    println!("Received request: /read_paths");
     let request: ReadPathsRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -125,6 +126,7 @@ async fn handle_read_paths(
 }
 
 async fn handle_read_paths_client(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    println!("Received request: /read_paths_client");
     let request: ReadPathsClientRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -141,6 +143,7 @@ async fn handle_read_paths_client(State(state): State<AppState>, bytes: Bytes) -
 }
 
 async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+    println!("Received request: /write");
     println!("Server2: Writing to Server2");
     
     // Increment counter and check if we should start logging
@@ -168,6 +171,7 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
 }
 
 async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
+    println!("Received request: /get_prf_keys");
     let keys = state
         .server2
         .read()
