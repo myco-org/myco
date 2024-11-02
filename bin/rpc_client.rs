@@ -1,5 +1,5 @@
 use myco_rs::{
-    client::Client, constants::{BATCH_SIZE, LATENCY_BENCH_COUNT, NUM_CLIENTS, DELTA}, dtypes::Key, logging::calculate_and_append_averages, network::{RemoteServer1Access, RemoteServer2Access}
+    client::Client, constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS}, dtypes::Key, logging::calculate_and_append_averages, network::{RemoteServer1Access, RemoteServer2Access}
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -65,14 +65,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 bincode::deserialize(&response_bytes).unwrap();
             assert!(response.success);
 
-            // Process all clients during warm-up
-            for client in simulation_clients.iter_mut() {
-                let message = vec![1u8; 16];
+            // Process all clients during warm-up in parallel
+            let write_futures = simulation_clients.iter_mut().map(|client| {
+                let message = vec![1u8; MESSAGE_SIZE];
                 let random_index = rng.gen_range(0..BATCH_SIZE);
-                if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
-                    eprintln!("Error in client write: {:?}", e);
+                let value = simulation_keys.clone();
+                async move {
+                    if let Err(e) = client.async_write(&message, &value[random_index]).await {
+                        eprintln!("Error in client write: {:?}", e);
+                    }
                 }
-            }
+            });
+            
+            join_all(write_futures).await;
 
             let response = client
                 .get(format!("{}/batch_write", s1_addr))
