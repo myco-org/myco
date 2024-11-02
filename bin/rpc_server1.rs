@@ -25,6 +25,7 @@ use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use std::{fs, process::Command, path::Path};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -62,16 +63,21 @@ async fn main() {
     };
 
     // configure certificate and private key used by https
-    let config = RustlsConfig::from_pem_file(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("certs")
-            .join("server-cert.pem"),
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("certs")
-            .join("server-key.pem"),
-    )
-    .await
-    .unwrap();
+    let cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("certs")
+        .join("server-cert.pem");
+    let key_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("certs")
+        .join("server-key.pem");
+
+    // Generate certificates if they don't exist
+    if !cert_path.exists() || !key_path.exists() {
+        generate_test_certificates().expect("Failed to generate certificates");
+    }
+
+    let config = RustlsConfig::from_pem_file(cert_path, key_path)
+        .await
+        .unwrap();
 
     // Initialize Server1 with Server2 access using the provided or default address
     let s2_access = Box::new(
@@ -161,4 +167,91 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
     bincode::serialize(&BatchInitResponse { success: true })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
+    // Skip if certificates already exist
+    if !Path::new("certs").exists() {
+        fs::create_dir("certs")?;
+    }
+    if Path::new("certs/server-cert.pem").exists() && Path::new("certs/server-key.pem").exists() {
+        // Clean up old certificates to ensure we have fresh ones
+        fs::remove_file("certs/server-cert.pem")?;
+        fs::remove_file("certs/server-key.pem")?;
+    }
+
+    // Create a config file for OpenSSL
+    fs::write(
+        "openssl.cnf",
+        r#"
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+"#,
+    )?;
+
+    // Generate private key and self-signed certificate using OpenSSL
+    Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:4096",
+            "-keyout",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-cert.pem",
+            "-days",
+            "365",
+            "-nodes",
+            "-config",
+            "openssl.cnf",
+            "-extensions",
+            "v3_req",
+        ])
+        .output()?;
+
+    // Convert the key to PKCS8 format which rustls expects
+    Command::new("openssl")
+        .args([
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-key.pem.tmp",
+        ])
+        .output()?;
+
+    // Replace the original key with the PKCS8 version
+    fs::rename("certs/server-key.pem.tmp", "certs/server-key.pem")?;
+
+    // Clean up the config file
+    fs::remove_file("openssl.cnf")?;
+
+    Ok(())
+}
+
+fn cleanup_servers() {
+    // Kill any existing server processes
+    Command::new("pkill")
+        .args(["-f", "tls_server"])
+        .output()
+        .ok();
+
+    // Give OS time to free up the ports
+    std::thread::sleep(std::time::Duration::from_secs(1));
 }
