@@ -7,7 +7,7 @@ use bincode::{deserialize, serialize};
 use tokio::stream;
 
 use crate::{
-    error::OramError, logging::LatencyMetric, network::{Command, ReadType, WriteType}, tree::BinaryTree, Bucket, Key, Path, D, DELTA
+    error::OramError, logging::LatencyMetric, network::{Command, ReadType, WriteType}, tree::{BinaryTree, TreeValue}, Bucket, Key, Path, D, DELTA
 };
 
 pub struct Server2 {
@@ -20,7 +20,7 @@ pub struct Server2 {
 impl Server2 {
     pub fn new() -> Self {
         let mut tree = BinaryTree::new_with_depth(D);
-        tree.fill(Bucket::default());
+        tree.fill(Bucket::new_random());
 
         Server2 {
             tree,
