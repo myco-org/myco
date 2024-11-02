@@ -49,6 +49,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         {        
             let client = reqwest::Client::builder()
                 .danger_accept_invalid_certs(true)  // Only for development
+                .pool_idle_timeout(Some(std::time::Duration::from_secs(300))) // Keep connections alive
+                .tcp_keepalive(Some(std::time::Duration::from_secs(60)))      // Enable TCP keepalive
                 .build()?;
 
             let request = myco_rs::rpc_types::BatchInitRequest {

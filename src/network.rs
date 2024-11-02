@@ -188,14 +188,13 @@ impl RemoteServer2Access {
         let request_bytes =
             bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
 
-        //if endpoint starts with read_path_client ignore the batch size before passing it into the below
         let endpoint_path = if endpoint.starts_with("read_paths_client") {
             "read_paths_client"
         } else {
             endpoint
         };
 
-        let request_bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), request_bytes.len());
+        let request_bytes_metric = BytesMetric::new(&format!("server2_{}_request", endpoint), request_bytes.len());
         request_bytes_metric.log();
 
         let response = self
@@ -218,6 +217,9 @@ impl RemoteServer2Access {
                 "Failed to get response bytes",
             ))
         })?;
+
+        let response_bytes_metric = BytesMetric::new(&format!("server2_{}_response", endpoint), bytes.len());
+        response_bytes_metric.log();
 
         let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
         Ok(response)
