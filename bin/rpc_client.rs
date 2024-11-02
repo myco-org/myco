@@ -1,8 +1,5 @@
 use myco_rs::{
-    client::Client,
-    constants::{BATCH_SIZE, DELTA, NUM_CLIENTS},
-    dtypes::Key,
-    network::{RemoteServer1Access, RemoteServer2Access},
+    client::Client, constants::{BATCH_SIZE, LATENCY_BENCH_COUNT, NUM_CLIENTS, DELTA}, dtypes::Key, logging::calculate_and_append_averages, network::{RemoteServer1Access, RemoteServer2Access}
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -41,129 +38,116 @@ async fn main() -> Result<(), Box<dyn Error>> {
         simulation_clients.push(client);
     }
 
-    for i in 0..10 {
-        println!("Starting epoch: {}", i);
-        let client = reqwest::Client::new();
-        let request = myco_rs::rpc_types::BatchInitRequest {
-            num_writes: NUM_CLIENTS,
-        };
-        let request_bytes = bincode::serialize(&request).unwrap();
-        let response = client
-            .post(format!("{}/batch_init", s1_addr))
-            .header("Content-Type", "application/octet-stream")
-            .body(request_bytes)
-            .send()
-            .await?;
+    // Run DELTA warm-up iterations before starting measurements
+    println!("\nStarting warm-up phase...");
+    for iteration in 0..DELTA {
+        println!("Warm-up iteration {}/{}", iteration + 1, DELTA);
+        {        
+            let client = reqwest::Client::new();
 
-        // Check that the batch init was successful
-        let response_bytes = response.bytes().await?;
-        let response: myco_rs::rpc_types::BatchInitResponse =
-            bincode::deserialize(&response_bytes).unwrap();
-        assert!(response.success);
+            let request = myco_rs::rpc_types::BatchInitRequest {
+                num_writes: NUM_CLIENTS,
+            };
+            let request_bytes = bincode::serialize(&request).unwrap();
+            
+            let response = client
+                .post(format!("{}/batch_init", s1_addr))
+                .header("Content-Type", "application/octet-stream")
+                .body(request_bytes)
+                .send()
+                .await?;
 
-        let mut clients = simulation_clients.iter_mut();
-        let write_futures = clients.enumerate().map(|(i, client)| {
-            let message = vec![1u8; 16];
-            let simulation_keys_clone = simulation_keys.clone();
-            let random_index = rng.gen_range(0..BATCH_SIZE);
-            async move {
-                println!("Server1: Writing from client {}", i);
-                if let Err(e) = client.async_write(&message, &simulation_keys_clone[random_index]).await {
+            let response_bytes = response.bytes().await?;
+            
+            let response: myco_rs::rpc_types::BatchInitResponse =
+                bincode::deserialize(&response_bytes).unwrap();
+            assert!(response.success);
+
+            // Process all clients during warm-up
+            for client in simulation_clients.iter_mut() {
+                let message = vec![1u8; 16];
+                let random_index = rng.gen_range(0..BATCH_SIZE);
+                if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
                     eprintln!("Error in client write: {:?}", e);
                 }
             }
-        });
 
-        // Run all write operations in parallel
-        join_all(write_futures).await;
-
-        println!("Server1: Batch write to Server1");
-
-        // Batch write to Server1
-        let response = client
-            .get(format!("{}/batch_write", s1_addr))
-            .send()
-            .await?;
-        let response_bytes = response.bytes().await?;
-        let response: myco_rs::rpc_types::BatchWriteResponse =
-            bincode::deserialize(&response_bytes).unwrap();
-        assert!(response.success);
-
-        // // // Client should be able to get the prf keys
-        // let mut clients = simulation_clients.iter_mut();
-        // for (i, client) in clients.enumerate() {
-        //     println!("Server1: Reading from client {}", i);
-        //     let res = client
-        //         .async_read(simulation_keys.clone(), client.id.clone(), 0)
-        //         .await;
-        //     if let Ok(data) = res {
-        //         println!("Server1: Client {} read: {:?}", i, data);
-        //     } else {
-        //         eprintln!("Error in client read: {:?}", res);
-        //     }
-        // }
-    }
-
-    // Initialize logging for the final iteration
-    initialize_logging("final_iteration_latency.csv", "final_iteration_bytes.csv");
-
-    // Run one final iteration with logging enabled
-    {        
-        let client = reqwest::Client::new();
-
-        let request = myco_rs::rpc_types::BatchInitRequest {
-            num_writes: NUM_CLIENTS,
-        };
-        let request_bytes = bincode::serialize(&request).unwrap();
-        
-        let response = client
-            .post(format!("{}/batch_init", s1_addr))
-            .header("Content-Type", "application/octet-stream")
-            .body(request_bytes)
-            .send()
-            .await?;
-
-        let response_bytes = response.bytes().await?;
-        
-        let response: myco_rs::rpc_types::BatchInitResponse =
-            bincode::deserialize(&response_bytes).unwrap();
-        assert!(response.success);
-
-        // Process only the first client
-        if let Some(client) = simulation_clients.first_mut() {
-            let message = vec![1u8; 16];
-            // Choose a random index from 0 to batchsize and write to that client
-            let random_index = rng.gen_range(0..BATCH_SIZE);
-            if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
-                eprintln!("Error in client write: {:?}", e);
-            }
-        }
-
-        let response = client
-            .get(format!("{}/batch_write", s1_addr))
-            .send()
-            .await?;
-        let response_bytes = response.bytes().await?;
-        
-        let response: myco_rs::rpc_types::BatchWriteResponse =
-            bincode::deserialize(&response_bytes).unwrap();
-        assert!(response.success);
-
-        // Process only the first client for reading
-        if let Some(client) = simulation_clients.first_mut() {
-            let simulation_keys_clone = simulation_keys.clone();
-
-            println!("Server1: Reading from client 0");
-            let res = client
-                .async_read(simulation_keys_clone, client.id.clone(), 0)
-                .await;
-            if let Ok(data) = res {
-                println!("Server1: Client 0 read: {:?}", data);
-            } else {
-                eprintln!("Error in client read: {:?}", res);
-            }
+            let response = client
+                .get(format!("{}/batch_write", s1_addr))
+                .send()
+                .await?;
+            let response_bytes = response.bytes().await?;
+            
+            let response: myco_rs::rpc_types::BatchWriteResponse =
+                bincode::deserialize(&response_bytes).unwrap();
+            assert!(response.success);
         }
     }
 
+    // Initialize logging after warm-up
+    initialize_logging("client_latency.csv", "client_bytes.csv");
+
+    // Run the actual experiment
+    println!("\nStarting measurement phase...");
+    for iteration in 0..LATENCY_BENCH_COUNT {
+        println!("\nMeasurement iteration {}/{}", iteration + 1, LATENCY_BENCH_COUNT);
+        
+        {        
+            let client = reqwest::Client::new();
+
+            let request = myco_rs::rpc_types::BatchInitRequest {
+                num_writes: NUM_CLIENTS,
+            };
+            let request_bytes = bincode::serialize(&request).unwrap();
+            
+            let response = client
+                .post(format!("{}/batch_init", s1_addr))
+                .header("Content-Type", "application/octet-stream")
+                .body(request_bytes)
+                .send()
+                .await?;
+
+            let response_bytes = response.bytes().await?;
+            
+            let response: myco_rs::rpc_types::BatchInitResponse =
+                bincode::deserialize(&response_bytes).unwrap();
+            assert!(response.success);
+
+            // Process only the first client
+            if let Some(client) = simulation_clients.first_mut() {
+                let message = vec![1u8; 16];
+                let random_index = rng.gen_range(0..BATCH_SIZE);
+                if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
+                    eprintln!("Error in client write: {:?}", e);
+                }
+            }
+
+            let response = client
+                .get(format!("{}/batch_write", s1_addr))
+                .send()
+                .await?;
+            let response_bytes = response.bytes().await?;
+            
+            let response: myco_rs::rpc_types::BatchWriteResponse =
+                bincode::deserialize(&response_bytes).unwrap();
+            assert!(response.success);
+
+            // Process only the first client for reading
+            if let Some(client) = simulation_clients.first_mut() {
+                let simulation_keys_clone = simulation_keys.clone();
+
+                println!("Server1: Reading from client 0");
+                let res = client
+                    .async_read(simulation_keys_clone, client.id.clone(), 0)
+                    .await;
+                if let Ok(data) = res {
+                    println!("Server1: Client 0 read: {:?}", data);
+                } else {
+                    eprintln!("Error in client read: {:?}", res);
+                }
+            }
+        }
+    }
+    calculate_and_append_averages("client_latency.csv", "client_bytes.csv");
     Ok(())
 }

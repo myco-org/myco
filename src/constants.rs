@@ -7,6 +7,7 @@ pub const Z: usize = 50;
 pub const DB_SIZE: usize = 1 << D;
 pub const BATCH_SIZE: usize = 2;
 
+pub const LATENCY_BENCH_COUNT: usize = 20;
 pub const NONCE_SIZE: usize = 12;
 pub const TAG_SIZE: usize = 16;
 pub const BLOCK_SIZE: usize = INNER_BLOCK_SIZE + NONCE_SIZE + TAG_SIZE;

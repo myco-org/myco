@@ -3,6 +3,9 @@ use std::io::Write;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lazy_static::lazy_static;
+use std::collections::HashMap;
+use std::io::BufReader;
+use std::io::BufRead;
 
 lazy_static! {
     static ref LATENCY_LOG: Mutex<Option<File>> = Mutex::new(None);
@@ -144,5 +147,101 @@ fn log_bytes(message: &str) {
             file.write_all(message.as_bytes()).expect("Failed to write to bytes log");
             file.flush().expect("Failed to flush bytes log");
         }
+    }
+}
+
+pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &str) {
+    #[cfg(feature = "perf-logging")]
+    {
+        // Close the current file handles
+        {
+            let mut latency_guard = LATENCY_LOG.lock().unwrap();
+            let mut bytes_guard = BYTES_LOG.lock().unwrap();
+            *latency_guard = None;
+            *bytes_guard = None;
+        }
+
+        // Process latency file
+        let constants_prefix = format!("B{}_Z{}_D{}_BATCH{}_", 
+            crate::constants::BLOCK_SIZE,
+            crate::constants::Z,
+            crate::constants::D,
+            crate::constants::BATCH_SIZE);
+        
+        let latency_path = format!("logs/{}{}", constants_prefix, latency_filename);
+        let bytes_path = format!("logs/{}{}", constants_prefix, bytes_filename);
+
+        // Calculate averages for latency file
+        let mut latency_sums: HashMap<String, (f64, usize)> = HashMap::new();
+        if let Ok(file) = File::open(&latency_path) {
+            let reader = BufReader::new(file);
+            let mut is_header = true;
+            
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if is_header {
+                        is_header = false;
+                        continue;
+                    }
+                    
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 2 {
+                        let operation = parts[0].to_string();
+                        if let Ok(value) = parts[1].parse::<f64>() {
+                            let entry = latency_sums.entry(operation).or_insert((0.0, 0));
+                            entry.0 += value;
+                            entry.1 += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Append averages to latency file
+        if let Ok(mut file) = OpenOptions::new().append(true).open(&latency_path) {
+            writeln!(file, "\nAVERAGES:").unwrap();
+            for (operation, (sum, count)) in latency_sums {
+                let average = sum / count as f64;
+                writeln!(file, "{},{:.5}", operation, average).unwrap();
+            }
+        }
+
+        // Calculate averages for bytes file
+        let mut bytes_sums: HashMap<String, (usize, usize)> = HashMap::new();
+        if let Ok(file) = File::open(&bytes_path) {
+            let reader = BufReader::new(file);
+            let mut is_header = true;
+            
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    if is_header {
+                        is_header = false;
+                        continue;
+                    }
+                    
+                    let parts: Vec<&str> = line.split(',').collect();
+                    if parts.len() >= 2 {
+                        let operation = parts[0].to_string();
+                        if let Ok(value) = parts[1].parse::<usize>() {
+                            let entry = bytes_sums.entry(operation).or_insert((0, 0));
+                            entry.0 += value;
+                            entry.1 += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Append averages to bytes file
+        if let Ok(mut file) = OpenOptions::new().append(true).open(&bytes_path) {
+            writeln!(file, "\nAVERAGES:").unwrap();
+            for (operation, (sum, count)) in bytes_sums {
+                let average = sum as f64 / count as f64;
+                writeln!(file, "{},{}", operation, average).unwrap();
+            }
+        }
+
+        // Reinitialize the log files with the same filenames
+        initialize_logging(latency_filename, bytes_filename);
     }
 }

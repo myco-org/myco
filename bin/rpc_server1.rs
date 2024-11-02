@@ -16,7 +16,7 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use myco_rs::{generate_test_certificates, rpc_types::{
+use myco_rs::{constants::{LATENCY_BENCH_COUNT, DELTA}, generate_test_certificates, rpc_types::{
     BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest, QueueWriteResponse,
 }};
 use myco_rs::{dtypes::Key, network::RemoteServer2Access, server1::Server1};
@@ -38,6 +38,7 @@ struct Ports {
 struct AppState {
     server1: Arc<Mutex<Server1>>,
     batch_write_count: Arc<Mutex<usize>>,
+    is_warmup: Arc<Mutex<bool>>,
 }
 
 #[tokio::main]
@@ -89,6 +90,7 @@ async fn main() {
     let state = AppState {
         server1: Arc::new(Mutex::new(server1)),
         batch_write_count: Arc::new(Mutex::new(0)),
+        is_warmup: Arc::new(Mutex::new(true)),
     };
 
     let app = Router::new()
@@ -127,16 +129,20 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /batch_write");
-    // Increment counter and check if we should start logging
+    
     {
         let mut count = state.batch_write_count.lock().await;
         *count += 1;
         
-        if *count == 10 {
-            myco_rs::logging::initialize_logging(
-                "server1_latency.csv",
-                "server1_bytes.csv"
-            );
+        // Check if we're transitioning from warmup to measurement phase
+        if *count == DELTA {
+            let mut is_warmup = state.is_warmup.lock().await;
+            *is_warmup = false;
+            *count = 0;  // Reset counter for measurement phase
+            // Initialize logging after warmup
+            myco_rs::logging::initialize_logging("server1_latency.csv", "server1_bytes.csv");
+        } else if !*state.is_warmup.lock().await && *count == LATENCY_BENCH_COUNT {
+            myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
         }
     }
 

@@ -16,6 +16,7 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use myco_rs::constants::LATENCY_BENCH_COUNT;
 use myco_rs::generate_test_certificates;
 use myco_rs::rpc_types::ReadPathsClientRequest;
 use myco_rs::{
@@ -38,6 +39,7 @@ use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use std::{fs, process::Command, path::Path as StdPath};
+use myco_rs::constants::DELTA;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -50,6 +52,7 @@ struct Ports {
 struct AppState {
     server2: Arc<RwLock<Server2>>,
     write_count: Arc<Mutex<usize>>,
+    is_warmup: Arc<Mutex<bool>>,
 }
 
 #[tokio::main]
@@ -88,7 +91,9 @@ async fn main() {
     let state = AppState {
         server2: Arc::new(RwLock::new(server2)),
         write_count: Arc::new(Mutex::new(0)),
+        is_warmup: Arc::new(Mutex::new(true)),
     };
+
     let app = Router::new()
         .route("/read_paths", post(handle_read_paths))
         .route("/read_paths_client", post(handle_read_paths_client))
@@ -146,16 +151,19 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
     println!("Received request: /write");
     println!("Server2: Writing to Server2");
     
-    // Increment counter and check if we should start logging
     {
         let mut count = state.write_count.lock().unwrap();
         *count += 1;
         
-        if *count == 10 {
-            myco_rs::logging::initialize_logging(
-                "server2_latency.csv",
-                "server2_bytes.csv"
-            );
+        // Check if we're transitioning from warmup to measurement phase
+        if *count == DELTA {
+            let mut is_warmup = state.is_warmup.lock().unwrap();
+            *is_warmup = false;
+            *count = 0;  // Reset counter for measurement phase
+            // Initialize logging after warmup
+            myco_rs::logging::initialize_logging("server2_latency.csv", "server2_bytes.csv");
+        } else if !*state.is_warmup.lock().unwrap() && *count == LATENCY_BENCH_COUNT {
+            myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
         }
     }
 

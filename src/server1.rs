@@ -344,7 +344,6 @@ impl Server1 {
                         let fake_decrypt_count = Z - real_decrypt_count;
                         for _ in 0..fake_decrypt_count {
                         // Fake decryption
-                        println!("Fake decryption");
                             let _ = decrypt(&[0u8; 32], &[0u8; BLOCK_SIZE]).unwrap_or_default();
                         }
                     }
