@@ -1,5 +1,5 @@
 pub const DELTA: usize = 1000;
-pub const D: usize = 21;
+pub const D: usize = 22;
 pub const LAMBDA: usize = 128;
 pub const NUM_CLIENTS: usize = DB_SIZE / DELTA;
 pub const NU: usize = 1;
