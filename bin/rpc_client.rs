@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         simulation_clients.push(client);
     }
 
-    for i in 0..DELTA {
+    for i in 0..10 {
         println!("Starting epoch: {}", i);
         let client = reqwest::Client::new();
         let request = myco_rs::rpc_types::BatchInitRequest {
