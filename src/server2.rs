@@ -20,7 +20,12 @@ pub struct Server2 {
 impl Server2 {
     pub fn new() -> Self {
         let mut tree = BinaryTree::new_with_depth(D);
+        
+        #[cfg(feature = "perf-logging")]
         tree.fill(Bucket::new_random());
+        
+        #[cfg(not(feature = "perf-logging"))]
+        tree.fill(Bucket::default());
 
         Server2 {
             tree,

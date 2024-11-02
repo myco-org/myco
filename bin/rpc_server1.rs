@@ -38,7 +38,6 @@ struct Ports {
 struct AppState {
     server1: Arc<Mutex<Server1>>,
     batch_write_count: Arc<Mutex<usize>>,
-    is_warmup: Arc<Mutex<bool>>,
 }
 
 #[tokio::main]
@@ -90,7 +89,6 @@ async fn main() {
     let state = AppState {
         server1: Arc::new(Mutex::new(server1)),
         batch_write_count: Arc::new(Mutex::new(0)),
-        is_warmup: Arc::new(Mutex::new(true)),
     };
 
     let app = Router::new()
@@ -137,14 +135,10 @@ async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode>
         let mut count = state.batch_write_count.lock().await;
         *count += 1;
         
-        // Check if we're transitioning from warmup to measurement phase
-        if *count == DELTA {
-            let mut is_warmup = state.is_warmup.lock().await;
-            *is_warmup = false;
-            *count = 0;  // Reset counter for measurement phase
-            // Initialize logging after warmup
+        // Initialize logging immediately
+        if *count == 1 {
             myco_rs::logging::initialize_logging("server1_latency.csv", "server1_bytes.csv");
-        } else if !*state.is_warmup.lock().await && *count == LATENCY_BENCH_COUNT {
+        } else if *count == LATENCY_BENCH_COUNT {
             myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
         }
     }

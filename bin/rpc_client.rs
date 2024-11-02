@@ -21,8 +21,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = ChaCha20Rng::from_entropy();
 
     // Generate BATCH_SIZE different random keys
-    let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
-    for _ in 0..BATCH_SIZE {
+    let mut simulation_keys = Vec::with_capacity(128);
+    for _ in 0..128 {
         simulation_keys.push(Key::random(&mut rng));
     }
     // Initialize a bunch of clients.
@@ -38,63 +38,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         simulation_clients.push(client);
     }
 
-    // Run DELTA warm-up iterations before starting measurements
-    println!("\nStarting warm-up phase...");
-    for iteration in 0..DELTA {
-        println!("Warm-up iteration {}/{}", iteration + 1, DELTA);
-        {        
-            let client = reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)  // Only for development
-                .build()?;
-
-            let request = myco_rs::rpc_types::BatchInitRequest {
-                num_writes: NUM_CLIENTS,
-            };
-            let request_bytes = bincode::serialize(&request).unwrap();
-            
-            let response = client
-                .post(format!("{}/batch_init", s1_addr))
-                .header("Content-Type", "application/octet-stream")
-                .body(request_bytes)
-                .send()
-                .await?;
-
-            let response_bytes = response.bytes().await?;
-            
-            let response: myco_rs::rpc_types::BatchInitResponse =
-                bincode::deserialize(&response_bytes).unwrap();
-            assert!(response.success);
-
-            // Process all clients during warm-up in parallel
-            let write_futures = simulation_clients.iter_mut().map(|client| {
-                let message = vec![1u8; MESSAGE_SIZE];
-                let random_index = rng.gen_range(0..BATCH_SIZE);
-                let value = simulation_keys.clone();
-                async move {
-                    if let Err(e) = client.async_write(&message, &value[random_index]).await {
-                        eprintln!("Error in client write: {:?}", e);
-                    }
-                }
-            });
-            
-            join_all(write_futures).await;
-
-            let response = client
-                .get(format!("{}/batch_write", s1_addr))
-                .send()
-                .await?;
-            let response_bytes = response.bytes().await?;
-            
-            let response: myco_rs::rpc_types::BatchWriteResponse =
-                bincode::deserialize(&response_bytes).unwrap();
-            assert!(response.success);
-        }
-    }
-
-    // Initialize logging after warm-up
+    // Initialize logging immediately
     initialize_logging("client_latency.csv", "client_bytes.csv");
 
-    // Run the actual experiment
+    // Run the measurement iterations directly
     println!("\nStarting measurement phase...");
     for iteration in 0..LATENCY_BENCH_COUNT {
         println!("\nMeasurement iteration {}/{}", iteration + 1, LATENCY_BENCH_COUNT);
@@ -125,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Process only the first client
             if let Some(client) = simulation_clients.first_mut() {
                 let message = vec![1u8; 16];
-                let random_index = rng.gen_range(0..BATCH_SIZE);
+                let random_index = rng.gen_range(0..128);
                 if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
                     eprintln!("Error in client write: {:?}", e);
                 }
@@ -143,16 +90,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             // Process only the first client for reading
             if let Some(client) = simulation_clients.first_mut() {
-                let simulation_keys_clone = simulation_keys.clone();
-
-                println!("Server1: Reading from client 0");
-                let res = client
-                    .async_read(simulation_keys_clone, client.id.clone(), 0)
-                    .await;
-                if let Ok(data) = res {
-                    println!("Server1: Client 0 read: {:?}", data);
-                } else {
-                    eprintln!("Error in client read: {:?}", res);
+                let batch_sizes = vec![1, 16, 64, 128];
+                
+                for batch_size in batch_sizes {
+                    let simulation_keys_subset = simulation_keys[0..batch_size].to_vec();
+                    
+                    println!("Server1: Reading from client 0 with batch_size {}", batch_size);
+                    let res = client
+                        .async_read(simulation_keys_subset, client.id.clone(), 0, batch_size)
+                        .await;
+                    if let Ok(data) = res {
+                        println!("Server1: Client 0 read with batch_size {}: {:?}", batch_size, data);
+                    } else {
+                        eprintln!("Error in client read with batch_size {}: {:?}", batch_size, res);
+                    }
                 }
             }
         }

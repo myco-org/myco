@@ -21,6 +21,7 @@ use crate::logging::BytesMetric;
 use crate::rpc_types::{
     GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse
 };
+use crate::BATCH_SIZE;
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -64,7 +65,7 @@ pub(crate) trait Network {
 #[async_trait]
 pub trait Server2Access: Send + Sync {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
-    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
+    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>>;
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
@@ -85,11 +86,11 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
-    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
+    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>> {
         self.server
             .lock()
             .unwrap()
-            .read_paths(indices)
+            .read_paths_client(indices)
             .map_err(|e| e.into())
     }
 
@@ -123,9 +124,9 @@ impl Server2Access for RemoteServer2Access {
         Ok(response.buckets)
     }
 
-    async fn read_paths_client(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
+    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>> {
         let request = ReadPathsClientRequest { indices };
-        let response: ReadPathsResponse = self.post_bincode("read_paths_client", &request).await?;
+        let response: ReadPathsResponse = self.post_bincode(&format!("read_paths_client_{}", batch_size), &request).await?;
         Ok(response.buckets)
     }
 
@@ -187,13 +188,16 @@ impl RemoteServer2Access {
         let request_bytes =
             bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
 
-        
-        let request_bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), request_bytes.len());
-        request_bytes_metric.log();
+        //if endpoint starts with read_path_client ignore the batch size before passing it into the below
+        let endpoint_path = if endpoint.starts_with("read_paths_client") {
+            "read_paths_client"
+        } else {
+            endpoint
+        };
 
         let response = self
             .client
-            .post(&format!("{}/{}", self.base_url, endpoint))
+            .post(&format!("{}/{}", self.base_url, endpoint_path))
             .header("Content-Type", "application/octet-stream")
             .body(request_bytes)
             .send()
@@ -212,7 +216,11 @@ impl RemoteServer2Access {
             ))
         })?;
 
-        bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)
+        let bytes_metric = BytesMetric::new(&format!("server2_{}", endpoint), bytes.len());
+        bytes_metric.log();
+
+        let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
+        Ok(response)
     }
 }
 

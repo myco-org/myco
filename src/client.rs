@@ -81,20 +81,21 @@ impl Client {
         &self,
         keys: Vec<Key>,
         cs: String,
-        epoch_past: usize
+        epoch_past: usize,
+        batch_size: usize
     ) -> Result<Vec<Vec<u8>>, OramError> {
-        if keys.len() != BATCH_SIZE {
+        if keys.len() != batch_size {
             return Err(OramError::InvalidBatchSize);
         }
 
-        let end_to_end_latency = LatencyMetric::new("client_read_end_to_end");
-        let mut local_latency = LatencyMetric::new("client_read_local");
+        let end_to_end_latency = LatencyMetric::new(&format!("client_read_end_to_end_{}", batch_size));
+        let mut local_latency = LatencyMetric::new(&format!("client_read_local_{}", batch_size));
         let epoch = self.epoch - 1 - epoch_past;
         let cs: Vec<u8> = cs.into_bytes();
 
         // Get PRF keys from server2
         local_latency.pause();
-        let get_prf_keys_latency = LatencyMetric::new("client_read_get_prf_keys");
+        let get_prf_keys_latency = LatencyMetric::new(&format!("client_read_get_prf_keys_{}", batch_size));
         let server_keys = self
             .s2
             .get_prf_keys()
@@ -110,8 +111,8 @@ impl Client {
         let k_s1_t = server_keys.get(server_keys.len() - 1 - epoch_past).unwrap();
         
         // Calculate paths for all keys
-        let mut paths = Vec::with_capacity(BATCH_SIZE);
-        let mut key_data = Vec::with_capacity(BATCH_SIZE);
+        let mut paths = Vec::with_capacity(batch_size);
+        let mut key_data = Vec::with_capacity(batch_size);
 
         for k in keys {
             let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
@@ -126,11 +127,10 @@ impl Client {
 
         // Get path indices and read paths
         let indices = get_path_indices(paths.clone());
-        println!("Client: Read paths: {:?}", indices);
 
         local_latency.pause();
-        let read_latency = LatencyMetric::new("client_read_read_paths");
-        let buckets = self.s2.read_paths_client(indices.clone())
+        let read_latency = LatencyMetric::new(&format!("client_read_read_paths_{}", batch_size));
+        let buckets = self.s2.read_paths_client(indices.clone(), batch_size)
             .await
             .map_err(|_| OramError::NoMessageFound)?;
         read_latency.finish();
@@ -198,7 +198,7 @@ impl Client {
         let l_path = Path::from(l);
 
         let indices = get_path_indices(vec![l_path]);
-        let path = futures::executor::block_on(self.s2.read_paths_client(indices))
+        let path = futures::executor::block_on(self.s2.read_paths_client(indices, BATCH_SIZE))
             .map_err(|_| OramError::NoMessageFound)?;
 
         for bucket in path {
@@ -225,6 +225,6 @@ impl Client {
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
 
         let indices = get_path_indices(vec![Path::from(l)]);
-        futures::executor::block_on(self.s2.read_paths_client(indices)).unwrap()
+        futures::executor::block_on(self.s2.read_paths_client(indices, BATCH_SIZE)).unwrap()
     }
 }
