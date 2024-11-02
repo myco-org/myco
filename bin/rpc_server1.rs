@@ -95,7 +95,7 @@ async fn main() {
         .route("/queue_write", post(queue_write))
         .route("/batch_write", get(batch_write))
         .route("/batch_init", post(batch_init))
-        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 64))) // Set the max request body size.
+        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))) // Set the max request body size.
         .with_state(state);
 
     // run tcp server

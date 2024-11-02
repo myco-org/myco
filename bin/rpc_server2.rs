@@ -97,7 +97,7 @@ async fn main() {
         .route("/read_paths_client", post(handle_read_paths_client))
         .route("/write", post(handle_write))
         .route("/get_prf_keys", get(handle_get_prf_keys))
-        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 256))) // Set the max request body size.
+        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024))) // Set the max request body size.
         .with_state(state);
 
     // run tcp server
