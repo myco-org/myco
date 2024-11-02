@@ -132,7 +132,7 @@ async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode>
         let mut count = state.batch_write_count.lock().await;
         *count += 1;
         
-        if *count == myco_rs::constants::DELTA {
+        if *count == 10 {
             myco_rs::logging::initialize_logging(
                 "server1_latency.csv",
                 "server1_bytes.csv"

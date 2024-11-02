@@ -53,11 +53,12 @@ impl LatencyMetric {
                 self.accumulated_duration + self.start_time.elapsed()
             };
 
+            let milliseconds = final_duration.as_secs_f64() * 1000.0;
+
             log_latency(&format!(
-                "{},{},{}\n",
+                "{},{:.5}\n",
                 self.operation,
-                final_duration.as_micros(),
-                final_duration.as_millis(),
+                milliseconds,
             ));
         }
     }

@@ -129,8 +129,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bincode::deserialize(&response_bytes).unwrap();
         assert!(response.success);
 
-        let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
+        // Process only the first client
+        if let Some(client) = simulation_clients.first_mut() {
             let message = vec![1u8; 16];
             // Choose a random index from 0 to batchsize and write to that client
             let random_index = rng.gen_range(0..BATCH_SIZE);
@@ -149,17 +149,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             bincode::deserialize(&response_bytes).unwrap();
         assert!(response.success);
 
-        let mut clients = simulation_clients.iter_mut();
-        for (i, client) in clients.enumerate() {
+        // Process only the first client for reading
+        if let Some(client) = simulation_clients.first_mut() {
             let simulation_keys_clone = simulation_keys.clone();
 
-            println!("Server1: Reading from client {}", i);
-            // Generate BATCH_SIZE different random keys
+            println!("Server1: Reading from client 0");
             let res = client
                 .async_read(simulation_keys_clone, client.id.clone(), 0)
                 .await;
             if let Ok(data) = res {
-                println!("Server1: Client {} read: {:?}", i, data);
+                println!("Server1: Client 0 read: {:?}", data);
             } else {
                 eprintln!("Error in client read: {:?}", res);
             }
