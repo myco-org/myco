@@ -51,17 +51,15 @@ async fn main() {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    let http_port = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(3001);
-    let https_port = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(7878);
-    let s2_addr = args.get(3)
+    let s2_addr = args.get(1)
         .map(|s| s.to_string())
         .unwrap_or_else(|| "http://127.0.0.1:3002".to_string());
 
 
     println!("s2_addr: {}", s2_addr);
     let ports = Ports {
-        http: http_port,
-        https: https_port,
+        http: 3001,
+        https: 7878,
     };
 
     // configure certificate and private key used by https
