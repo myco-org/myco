@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         simulation_clients.push(client);
     }
 
-    for i in 0..DELTA {
+    for i in 0..1000 {
         println!("Starting epoch: {}", i);
         let client = reqwest::Client::new();
         let request = myco_rs::rpc_types::BatchInitRequest {
@@ -90,18 +90,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         assert!(response.success);
 
         // // Client should be able to get the prf keys
-        // let mut clients = simulation_clients.iter_mut();
-        // for (i, client) in clients.enumerate() {
-        //     println!("Server1: Reading from client {}", i);
-        //     let res = client
-        //         .async_read(simulation_keys.clone(), client.id.clone(), 0)
-        //         .await;
-        //     if let Ok(data) = res {
-        //         println!("Server1: Client {} read: {:?}", i, data);
-        //     } else {
-        //         eprintln!("Error in client read: {:?}", res);
-        //     }
-        // }
+        let mut clients = simulation_clients.iter_mut();
+        for (i, client) in clients.enumerate() {
+            println!("Server1: Reading from client {}", i);
+            let res = client
+                .async_read(simulation_keys.clone(), client.id.clone(), 0)
+                .await;
+            if let Ok(data) = res {
+                println!("Server1: Client {} read: {:?}", i, data);
+            } else {
+                eprintln!("Error in client read: {:?}", res);
+            }
+        }
     }
 
     // Initialize logging for the final iteration
@@ -110,6 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run one final iteration with logging enabled
     {        
         let client = reqwest::Client::new();
+
         let request = myco_rs::rpc_types::BatchInitRequest {
             num_writes: NUM_CLIENTS,
         };
@@ -150,14 +151,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         let mut clients = simulation_clients.iter_mut();
         for (i, client) in clients.enumerate() {
+            let simulation_keys_clone = simulation_keys.clone();
+
             println!("Server1: Reading from client {}", i);
             // Generate BATCH_SIZE different random keys
-            let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
-            for _ in 0..BATCH_SIZE {
-                simulation_keys.push(Key::random(&mut rng));
-            }
             let res = client
-                .async_read(simulation_keys, client.id.clone(), 0)
+                .async_read(simulation_keys_clone, client.id.clone(), 0)
                 .await;
             if let Ok(data) = res {
                 println!("Server1: Client {} read: {:?}", i, data);
