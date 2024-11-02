@@ -42,6 +42,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     for i in 0..DELTA {
+        println!("Starting epoch: {}", i);
         let client = reqwest::Client::new();
         let request = myco_rs::rpc_types::BatchInitRequest {
             num_writes: NUM_CLIENTS,

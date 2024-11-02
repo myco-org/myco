@@ -171,14 +171,3 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
-
-fn cleanup_servers() {
-    // Kill any existing server processes
-    Command::new("pkill")
-        .args(["-f", "tls_server"])
-        .output()
-        .ok();
-
-    // Give OS time to free up the ports
-    std::thread::sleep(std::time::Duration::from_secs(1));
-}
