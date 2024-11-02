@@ -25,17 +25,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for _ in 0..128 {
         simulation_keys.push(Key::random(&mut rng));
     }
-    // Initialize a bunch of clients.
-    let mut simulation_clients = Vec::new();
-    for i in 0..NUM_CLIENTS {
-        let client_name = format!("SimClient_{}", i);
-        let s1_access = Box::new(RemoteServer1Access::new(s1_addr).await?);
-        let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await?);
-        let mut client = Client::new(client_name, s1_access, s2_access);
-        for key in simulation_keys.iter() {
-            client.setup(key)?;
-        }
-        simulation_clients.push(client);
+
+    // Initialize a single client instead of multiple
+    let client_name = "SimClient_0".to_string();
+    let s1_access = Box::new(RemoteServer1Access::new(s1_addr).await?);
+    let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await?);
+    let mut simulation_client = Client::new(client_name, s1_access, s2_access);
+    for key in simulation_keys.iter() {
+        simulation_client.setup(key)?;
     }
 
     // Initialize logging immediately
@@ -71,13 +68,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 bincode::deserialize(&response_bytes).unwrap();
             assert!(response.success);
 
-            // Process only the first client
-            if let Some(client) = simulation_clients.first_mut() {
-                let message = vec![1u8; 16];
-                let random_index = rng.gen_range(0..128);
-                if let Err(e) = client.async_write(&message, &simulation_keys[random_index]).await {
-                    eprintln!("Error in client write: {:?}", e);
-                }
+            // Process the single client
+            let message = vec![1u8; 16];
+            let random_index = rng.gen_range(0..128);
+            if let Err(e) = simulation_client.async_write(&message, &simulation_keys[random_index]).await {
+                eprintln!("Error in client write: {:?}", e);
             }
 
             let response = client
@@ -90,18 +85,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 bincode::deserialize(&response_bytes).unwrap();
             assert!(response.success);
 
-            // Process only the first client for reading
-            if let Some(client) = simulation_clients.first_mut() {
-                let batch_sizes = vec![1, 16, 64, 128];
+            // Process the single client for reading
+            let batch_sizes = vec![1, 16, 64, 128];
+            
+            for batch_size in batch_sizes {
+                let simulation_keys_subset = simulation_keys[0..batch_size].to_vec();
                 
-                for batch_size in batch_sizes {
-                    let simulation_keys_subset = simulation_keys[0..batch_size].to_vec();
-                    
-                    println!("Server1: Reading from client 0 with batch_size {}", batch_size);
-                    let res = client
-                        .async_read(simulation_keys_subset, client.id.clone(), 0, batch_size)
-                        .await;
-                }
+                println!("Server1: Reading from client 0 with batch_size {}", batch_size);
+                let res = simulation_client
+                    .async_read(simulation_keys_subset, simulation_client.id.clone(), 0, batch_size)
+                    .await;
             }
         }
     }
