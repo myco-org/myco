@@ -104,6 +104,7 @@ async fn main() {
         .route("/store_path_indices", post(handle_store_path_indices))
         .route("/finalize_epoch", post(handle_finalize_epoch))
         .route("/get_prf_keys", get(handle_get_prf_keys))
+        .route("/finalize_benchmark", post(handle_finalize_benchmark))
         .layer(
             ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(
                 1024 * 1024 * 1024 * 1024,
@@ -171,10 +172,6 @@ async fn handle_chunk_read_paths(
     {
         let mut count = state.write_count.lock().unwrap();
         *count += 1;
-        // Initialize logging on first chunk read
-        if *count == 1 {
-            myco_rs::logging::initialize_logging("server2_latency.csv", "server2_bytes.csv");
-        }
     }
 
     let request: ChunkReadPathsRequest =
@@ -281,17 +278,7 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
 
 async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /get_prf_keys");
-    {
-        let mut count = state.write_count.lock().unwrap();
-        *count += 1;
-        if *count == LATENCY_BENCH_COUNT {
-            myco_rs::logging::calculate_and_append_averages(
-                "server2_latency.csv",
-                "server2_bytes.csv",
-            );
-        }
-    }
-
+    
     let keys = state
         .server2
         .read()
@@ -302,4 +289,13 @@ async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, Sta
     bincode::serialize(&GetPrfKeysResponse { keys })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
+    println!("Received request: /finalize_benchmark");
+    myco_rs::logging::calculate_and_append_averages(
+        "server2_latency.csv",
+        "server2_bytes.csv",
+    );
+    Ok(Bytes::from("Benchmark finalized"))
 }

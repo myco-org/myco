@@ -95,6 +95,7 @@ async fn main() {
         .route("/queue_write", post(queue_write))
         .route("/batch_write", get(batch_write))
         .route("/batch_init", post(batch_init))
+        .route("/finalize_benchmark", post(handle_finalize_benchmark))
         .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024 * 1024))) // Set the max request body size.
         .with_state(state);
 
@@ -131,29 +132,6 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /batch_write");
     
-    {
-        let mut count = state.batch_write_count.lock().await;
-        *count += 1;
-        
-        // Initialize logging only at the start
-        if *count == 1 {
-            myco_rs::logging::initialize_logging("server1_latency.csv", "server1_bytes.csv");
-        } 
-        // Calculate averages only once and exit
-        else if *count == LATENCY_BENCH_COUNT {
-            myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
-            return bincode::serialize(&BatchWriteResponse { success: true })
-                .map(Bytes::from)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
-        }
-        // Skip logging for requests after LATENCY_BENCH_COUNT
-        else if *count > LATENCY_BENCH_COUNT {
-            return bincode::serialize(&BatchWriteResponse { success: true })
-                .map(Bytes::from)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);
-        }
-    }
-
     state
         .server1
         .lock()
@@ -184,4 +162,14 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
     bincode::serialize(&BatchInitResponse { success: true })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+// Add this new endpoint handler
+async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
+    println!("Received request: /finalize_benchmark");
+    myco_rs::logging::calculate_and_append_averages(
+        "server1_latency.csv",
+        "server1_bytes.csv",
+    );
+    Ok(Bytes::from("Benchmark finalized"))
 }

@@ -134,6 +134,14 @@ impl Server2Access for RemoteServer2Access {
         let store_request = StorePathIndicesRequest {
             pathset: indices.clone(),
         };
+
+        #[cfg(feature = "bytes-logging")]
+        {
+            let store_request_bytes = bincode::serialize(&store_request)
+                .map_err(|_| OramError::SerializationFailed)?;
+            BytesMetric::new("batch_init_store_path_indices", store_request_bytes.len()).log();
+        }
+
         self.post_bincode::<_, StorePathIndicesResponse>("store_path_indices", store_request)
             .await?;
 
@@ -150,6 +158,14 @@ impl Server2Access for RemoteServer2Access {
             all_buckets.extend(chunk_response.buckets);
         }
 
+        #[cfg(feature = "bytes-logging")]
+        {
+            let total_response_bytes = bincode::serialize(&all_buckets)
+                .map_err(|_| OramError::SerializationFailed)?
+                .len();
+            BytesMetric::new("batch_init_read_paths_response", total_response_bytes).log();
+        }
+
         Ok(all_buckets)
     }
 
@@ -158,6 +174,13 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
+        #[cfg(feature = "bytes-logging")]
+        {
+            let indices_bytes = bincode::serialize(&indices)
+                .map_err(|_| OramError::SerializationFailed)?;
+            BytesMetric::new(&format!("client_read_paths_request_{}", batch_size), indices_bytes.len()).log();
+        }
+        
         // Then read in chunks.
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
         let futures = (0..chunks.len()).map(|chunk_idx| {
@@ -165,6 +188,7 @@ impl Server2Access for RemoteServer2Access {
                 indices: indices.clone(),
                 chunk_idx,
             };
+            
             self.post_bincode::<_, ChunkReadPathsClientResponse>("chunk_read_paths_client", request)
         });
 
@@ -174,10 +198,33 @@ impl Server2Access for RemoteServer2Access {
             all_buckets.extend(chunk_response.buckets);
         }
 
+        #[cfg(feature = "bytes-logging")]
+        {
+            let total_response_bytes = bincode::serialize(&all_buckets)
+                .map_err(|_| OramError::SerializationFailed)?
+                .len();
+            BytesMetric::new(&format!("client_read_paths_response_{}", batch_size), total_response_bytes).log();
+        }
+
         Ok(all_buckets)
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
+        // Measure total request size before chunking
+
+        #[cfg(feature = "bytes-logging")]
+        {
+            let total_request = ChunkWriteRequest {
+                buckets: buckets.clone(),
+            prf_key: prf_key.clone(),
+                chunk_idx: 0,
+            };
+            let total_bytes = bincode::serialize(&total_request)
+                .map_err(|_| OramError::SerializationFailed)?
+                .len();
+            BytesMetric::new("batch_write", total_bytes).log();
+        }
+
         // Set the maximum request size to 10MB, and determine the number of buckets per batch based on this.
         let batches: Vec<_> = buckets.chunks(NUM_BUCKETS_PER_BATCH_WRITE_CHUNK).collect();
         let futures = batches.into_iter().enumerate().map(|(chunk_idx, batch)| {
@@ -253,27 +300,12 @@ impl RemoteServer2Access {
         endpoint: &str,
         payload: T,
     ) -> Result<R, OramError> {
-        let serialization_latency =
-            LatencyMetric::new(&format!("serialization_latency_{}", endpoint));
         let request_bytes =
             bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
-        serialization_latency.finish();
-
-        let endpoint_path = if endpoint.starts_with("read_paths_client") {
-            "read_paths_client"
-        } else {
-            endpoint
-        };
-
-        let request_bytes_metric = BytesMetric::new(
-            &format!("server2_{}_request", endpoint),
-            request_bytes.len(),
-        );
-        request_bytes_metric.log();
 
         let response = self
             .client
-            .post(&format!("{}/{}", self.base_url, endpoint_path))
+            .post(&format!("{}/{}", self.base_url, endpoint))
             .header("Content-Type", "application/octet-stream")
             .body(request_bytes)
             .send()
@@ -292,15 +324,7 @@ impl RemoteServer2Access {
             ))
         })?;
 
-        let response_bytes_metric =
-            BytesMetric::new(&format!("server2_{}_response", endpoint), bytes.len());
-        response_bytes_metric.log();
-
-        let deserialization_latency =
-            LatencyMetric::new(&format!("deserialization_latency_{}", endpoint));
-        let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
-        deserialization_latency.finish();
-        Ok(response)
+        Ok(bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?)
     }
 }
 

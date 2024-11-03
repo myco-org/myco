@@ -1,6 +1,6 @@
 use crate::client::Client;
 use crate::get_path_indices;
-use crate::logging::{initialize_logging, BytesMetric, LatencyMetric};
+use crate::logging::{BytesMetric, LatencyMetric};
 use crate::network::{
     Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access,
 };

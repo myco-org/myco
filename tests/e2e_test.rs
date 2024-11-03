@@ -21,7 +21,6 @@ mod e2e_tests {
         encrypt,
         error::OramError,
         kdf,
-        logging::initialize_logging,
         network::{LocalServer1Access, LocalServer2Access},
         prf,
         server1::Server1,

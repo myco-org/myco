@@ -134,13 +134,16 @@ impl Server2 {
 
     /// Read a chunk of buckets from the server.
     pub fn read_pathset_chunk(&self, chunk_idx: usize) -> Result<Vec<Bucket>, OramError> {
+        let read_paths_latency: LatencyMetric = LatencyMetric::new("server2_read_paths");
         let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let correct_end_idx = min(end_idx, self.pathset_indices.len());
-        Ok(self.pathset_indices[start_idx..correct_end_idx]
+        let buckets = self.pathset_indices[start_idx..correct_end_idx]
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
-            .collect())
+            .collect();
+        read_paths_latency.finish();
+        Ok(buckets)
     }
 
     /// Read a chunk of buckets from the server for a client request.
@@ -149,13 +152,16 @@ impl Server2 {
         chunk_idx: usize,
         indices: Vec<usize>,
     ) -> Result<Vec<Bucket>, OramError> {
+        let read_paths_latency: LatencyMetric = LatencyMetric::new("server2_read_paths_client");
         let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let correct_end_idx = min(end_idx, indices.len());
-        Ok(indices[start_idx..correct_end_idx]
+        let buckets = indices[start_idx..correct_end_idx]
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
-            .collect())
+            .collect();
+        read_paths_latency.finish();
+        Ok(buckets)
     }
 
     /// This is S2's pathset indices. When we read the paths from the pathset, we also update the pathset indices here.

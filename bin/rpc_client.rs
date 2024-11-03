@@ -5,7 +5,6 @@ use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::error::Error;
 use tokio::{self};
-use myco_rs::logging::{initialize_logging};
 use futures::future::join_all;
 
 
@@ -34,9 +33,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for key in simulation_keys.iter() {
         simulation_client.setup(key)?;
     }
-
-    // Initialize logging immediately
-    initialize_logging("client_latency.csv", "client_bytes.csv");
 
     // Run the measurement iterations directly
     println!("\nStarting measurement phase...");
@@ -99,6 +95,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    // Add this section at the end of main, before calculate_and_append_averages
+    let client = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()?;
+
+    // Finalize Server1 benchmark
+    let response = client
+        .post(format!("{}/finalize_benchmark", s1_addr))
+        .send()
+        .await?;
+    assert!(response.status().is_success());
+
+    // Finalize Server2 benchmark
+    let response = client
+        .post(format!("{}/finalize_benchmark", s2_addr))
+        .send()
+        .await?;
+    assert!(response.status().is_success());
+
+    // Calculate client averages
     calculate_and_append_averages("client_latency.csv", "client_bytes.csv");
     Ok(())
 }
