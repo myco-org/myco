@@ -14,7 +14,8 @@ use crate::{
     logging::LatencyMetric,
     network::{Command, ReadType, WriteType},
     tree::{BinaryTree, TreeValue},
-    Bucket, Key, Path, D, DELTA, NUM_BUCKETS_PER_CHUNK,
+    Bucket, Key, Path, D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK,
+    NUM_BUCKETS_PER_READ_PATHS_CHUNK,
 };
 
 pub struct Server2 {
@@ -88,8 +89,8 @@ impl Server2 {
         let write_latency = LatencyMetric::new("server2_write");
 
         // The start and end indices of the chunk within the pathset_indices vector.
-        let start_idx = chunk_idx * NUM_BUCKETS_PER_CHUNK;
-        let end_idx = start_idx + NUM_BUCKETS_PER_CHUNK;
+        let start_idx = chunk_idx * NUM_BUCKETS_PER_BATCH_WRITE_CHUNK;
+        let end_idx = start_idx + NUM_BUCKETS_PER_BATCH_WRITE_CHUNK;
 
         // The last chunk may not have NUM_BUCKETS_PER_CHUNK buckets.
         let correct_end_idx = min(end_idx, self.pathset_indices.len());
@@ -133,8 +134,8 @@ impl Server2 {
 
     /// Read a chunk of buckets from the server.
     pub fn read_pathset_chunk(&self, chunk_idx: usize) -> Result<Vec<Bucket>, OramError> {
-        let start_idx = chunk_idx * NUM_BUCKETS_PER_CHUNK;
-        let end_idx = start_idx + NUM_BUCKETS_PER_CHUNK;
+        let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
+        let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let correct_end_idx = min(end_idx, self.pathset_indices.len());
         Ok(self.pathset_indices[start_idx..correct_end_idx]
             .iter()

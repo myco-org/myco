@@ -26,7 +26,9 @@ use crate::rpc_types::{
     StorePathIndicesRequest, StorePathIndicesResponse, WriteRequest, WriteResponse,
 };
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
-use crate::{BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_CHUNK, Z};
+use crate::{
+    BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK, Z,
+};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
@@ -139,7 +141,7 @@ impl Server2Access for RemoteServer2Access {
             .await?;
 
         // Then read in chunks.
-        let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_CHUNK).collect();
+        let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsRequest { chunk_idx };
             self.post_bincode::<_, ChunkReadPathsResponse>("chunk_read_paths", request)
@@ -168,7 +170,7 @@ impl Server2Access for RemoteServer2Access {
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
         // Set the maximum request size to 10MB, and determine the number of buckets per batch based on this.
-        let batches: Vec<_> = buckets.chunks(NUM_BUCKETS_PER_CHUNK).collect();
+        let batches: Vec<_> = buckets.chunks(NUM_BUCKETS_PER_BATCH_WRITE_CHUNK).collect();
         let futures = batches.into_iter().enumerate().map(|(chunk_idx, batch)| {
             let request = ChunkWriteRequest {
                 buckets: batch.to_vec(),
