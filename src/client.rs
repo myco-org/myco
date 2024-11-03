@@ -130,7 +130,7 @@ impl Client {
 
         local_latency.pause();
         let read_latency = LatencyMetric::new(&format!("client_read_read_paths_{}", batch_size));
-        let buckets = self.s2.read_paths_client_chunked(indices.clone(), batch_size)
+        let buckets = self.s2.read_paths_client(indices.clone(), batch_size)
             .await
             .map_err(|_| OramError::NoMessageFound)?;
         read_latency.finish();
