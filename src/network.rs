@@ -73,6 +73,11 @@ pub trait Server2Access: Send + Sync {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>>;
+    async fn read_paths_client_chunked(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>>;
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
@@ -94,6 +99,19 @@ impl Server2Access for LocalServer2Access {
     }
 
     async fn read_paths_client(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>> {
+        self.server
+            .lock()
+            .unwrap()
+            .read_paths_client(indices)
+            .map_err(|e| e.into())
+    }
+
+    //TODO: Clean, for now just use read_paths_client
+    async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
@@ -169,7 +187,7 @@ impl Server2Access for RemoteServer2Access {
         Ok(all_buckets)
     }
 
-    async fn read_paths_client(
+    async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
@@ -207,6 +225,34 @@ impl Server2Access for RemoteServer2Access {
         }
 
         Ok(all_buckets)
+    }
+
+    async fn read_paths_client(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>> {
+        #[cfg(feature = "bytes-logging")]
+        {
+            let indices_bytes = bincode::serialize(&indices)
+                .map_err(|_| OramError::SerializationFailed)?;
+            BytesMetric::new(&format!("client_read_paths_request_{}", batch_size), indices_bytes.len()).log();
+        }
+
+        let request = ReadPathsClientRequest { indices };
+        let response: ReadPathsResponse = self
+            .post_bincode(&format!("read_paths_client"), &request)
+            .await?;
+
+        #[cfg(feature = "bytes-logging")]
+        {
+            let total_response_bytes = bincode::serialize(&response.buckets)
+                .map_err(|_| OramError::SerializationFailed)?
+                .len();
+            BytesMetric::new(&format!("client_read_paths_response_{}", batch_size), total_response_bytes).log();
+        }
+
+        Ok(response.buckets)
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
