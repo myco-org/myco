@@ -48,8 +48,13 @@ axum = "0.7.7"
 reqwest = { version = "0.12.9", features = ["json"] }
 anyhow = "1.0.92"
 tower = "0.4"
-tower-http = { version = "0.4", features = ["timeout", "trace"] }
+tower-http = { version = "0.4", features = [
+    "timeout",
+    "trace",
+    "add-extension",
+] }
 socket2 = "0.5"
+hyper = { version = "1.5.0", features = ["client"] }
 
 [features]
 simulation = []

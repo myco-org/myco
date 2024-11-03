@@ -223,8 +223,13 @@ impl Server2Access for RemoteServer2Access {
 
 impl RemoteServer2Access {
     pub async fn new(base_url: &str) -> Result<Self, OramError> {
+        // Set the idle timeout to 60 seconds and the max idle per host to 32 for connections. This will avoid
+        // restarting connections from server1 to server2.
+        // Accept invalid certificates for testing, as the certificates generated are fake.
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
+            .pool_idle_timeout(Duration::from_secs(60))
+            .pool_max_idle_per_host(32)
             .build()
             .map_err(|_| {
                 OramError::IoError(std::io::Error::new(

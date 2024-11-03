@@ -16,16 +16,21 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use myco_rs::{constants::{LATENCY_BENCH_COUNT, DELTA}, generate_test_certificates, rpc_types::{
-    BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest, QueueWriteResponse,
-}};
+use myco_rs::{
+    constants::{DELTA, LATENCY_BENCH_COUNT},
+    generate_test_certificates,
+    rpc_types::{
+        BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
+        QueueWriteResponse,
+    },
+};
 use myco_rs::{dtypes::Key, network::RemoteServer2Access, server1::Server1};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::Path, process::Command, time::Duration};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::{fs, process::Command, path::Path};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -51,15 +56,15 @@ async fn main() {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    let s2_addr = args.get(1)
+    let s2_addr = args
+        .get(1)
         .map(|s| s.to_string())
         .unwrap_or_else(|| "https://127.0.0.1:3003".to_string());
-
 
     println!("s2_addr: {}", s2_addr);
     let ports = Ports {
         http: 3002,
-        https: 3001,
+        https: 3010,
     };
 
     // configure certificate and private key used by https
@@ -80,11 +85,7 @@ async fn main() {
         .unwrap();
 
     // Initialize Server1 with Server2 access using the provided or default address
-    let s2_access = Box::new(
-        RemoteServer2Access::new(&s2_addr)
-            .await
-            .unwrap(),
-    );
+    let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
     let server1 = Server1::new(s2_access);
     let state = AppState {
         server1: Arc::new(Mutex::new(server1)),
@@ -95,7 +96,11 @@ async fn main() {
         .route("/queue_write", post(queue_write))
         .route("/batch_write", get(batch_write))
         .route("/batch_init", post(batch_init))
-        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024 * 1024))) // Set the max request body size.
+        .layer(
+            ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(
+                1024 * 1024 * 1024 * 1024,
+            )),
+        ) // Set the max request body size.
         .with_state(state);
 
     // run tcp server
@@ -130,18 +135,21 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /batch_write");
-    
+
     {
         let mut count = state.batch_write_count.lock().await;
         *count += 1;
-        
+
         // Initialize logging only at the start
         if *count == 1 {
             myco_rs::logging::initialize_logging("server1_latency.csv", "server1_bytes.csv");
-        } 
+        }
         // Calculate averages only once and exit
         else if *count == LATENCY_BENCH_COUNT {
-            myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
+            myco_rs::logging::calculate_and_append_averages(
+                "server1_latency.csv",
+                "server1_bytes.csv",
+            );
             return bincode::serialize(&BatchWriteResponse { success: true })
                 .map(Bytes::from)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR);

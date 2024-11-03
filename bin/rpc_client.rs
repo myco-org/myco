@@ -13,8 +13,8 @@ use futures::future::join_all;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let binding1 = "https://127.0.0.1:3001".to_string();
-    let binding2 = "https://127.0.0.1:3003".to_string();
+    let binding1 = "https://127.0.0.1:3010".to_string();
+    let binding2 = "https://127.0.0.1:3011".to_string();
     let s1_addr = args.get(1).unwrap_or(&binding1);
     let s2_addr = args.get(2).unwrap_or(&binding2);
 

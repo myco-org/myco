@@ -70,7 +70,7 @@ async fn main() {
 
     let ports = Ports {
         http: 3004,
-        https: 3003,
+        https: 3011,
     };
 
     // configure certificate and private key used by https
