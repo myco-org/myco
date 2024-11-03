@@ -17,7 +17,7 @@ use tokio::{
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::TlsConnector;
 
-use crate::logging::BytesMetric;
+use crate::logging::{BytesMetric, LatencyMetric};
 use crate::rpc_types::{
     GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse
 };
@@ -185,8 +185,11 @@ impl RemoteServer2Access {
         endpoint: &str,
         payload: &T,
     ) -> Result<R, OramError> {
+
+        let serialization_latency = LatencyMetric::new(&format!("serialization_latency_{}", endpoint));
         let request_bytes =
             bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
+        serialization_latency.finish();
 
         let endpoint_path = if endpoint.starts_with("read_paths_client") {
             "read_paths_client"
@@ -221,7 +224,9 @@ impl RemoteServer2Access {
         let response_bytes_metric = BytesMetric::new(&format!("server2_{}_response", endpoint), bytes.len());
         response_bytes_metric.log();
 
+        let deserialization_latency = LatencyMetric::new(&format!("deserialization_latency_{}", endpoint));
         let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
+        deserialization_latency.finish();
         Ok(response)
     }
 }
