@@ -6,6 +6,8 @@ pub const NU: usize = 1;
 pub const Z: usize = 50;
 pub const DB_SIZE: usize = 1 << D;
 pub const BATCH_SIZE: usize = 1;
+// The size of a bucket in bytes.
+pub const BUCKET_SIZE_BYTES: usize = Z * BLOCK_SIZE;
 
 pub const LATENCY_BENCH_COUNT: usize = 20;
 pub const NONCE_SIZE: usize = 12;
@@ -13,3 +15,7 @@ pub const TAG_SIZE: usize = 16;
 pub const BLOCK_SIZE: usize = INNER_BLOCK_SIZE + NONCE_SIZE + TAG_SIZE;
 pub const INNER_BLOCK_SIZE: usize = MESSAGE_SIZE + NONCE_SIZE + TAG_SIZE;
 pub const MESSAGE_SIZE: usize = 228;
+
+// The maximum number of buckets to send in a single request from Server1 to Server2.
+pub const MAX_REQUEST_SIZE: usize = 10 * 1024 * 1024;
+pub const NUM_BUCKETS_PER_CHUNK: usize = MAX_REQUEST_SIZE / BUCKET_SIZE_BYTES;

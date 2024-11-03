@@ -16,9 +16,14 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use myco_rs::constants::DELTA;
 use myco_rs::constants::LATENCY_BENCH_COUNT;
 use myco_rs::generate_test_certificates;
-use myco_rs::rpc_types::ReadPathsClientRequest;
+use myco_rs::rpc_types::{
+    ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse,
+    FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsClientRequest, StorePathIndicesRequest,
+    StorePathIndicesResponse,
+};
 use myco_rs::{
     dtypes::{Bucket, Key, Path},
     network::RemoteServer2Access,
@@ -30,6 +35,7 @@ use myco_rs::{
     server2::Server2,
 };
 use serde::{Deserialize, Serialize};
+use std::{fs, path::Path as StdPath, process::Command};
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -38,8 +44,6 @@ use std::{
 use tokio::sync::RwLock;
 use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::{fs, process::Command, path::Path as StdPath};
-use myco_rs::constants::DELTA;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -96,8 +100,16 @@ async fn main() {
         .route("/read_paths", post(handle_read_paths))
         .route("/read_paths_client", post(handle_read_paths_client))
         .route("/write", post(handle_write))
+        .route("/chunk_write", post(handle_chunk_write))
+        .route("/chunk_read_paths", post(handle_chunk_read_paths))
+        .route("/store_path_indices", post(handle_store_path_indices))
+        .route("/finalize_epoch", post(handle_finalize_epoch))
         .route("/get_prf_keys", get(handle_get_prf_keys))
-        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024 * 1024))) // Set the max request body size.
+        .layer(
+            ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(
+                1024 * 1024 * 1024 * 1024,
+            )),
+        ) // Set the max request body size.
         .with_state(state);
 
     // run tcp server
@@ -110,12 +122,12 @@ async fn main() {
         .unwrap();
 }
 
-
 async fn handle_read_paths(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
     println!("Received request: /read_paths");
+    // TODO: Optimize the request to be smaller by sending the list of paths rather than the indices, and computing it client side. (E.g. just send leaves)
     let request: ReadPathsRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -123,7 +135,7 @@ async fn handle_read_paths(
         .server2
         .write()
         .await
-        .read_paths(request.indices)
+        .read_and_store_path_indices(request.indices)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     bincode::serialize(&ReadPathsResponse { buckets })
@@ -131,7 +143,51 @@ async fn handle_read_paths(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-async fn handle_read_paths_client(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
+/// Store the pathset indices.
+async fn handle_store_path_indices(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    println!("Received request: /store_path_indices");
+    let request: StorePathIndicesRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    state
+        .server2
+        .write()
+        .await
+        .store_path_indices(request.pathset);
+
+    bincode::serialize(&StorePathIndicesResponse { success: true })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// Read a chunk of buckets from the server.
+async fn handle_chunk_read_paths(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    println!("Received request: /chunk_read_paths");
+    let request: ChunkReadPathsRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let buckets = state
+        .server2
+        .read()
+        .await
+        .read_pathset_chunk(request.chunk_idx)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bincode::serialize(&ChunkReadPathsResponse { buckets })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn handle_read_paths_client(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
     println!("Received request: /read_paths_client");
     let request: ReadPathsClientRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -148,19 +204,56 @@ async fn handle_read_paths_client(State(state): State<AppState>, bytes: Bytes) -
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+async fn handle_chunk_write(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    println!("Received request: /chunk_write");
+    let request: ChunkWriteRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    state
+        .server2
+        .write()
+        .await
+        .chunk_write(request.buckets, request.chunk_idx);
+
+    bincode::serialize(&ChunkWriteResponse { success: true })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn handle_finalize_epoch(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    println!("Received request: /finalize_epoch");
+    let request: FinalizeEpochRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    state.server2.write().await.finalize_epoch(&request.prf_key);
+
+    bincode::serialize(&FinalizeEpochResponse { success: true })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
     println!("Received request: /write");
     println!("Server2: Writing to Server2");
-    
+
     {
         let mut count = state.write_count.lock().unwrap();
         *count += 1;
-        
+
         // Initialize logging immediately
         if *count == 1 {
             myco_rs::logging::initialize_logging("server2_latency.csv", "server2_bytes.csv");
         } else if *count == LATENCY_BENCH_COUNT {
-            myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
+            myco_rs::logging::calculate_and_append_averages(
+                "server2_latency.csv",
+                "server2_bytes.csv",
+            );
         }
     }
 

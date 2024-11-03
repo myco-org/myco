@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::async_trait;
 use bincode::{deserialize, serialize};
+use futures::{StreamExt, TryStreamExt};
 use rustls::{Certificate, PrivateKey, RootCertStore, ServerName};
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -19,10 +20,12 @@ use tokio_rustls::TlsConnector;
 
 use crate::logging::{BytesMetric, LatencyMetric};
 use crate::rpc_types::{
-    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse
+    ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse, GetPrfKeysResponse,
+    QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest,
+    ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse,
 };
-use crate::BATCH_SIZE;
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
+use crate::{BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_CHUNK, Z};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Command {
@@ -65,7 +68,11 @@ pub(crate) trait Network {
 #[async_trait]
 pub trait Server2Access: Send + Sync {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
-    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>>;
+    async fn read_paths_client(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>>;
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
@@ -82,11 +89,15 @@ impl Server2Access for LocalServer2Access {
         self.server
             .lock()
             .unwrap()
-            .read_paths(indices)
+            .read_and_store_path_indices(indices)
             .map_err(|e| e.into())
     }
 
-    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>> {
+    async fn read_paths_client(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>> {
         self.server
             .lock()
             .unwrap()
@@ -124,15 +135,40 @@ impl Server2Access for RemoteServer2Access {
         Ok(response.buckets)
     }
 
-    async fn read_paths_client(&self, indices: Vec<usize>, batch_size: usize) -> Result<Vec<Bucket>> {
+    async fn read_paths_client(
+        &self,
+        indices: Vec<usize>,
+        batch_size: usize,
+    ) -> Result<Vec<Bucket>> {
         let request = ReadPathsClientRequest { indices };
-        let response: ReadPathsResponse = self.post_bincode(&format!("read_paths_client_{}", batch_size), &request).await?;
+        let response: ReadPathsResponse = self
+            .post_bincode(&format!("read_paths_client_{}", batch_size), &request)
+            .await?;
         Ok(response.buckets)
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {
-        let request = WriteRequest { buckets, prf_key };
-        let _: WriteResponse = self.post_bincode("write", &request).await?;
+        // Set the maximum request size to 10MB, and determine the number of buckets per batch based on this.
+        let batches: Vec<_> = buckets.chunks(NUM_BUCKETS_PER_CHUNK).collect();
+        let futures = batches.into_iter().enumerate().map(|(chunk_idx, batch)| {
+            let request = ChunkWriteRequest {
+                buckets: batch.to_vec(),
+                prf_key: prf_key.clone(),
+                chunk_idx,
+            };
+            self.post_bincode::<_, WriteResponse>("chunk_write", request)
+        });
+
+        let results = futures::future::join_all(futures).await;
+        for result in results {
+            result?;
+        }
+
+        // Send a new request to finalize the epoch.
+        let request = FinalizeEpochRequest { prf_key };
+        self.post_bincode::<_, FinalizeEpochResponse>("finalize_epoch", request)
+            .await?;
+
         Ok(())
     }
 
@@ -169,10 +205,12 @@ impl RemoteServer2Access {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|_| OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to create HTTP client",
-            )))?;
+            .map_err(|_| {
+                OramError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to create HTTP client",
+                ))
+            })?;
 
         Ok(Self {
             client,
@@ -183,12 +221,12 @@ impl RemoteServer2Access {
     async fn post_bincode<T: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
-        payload: &T,
+        payload: T,
     ) -> Result<R, OramError> {
-
-        let serialization_latency = LatencyMetric::new(&format!("serialization_latency_{}", endpoint));
+        let serialization_latency =
+            LatencyMetric::new(&format!("serialization_latency_{}", endpoint));
         let request_bytes =
-            bincode::serialize(payload).map_err(|_| OramError::DeserializationError)?;
+            bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
         serialization_latency.finish();
 
         let endpoint_path = if endpoint.starts_with("read_paths_client") {
@@ -197,7 +235,10 @@ impl RemoteServer2Access {
             endpoint
         };
 
-        let request_bytes_metric = BytesMetric::new(&format!("server2_{}_request", endpoint), request_bytes.len());
+        let request_bytes_metric = BytesMetric::new(
+            &format!("server2_{}_request", endpoint),
+            request_bytes.len(),
+        );
         request_bytes_metric.log();
 
         let response = self
@@ -221,10 +262,12 @@ impl RemoteServer2Access {
             ))
         })?;
 
-        let response_bytes_metric = BytesMetric::new(&format!("server2_{}_response", endpoint), bytes.len());
+        let response_bytes_metric =
+            BytesMetric::new(&format!("server2_{}_response", endpoint), bytes.len());
         response_bytes_metric.log();
 
-        let deserialization_latency = LatencyMetric::new(&format!("deserialization_latency_{}", endpoint));
+        let deserialization_latency =
+            LatencyMetric::new(&format!("deserialization_latency_{}", endpoint));
         let response = bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?;
         deserialization_latency.finish();
         Ok(response)
@@ -242,10 +285,12 @@ impl RemoteServer1Access {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
-            .map_err(|_| OramError::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to create HTTP client",
-            )))?;
+            .map_err(|_| {
+                OramError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to create HTTP client",
+                ))
+            })?;
 
         Ok(Self {
             client,
@@ -253,7 +298,7 @@ impl RemoteServer1Access {
         })
     }
 }
-    
+
 // Define how we interact with Server1
 #[async_trait]
 pub trait Server1Access: Send {

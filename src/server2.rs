@@ -1,15 +1,20 @@
 use std::{
+    cmp::min,
     collections::HashSet,
     sync::{Arc, Mutex},
 };
 
 use bincode::{deserialize, serialize};
-use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use tokio::stream;
 
 use crate::{
-    error::OramError, logging::LatencyMetric, network::{Command, ReadType, WriteType}, tree::{BinaryTree, TreeValue}, Bucket, Key, Path, D, DELTA
+    error::OramError,
+    logging::LatencyMetric,
+    network::{Command, ReadType, WriteType},
+    tree::{BinaryTree, TreeValue},
+    Bucket, Key, Path, D, DELTA, NUM_BUCKETS_PER_CHUNK,
 };
 
 pub struct Server2 {
@@ -22,7 +27,7 @@ pub struct Server2 {
 impl Server2 {
     pub fn new() -> Self {
         let mut tree = BinaryTree::new_with_depth(D);
-        
+
         #[cfg(feature = "perf-logging")]
         let (tree, prf_keys) = {
             tree.fill(Bucket::new_random());
@@ -31,7 +36,7 @@ impl Server2 {
             let prf_keys = (0..DELTA).map(|_| Key::random(&mut rng)).collect();
             (tree, prf_keys)
         };
-        
+
         #[cfg(not(feature = "perf-logging"))]
         let (tree, prf_keys) = {
             tree.fill(Bucket::default());
@@ -78,6 +83,35 @@ impl Server2 {
         write_latency.finish();
     }
 
+    /// Write a single chunk of buckets to the server.
+    pub fn chunk_write(&mut self, buckets: Vec<Bucket>, chunk_idx: usize) {
+        let write_latency = LatencyMetric::new("server2_write");
+
+        // The start and end indices of the chunk within the pathset_indices vector.
+        let start_idx = chunk_idx * NUM_BUCKETS_PER_CHUNK;
+        let end_idx = start_idx + NUM_BUCKETS_PER_CHUNK;
+
+        // The last chunk may not have NUM_BUCKETS_PER_CHUNK buckets.
+        let correct_end_idx = min(end_idx, self.pathset_indices.len());
+
+        // Write buckets to the tree at the indices specified by pathset_indices
+        self.pathset_indices[start_idx..correct_end_idx]
+            .iter()
+            .zip(buckets)
+            .for_each(|(idx, bucket)| {
+                self.tree.value[*idx] = Some(bucket);
+            });
+        write_latency.finish();
+    }
+
+    /// Increments the epoch and adds the new PRF key.
+    pub fn finalize_epoch(&mut self, key: &Key) {
+        // Increment the epoch.
+        self.epoch += 1;
+
+        self.add_prf_key(key);
+    }
+
     pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
         Ok(self.prf_keys.clone())
     }
@@ -92,8 +126,27 @@ impl Server2 {
         add_prf_key_latency.finish();
     }
 
+    /// Store the pathset indices.
+    pub fn store_path_indices(&mut self, pathset: Vec<usize>) {
+        self.pathset_indices = pathset;
+    }
+
+    /// Read a chunk of buckets from the server.
+    pub fn read_pathset_chunk(&self, chunk_idx: usize) -> Result<Vec<Bucket>, OramError> {
+        let start_idx = chunk_idx * NUM_BUCKETS_PER_CHUNK;
+        let end_idx = start_idx + NUM_BUCKETS_PER_CHUNK;
+        let correct_end_idx = min(end_idx, self.pathset_indices.len());
+        Ok(self.pathset_indices[start_idx..correct_end_idx]
+            .iter()
+            .map(|i| self.tree.value[*i].clone().unwrap())
+            .collect())
+    }
+
     /// This is S2's pathset indices. When we read the paths from the pathset, we also update the pathset indices here.
-    pub fn read_paths(&mut self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
+    pub fn read_and_store_path_indices(
+        &mut self,
+        pathset: Vec<usize>,
+    ) -> Result<Vec<Bucket>, OramError> {
         let read_paths_latency = LatencyMetric::new("server2_read_paths");
         self.pathset_indices = pathset.clone();
 
