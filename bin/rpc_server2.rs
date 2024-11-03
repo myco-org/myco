@@ -20,9 +20,7 @@ use myco_rs::constants::DELTA;
 use myco_rs::constants::LATENCY_BENCH_COUNT;
 use myco_rs::generate_test_certificates;
 use myco_rs::rpc_types::{
-    ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse,
-    FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsClientRequest, StorePathIndicesRequest,
-    StorePathIndicesResponse,
+    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse, FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsClientRequest, StorePathIndicesRequest, StorePathIndicesResponse
 };
 use myco_rs::{
     dtypes::{Bucket, Key, Path},
@@ -99,6 +97,7 @@ async fn main() {
     let app = Router::new()
         .route("/read_paths", post(handle_read_paths))
         .route("/read_paths_client", post(handle_read_paths_client))
+        .route("/chunk_read_paths_client", post(handle_chunk_read_paths_client))
         .route("/write", post(handle_write))
         .route("/chunk_write", post(handle_chunk_write))
         .route("/chunk_read_paths", post(handle_chunk_read_paths))
@@ -169,6 +168,15 @@ async fn handle_chunk_read_paths(
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
     println!("Received request: /chunk_read_paths");
+    {
+        let mut count = state.write_count.lock().unwrap();
+        *count += 1;
+        // Initialize logging on first chunk read
+        if *count == 1 {
+            myco_rs::logging::initialize_logging("server2_latency.csv", "server2_bytes.csv");
+        }
+    }
+
     let request: ChunkReadPathsRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -203,6 +211,27 @@ async fn handle_read_paths_client(
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
+
+async fn handle_chunk_read_paths_client(
+    State(state): State<AppState>,
+    bytes: Bytes,
+) -> Result<Bytes, StatusCode> {
+    println!("Received request: /chunk_read_paths_client");
+    let request: ChunkReadPathsClientRequest =
+        bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    let buckets = state
+        .server2
+        .read()
+        .await
+        .read_paths_client_chunk(request.chunk_idx, request.indices)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    bincode::serialize(&ChunkReadPathsClientResponse { buckets })
+        .map(Bytes::from)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
 
 async fn handle_chunk_write(
     State(state): State<AppState>,
@@ -239,24 +268,6 @@ async fn handle_finalize_epoch(
 }
 
 async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes, StatusCode> {
-    println!("Received request: /write");
-    println!("Server2: Writing to Server2");
-
-    {
-        let mut count = state.write_count.lock().unwrap();
-        *count += 1;
-
-        // Initialize logging immediately
-        if *count == 1 {
-            myco_rs::logging::initialize_logging("server2_latency.csv", "server2_bytes.csv");
-        } else if *count == LATENCY_BENCH_COUNT {
-            myco_rs::logging::calculate_and_append_averages(
-                "server2_latency.csv",
-                "server2_bytes.csv",
-            );
-        }
-    }
-
     let request: WriteRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -270,6 +281,17 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
 
 async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /get_prf_keys");
+    {
+        let mut count = state.write_count.lock().unwrap();
+        *count += 1;
+        if *count == LATENCY_BENCH_COUNT {
+            myco_rs::logging::calculate_and_append_averages(
+                "server2_latency.csv",
+                "server2_bytes.csv",
+            );
+        }
+    }
+
     let keys = state
         .server2
         .read()

@@ -20,10 +20,7 @@ use tokio_rustls::TlsConnector;
 
 use crate::logging::{BytesMetric, LatencyMetric};
 use crate::rpc_types::{
-    ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest,
-    FinalizeEpochResponse, GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse,
-    ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse,
-    StorePathIndicesRequest, StorePathIndicesResponse, WriteRequest, WriteResponse,
+    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse, GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest, StorePathIndicesResponse, WriteRequest, WriteResponse
 };
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{
@@ -161,11 +158,23 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
-        let request = ReadPathsClientRequest { indices };
-        let response: ReadPathsResponse = self
-            .post_bincode(&format!("read_paths_client_{}", batch_size), &request)
-            .await?;
-        Ok(response.buckets)
+        // Then read in chunks.
+        let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
+        let futures = (0..chunks.len()).map(|chunk_idx| {
+            let request = ChunkReadPathsClientRequest {
+                indices: indices.clone(),
+                chunk_idx,
+            };
+            self.post_bincode::<_, ChunkReadPathsClientResponse>("chunk_read_paths_client", request)
+        });
+
+        let mut all_buckets = Vec::<Bucket>::new();
+        for response in futures::future::join_all(futures).await {
+            let chunk_response = response?;
+            all_buckets.extend(chunk_response.buckets);
+        }
+
+        Ok(all_buckets)
     }
 
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()> {

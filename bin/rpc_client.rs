@@ -95,6 +95,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let res = simulation_client
                     .async_read(simulation_keys_subset, simulation_client.id.clone(), 0, batch_size)
                     .await;
+                println!("Read messages: {:?}", res.unwrap());
             }
         }
     }

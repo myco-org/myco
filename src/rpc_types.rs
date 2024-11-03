@@ -61,6 +61,17 @@ pub struct ChunkReadPathsResponse {
     pub buckets: Vec<Bucket>,
 }
 
+#[derive(Deserialize, Serialize, Debug)]
+pub struct ChunkReadPathsClientRequest {
+    pub indices: Vec<usize>,
+    pub chunk_idx: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct ChunkReadPathsClientResponse {
+    pub buckets: Vec<Bucket>,
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 /// A request to finalize the epoch by adding the new PRF key and incrementing the epoch.
 pub struct FinalizeEpochRequest {

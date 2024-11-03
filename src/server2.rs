@@ -143,6 +143,21 @@ impl Server2 {
             .collect())
     }
 
+    /// Read a chunk of buckets from the server for a client request.
+    pub fn read_paths_client_chunk(
+        &self,
+        chunk_idx: usize,
+        indices: Vec<usize>,
+    ) -> Result<Vec<Bucket>, OramError> {
+        let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
+        let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
+        let correct_end_idx = min(end_idx, indices.len());
+        Ok(indices[start_idx..correct_end_idx]
+            .iter()
+            .map(|i| self.tree.value[*i].clone().unwrap())
+            .collect())
+    }
+
     /// This is S2's pathset indices. When we read the paths from the pathset, we also update the pathset indices here.
     pub fn read_and_store_path_indices(
         &mut self,
