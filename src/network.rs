@@ -20,9 +20,10 @@ use tokio_rustls::TlsConnector;
 
 use crate::logging::{BytesMetric, LatencyMetric};
 use crate::rpc_types::{
-    ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse, GetPrfKeysResponse,
-    QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest,
-    ReadPathsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse,
+    ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest,
+    FinalizeEpochResponse, GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse,
+    ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse,
+    StorePathIndicesRequest, StorePathIndicesResponse, WriteRequest, WriteResponse,
 };
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_CHUNK, Z};
@@ -130,9 +131,27 @@ pub struct RemoteServer2Access {
 #[async_trait]
 impl Server2Access for RemoteServer2Access {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
-        let request = ReadPathsRequest { indices };
-        let response: ReadPathsResponse = self.post_bincode("read_paths", &request).await?;
-        Ok(response.buckets)
+        // First store the path indices.
+        let store_request = StorePathIndicesRequest {
+            pathset: indices.clone(),
+        };
+        self.post_bincode::<_, StorePathIndicesResponse>("store_path_indices", store_request)
+            .await?;
+
+        // Then read in chunks.
+        let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_CHUNK).collect();
+        let futures = (0..chunks.len()).map(|chunk_idx| {
+            let request = ChunkReadPathsRequest { chunk_idx };
+            self.post_bincode::<_, ChunkReadPathsResponse>("chunk_read_paths", request)
+        });
+
+        let mut all_buckets = Vec::new();
+        for response in futures::future::join_all(futures).await {
+            let chunk_response = response?;
+            all_buckets.extend(chunk_response.buckets);
+        }
+
+        Ok(all_buckets)
     }
 
     async fn read_paths_client(
