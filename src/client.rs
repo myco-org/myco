@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use crate::constants::{BLOCK_SIZE, D};
 use crate::dtypes::{Bucket, Key, Path};
 use crate::error::OramError;
@@ -145,7 +153,7 @@ impl Client {
         let mut messages = Vec::new();
 
         // First, convert buckets into a BinaryTree
-        let mut bucket_tree = SparseBinaryTree::new_with_data(buckets, indices);
+        let bucket_tree = SparseBinaryTree::new_with_data(buckets, indices);
 
         // Now process each key along its specific path
         for ((k_msg, k_oram_t), path) in key_data.into_iter().zip(paths.iter()) {

@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use crate::client::Client;
 use crate::get_path_indices;
 use crate::logging::{BytesMetric, LatencyMetric};
@@ -307,7 +315,7 @@ impl Server1 {
 
     pub async fn async_batch_write(&mut self) -> Result<(), OramError> {
         let end_to_end_latency = LatencyMetric::new("server1_batch_write_end_to_end");  
-        let mut local_latency = LatencyMetric::new("server1_batch_write_local");
+        let local_latency = LatencyMetric::new("server1_batch_write_local");
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 

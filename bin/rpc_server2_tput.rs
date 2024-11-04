@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use axum::body::Bytes;
 use axum::{
     extract::State,
@@ -42,13 +50,15 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+
+    // Get bind address from command line args
+    let args: Vec<String> = std::env::args().collect();
+    let bind_addr = args
+        .get(1)
+        .map(|s| s.parse().unwrap())
+        .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 3003)));
+
+    println!("Server2 binding to: {}", bind_addr);
 
     // configure certificate and private key used by https
     let cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -94,10 +104,9 @@ async fn main() {
         )
         .with_state(state);
 
-    // run tcp server
-    let addr = SocketAddr::from(([0, 0, 0, 0], 3003));
-    tracing::debug!("listening on {}", addr);
-    let listener = std::net::TcpListener::bind(addr).unwrap();
+    // run tcp server with provided bind address
+    tracing::debug!("listening on {}", bind_addr);
+    let listener = std::net::TcpListener::bind(bind_addr).unwrap();
     axum_server::from_tcp_rustls(listener, config)
         .serve(app.into_make_service())
         .await
@@ -239,7 +248,7 @@ async fn read_without_client(
     // Get path indices and read paths
     let indices = get_path_indices(paths.clone());
 
-    let buckets = server2
+    server2
         .read()
         .await
         .read_paths_client(indices.clone())

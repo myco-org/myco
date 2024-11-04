@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
@@ -39,6 +47,15 @@ async fn main() {
     // Setup logging
     tracing_subscriber::fmt::init();
 
+    // Get Server2 address from command line args
+    let args: Vec<String> = std::env::args().collect();
+    let s2_addr = args
+        .get(1)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "https://127.0.0.1:3003".to_string());
+
+    println!("Connecting to Server2 at: {}", s2_addr);
+
     // Setup HTTPS certificates
     let cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("certs")
@@ -55,9 +72,8 @@ async fn main() {
         .await
         .unwrap();
 
-    // Initialize Server2 connection
-    let s2_addr = "https://127.0.0.1:3003";
-    let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await.unwrap());
+    // Initialize Server2 connection using provided address
+    let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
 
     // Initialize Server1 and state
     let server1 = Server1::new(s2_access);
@@ -77,7 +93,7 @@ async fn main() {
         let client_name = format!("WriterClient_{}", i);
         let s1_access = Box::new(LocalServer1Access::new(server1.clone()));
         // We will never use this here, but it's required by the Client constructor.
-        let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await.unwrap());
+        let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
         let mut client = Client::new(client_name, s1_access, s2_access);
 
         // Setup keys for this client

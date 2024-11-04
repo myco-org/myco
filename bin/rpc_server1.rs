@@ -5,6 +5,12 @@
 //! ```
 
 #![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
 
 use axum::{
     body::Bytes,
