@@ -23,3 +23,6 @@ pub const MAX_REQUEST_SIZE_BATCH_WRITE: usize = 10 * 1024 * 1024;
 pub const NUM_BUCKETS_PER_BATCH_WRITE_CHUNK: usize =
     MAX_REQUEST_SIZE_BATCH_WRITE / BUCKET_SIZE_BYTES;
 pub const NUM_BUCKETS_PER_READ_PATHS_CHUNK: usize = MAX_REQUEST_SIZE_READ_PATHS / BUCKET_SIZE_BYTES;
+
+/// Fixed seed for the RNG used in the tput benchmarks.
+pub const FIXED_SEED_TPUT_RNG: [u8; 32] = [1u8; 32];

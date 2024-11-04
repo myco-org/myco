@@ -1,8 +1,6 @@
 use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
-use futures::future::join_all;
-use myco_rs::constants::FIXED_SEED_TPUT_RNG;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, NUM_CLIENTS},
@@ -11,7 +9,7 @@ use myco_rs::{
     network::{LocalServer1Access, RemoteServer2Access},
     server1::Server1,
 };
-use rand::SeedableRng;
+use rand::{SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::{
     net::SocketAddr,
@@ -21,6 +19,7 @@ use std::{
 };
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tower::ServiceBuilder;
+use futures::future::join_all;
 
 const THROUGHPUT_ITERATIONS: usize = 10;
 
@@ -57,13 +56,13 @@ async fn main() {
     // Initialize Server2 connection
     let s2_addr = "https://127.0.0.1:3003";
     let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await.unwrap());
-
+    
     // Initialize Server1 and state
     let server1 = Server1::new(s2_access);
     let server1 = Arc::new(StdMutex::new(server1));
 
     // Generate simulation keys
-    let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
+    let mut rng = ChaCha20Rng::from_entropy();
     let mut simulation_keys = Vec::with_capacity(128);
     for _ in 0..128 {
         simulation_keys.push(Key::random(&mut rng));
@@ -78,12 +77,12 @@ async fn main() {
         // We will never use this here, but it's required by the Client constructor.
         let s2_access = Box::new(RemoteServer2Access::new(s2_addr).await.unwrap());
         let mut client = Client::new(client_name, s1_access, s2_access);
-
+        
         // Setup keys for this client
         for key in simulation_keys.iter() {
             client.setup(key).unwrap();
         }
-
+        
         writer_clients.push(client);
     }
 
@@ -100,18 +99,14 @@ async fn main() {
     // Run experiment directly
     // Start timing
     *state.start_time.lock().unwrap() = Some(Instant::now());
-
+    
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap();
 
     for iteration in 0..THROUGHPUT_ITERATIONS {
-        println!(
-            "\nThroughput iteration {}/{}",
-            iteration + 1,
-            THROUGHPUT_ITERATIONS
-        );
+        println!("\nThroughput iteration {}/{}", iteration + 1, THROUGHPUT_ITERATIONS);
 
         println!("Batch init about to start");
         // 1. Batch init
@@ -128,7 +123,7 @@ async fn main() {
         // 2. All clients write sequentially instead of in parallel
         let mut clients = state.writer_clients.lock().unwrap();
         let message = vec![1u8; 16];
-
+        
         for client in clients.iter_mut() {
             let key = state.simulation_keys[0].clone();
             client.async_write(&message, &key).await.unwrap();
@@ -146,7 +141,7 @@ async fn main() {
             .expect("Failed to batch write");
 
         println!("Batch write finished");
-
+        
         // Update message count
         let mut count = state.message_count.lock().unwrap();
         *count += NUM_CLIENTS;

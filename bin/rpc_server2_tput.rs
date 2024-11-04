@@ -6,6 +6,13 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
+use myco_rs::client::Client;
+use myco_rs::constants::{FIXED_SEED_TPUT_RNG, NUM_CLIENTS};
+use myco_rs::dtypes::{Key, Path};
+use myco_rs::error::OramError;
+use myco_rs::rpc_types::EpochNumberResponse;
+use myco_rs::tree::SparseBinaryTree;
+use myco_rs::{decrypt, get_path_indices, kdf, prf, trim_zeros};
 use myco_rs::{
     generate_test_certificates,
     rpc_types::{
@@ -15,6 +22,8 @@ use myco_rs::{
     },
     server2::Server2,
 };
+use rand::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -28,6 +37,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 struct AppState {
     server2: Arc<RwLock<Server2>>,
     write_count: Arc<Mutex<usize>>,
+    simulation_keys: Arc<Vec<Key>>,
 }
 
 #[tokio::main]
@@ -58,9 +68,18 @@ async fn main() {
         .unwrap();
 
     let server2 = Server2::new();
+
+    // Generate simulation keys used for the tput benchmarks.
+    let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
+    let mut simulation_keys = Vec::with_capacity(128);
+    for _ in 0..128 {
+        simulation_keys.push(Key::random(&mut rng));
+    }
+
     let state = AppState {
         server2: Arc::new(RwLock::new(server2)),
         write_count: Arc::new(Mutex::new(0)),
+        simulation_keys: Arc::new(simulation_keys),
     };
 
     let app = Router::new()
@@ -160,7 +179,75 @@ async fn handle_finalize_epoch(
 
     state.server2.write().await.finalize_epoch(&request.prf_key);
 
+    // Now, let's read with all of the simulated clients.
+    // New: Perform reads after each batch write
+    let epoch = state.server2.read().await.epoch as usize;
+    let simulation_keys = state.simulation_keys.clone().to_vec();
+
+    // Get PRF keys from server2
+    let server_keys = state
+        .server2
+        .read()
+        .await
+        .get_prf_keys()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    for i in 0..NUM_CLIENTS {
+        let client_name = format!("WriterClient_{}", i);
+        read_without_client(
+            state.server2.clone(),
+            epoch,
+            simulation_keys.clone(),
+            client_name,
+            server_keys.clone(),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
     bincode::serialize(&FinalizeEpochResponse { success: true })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn read_without_client(
+    server2: Arc<RwLock<Server2>>,
+    current_epoch: usize,
+    simulation_keys: Vec<Key>,
+    cs: String,
+    current_prf_keys: Vec<Key>,
+) -> Result<(), OramError> {
+    // current_epoch is the epoch of server2
+    let epoch = current_epoch - 1;
+    let cs: Vec<u8> = cs.into_bytes();
+
+    let k_s1_t = current_prf_keys.get(current_prf_keys.len() - 1).unwrap();
+
+    // Calculate paths for all keys
+    let mut paths = Vec::new();
+    let mut key_data = Vec::new();
+
+    for k in simulation_keys {
+        let k_msg = kdf(&k.0, "MSG")?;
+        let k_oram = kdf(&k.0, "ORAM")?;
+        let k_prf = kdf(&k.0, "PRF")?;
+        let k_oram_t = kdf(&k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+        let f = prf(&k_prf, &epoch.to_be_bytes())?;
+
+        let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
+        let l_path = Path::from(l);
+        paths.push(l_path);
+        key_data.push((k_msg.clone(), k_oram_t));
+    }
+
+    // Get path indices and read paths
+    let indices = get_path_indices(paths.clone());
+
+    let buckets = server2
+        .read()
+        .await
+        .read_paths_client(indices.clone())
+        .map_err(|_| OramError::NoMessageFound)?;
+
+    Ok(())
 }
