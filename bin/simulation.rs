@@ -6,16 +6,24 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
+use myco_rs::network::{LocalServer1Access, LocalServer2Access};
 use myco_rs::{
-    calculate_bucket_usage, constants::{DELTA, NUM_CLIENTS, DB_SIZE}, dtypes::Key, server1::Server1, server2::Server2, client::Client
+    calculate_bucket_usage,
+    client::Client,
+    constants::{DB_SIZE, DELTA, NUM_CLIENTS},
+    dtypes::Key,
+    server1::Server1,
+    server2::Server2,
 };
 use rand::{Rng, SeedableRng};
-use rayon::iter::{IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
+use std::sync::RwLock;
 use std::{
     process::Command,
     sync::{Arc, Mutex},
 };
-use myco_rs::network::{LocalServer1Access, LocalServer2Access};
 
 fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
@@ -23,7 +31,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -50,7 +58,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
         // Measure batch_init latency
         let epoch_start_time = std::time::Instant::now();
         let batch_init_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_init(num_clients);
+        s1.write().unwrap().batch_init(num_clients);
         let batch_init_duration = batch_init_start_time.elapsed();
 
         // Measure write latency
@@ -66,7 +74,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
 
         // Measure batch_write latency
         let batch_write_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_write();
+        s1.write().unwrap().batch_write();
         let batch_write_duration = batch_write_start_time.elapsed();
 
         // Measure read latency for each client.
@@ -94,7 +102,6 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
             "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?}, avg client read: {:?})",
             epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration, average_read_duration
         );
-
     }
 
     // After all epochs, print the total duration and final average duration
@@ -111,7 +118,7 @@ fn run_single_client_simulation(num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -133,10 +140,10 @@ fn run_single_client_simulation(num_epochs: usize) {
         println!("========== Starting epoch: {} ==========", epoch);
 
         let epoch_start_time = std::time::Instant::now();
-        
+
         // Single client batch_init
         let batch_init_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_init(1);
+        s1.write().unwrap().batch_init(1);
         let batch_init_duration = batch_init_start_time.elapsed();
 
         // Single write
@@ -150,7 +157,7 @@ fn run_single_client_simulation(num_epochs: usize) {
 
         // Batch write
         let batch_write_start_time = std::time::Instant::now();
-        s1.lock().unwrap().batch_write();
+        s1.write().unwrap().batch_write();
         let batch_write_duration = batch_write_start_time.elapsed();
 
         // Read
@@ -181,8 +188,8 @@ fn run_single_client_simulation(num_epochs: usize) {
             println!("Calculating bucket usage at epoch {}...", epoch);
             let stats = calculate_bucket_usage(
                 &s2.lock().unwrap().tree,
-                &s1.lock().unwrap().metadata,
-                &k_msg
+                &s1.read().unwrap().metadata,
+                &k_msg,
             );
             usage_stats.push(stats);
         }
@@ -198,7 +205,9 @@ fn run_single_client_simulation(num_epochs: usize) {
     println!("\nBucket Usage Statistics Over Time:");
     println!("Epoch\tMax Usage\tMax Depth\tAvg Usage\tMedian Usage\tStd Dev");
     println!("---------------------------------------------------------------------");
-    for (i, (max_usage, max_depth, avg_usage, median_usage, std_dev)) in usage_stats.iter().enumerate() {
+    for (i, (max_usage, max_depth, avg_usage, median_usage, std_dev)) in
+        usage_stats.iter().enumerate()
+    {
         println!(
             "{}\t{}\t\t{}\t\t{:.2}\t\t{:.2}\t\t{:.2}",
             (i + 1) * check_interval,
@@ -217,7 +226,7 @@ fn run_local_latency_benchmark() {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -227,7 +236,11 @@ fn run_local_latency_benchmark() {
     let mut keys = Vec::new();
     for i in 0..NUM_CLIENTS {
         let key = Key::random(&mut rng);
-        let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
+        let mut client = Client::new(
+            format!("Client_{}", i),
+            s1_access.clone(),
+            s2_access.clone(),
+        );
         client.setup(&key).expect("Setup failed");
         keys.push(key);
         clients.push(client);
@@ -239,10 +252,11 @@ fn run_local_latency_benchmark() {
     for epoch in 0..DELTA {
         println!("Epoch: {}/{}", epoch, DELTA);
 
-        s1.lock().unwrap().batch_init(NUM_CLIENTS);
-        
+        s1.write().unwrap().batch_init(NUM_CLIENTS);
+
         // Have each client perform a write
-        clients.iter_mut()
+        clients
+            .iter_mut()
             .zip(keys.iter())
             .enumerate()
             .for_each(|(client_idx, (client, key))| {
@@ -251,13 +265,13 @@ fn run_local_latency_benchmark() {
                 client.fake_write().expect("Write failed");
                 #[cfg(not(feature = "no-enc"))]
                 client.write(&message, key).expect("Write failed");
-                
+
                 if (epoch * NUM_CLIENTS + client_idx) % 1000 == 0 {
                     println!("Progress: Write {} in epoch {}", client_idx, epoch);
                 }
             });
-        
-        s1.lock().unwrap().batch_write();
+
+        s1.write().unwrap().batch_write();
     }
 
     // Track timings for each operation
@@ -272,7 +286,7 @@ fn run_local_latency_benchmark() {
 
         // Measure batch_init
         let start = std::time::Instant::now();
-        s1.lock().unwrap().batch_init(NUM_CLIENTS);
+        s1.write().unwrap().batch_init(NUM_CLIENTS);
         batch_init_times.push(start.elapsed());
 
         // Measure write
@@ -286,12 +300,14 @@ fn run_local_latency_benchmark() {
 
         // Measure batch_write
         let start = std::time::Instant::now();
-        s1.lock().unwrap().batch_write();
+        s1.write().unwrap().batch_write();
         batch_write_times.push(start.elapsed());
 
         // Measure read
         let start = std::time::Instant::now();
-        clients[0].read(&keys[0], clients[0].id.clone(), 0).expect("Read failed");
+        clients[0]
+            .read(&keys[0], clients[0].id.clone(), 0)
+            .expect("Read failed");
         read_times.push(start.elapsed());
     }
 
@@ -309,8 +325,7 @@ fn run_local_latency_benchmark() {
     create_dir_all("test_sims").expect("Failed to create directory");
 
     // Open file for writing
-    let mut file = File::create("test_sims/latency")
-        .expect("Failed to create latency file");
+    let mut file = File::create("test_sims/latency").expect("Failed to create latency file");
 
     // Write results to file
     writeln!(file, "Average timings over 10 sequences:").unwrap();
@@ -318,7 +333,12 @@ fn run_local_latency_benchmark() {
     writeln!(file, "Write:       {:?}", avg_write).unwrap();
     writeln!(file, "Batch Write: {:?}", avg_batch_write).unwrap();
     writeln!(file, "Read:        {:?}", avg_read).unwrap();
-    writeln!(file, "Total Avg:   {:?}", avg_batch_init + avg_write + avg_batch_write + avg_read).unwrap();
+    writeln!(
+        file,
+        "Total Avg:   {:?}",
+        avg_batch_init + avg_write + avg_batch_write + avg_read
+    )
+    .unwrap();
 
     // Optional: Keep a terminal output for confirmation
     println!("Benchmark results have been written to test_sims/latency");
@@ -327,14 +347,14 @@ fn run_local_latency_benchmark() {
 fn main() {
     #[cfg(feature = "no-enc")]
     println!("Running simulation in NO ENCRYPTION mode");
-    
+
     #[cfg(not(feature = "no-enc"))]
     println!("Running simulation in STANDARD ENCRYPTION mode");
 
     let args: Vec<String> = std::env::args().collect();
 
     let simulation_type = &args[1];
-    
+
     match simulation_type.as_str() {
         "single" => run_single_client_simulation(262144),
         "multi" => run_multi_client_simulation(NUM_CLIENTS, DELTA),

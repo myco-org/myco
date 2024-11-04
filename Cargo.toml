@@ -19,6 +19,14 @@ path = "bin/rpc_server2.rs"
 name = "rpc_client"
 path = "bin/rpc_client.rs"
 
+[[bin]]
+name = "rpc_server1_tput"
+path = "bin/rpc_server1_tput.rs"
+
+[[bin]]
+name = "rpc_server2_tput"
+path = "bin/rpc_server2_tput.rs"
+
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"

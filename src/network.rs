@@ -4,7 +4,7 @@ use bincode::{deserialize, serialize};
 use futures::{StreamExt, TryStreamExt};
 use rustls::{Certificate, PrivateKey, RootCertStore, ServerName};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 use std::{
     io::{Read, Write},
@@ -20,7 +20,11 @@ use tokio_rustls::TlsConnector;
 
 use crate::logging::{BytesMetric, LatencyMetric};
 use crate::rpc_types::{
-    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse, GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest, StorePathIndicesResponse, WriteRequest, WriteResponse
+    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
+    ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
+    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest,
+    ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest,
+    StorePathIndicesResponse, WriteRequest, WriteResponse,
 };
 use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{
@@ -86,6 +90,18 @@ pub trait Server2Access: Send + Sync {
 #[derive(Clone)]
 pub struct LocalServer2Access {
     pub server: Arc<Mutex<Server2>>,
+}
+
+impl LocalServer2Access {
+    pub fn new(server: Arc<Mutex<Server2>>) -> Self {
+        Self { server }
+    }
+
+    pub fn new_with_server() -> Self {
+        Self {
+            server: Arc::new(Mutex::new(Server2::new())),
+        }
+    }
 }
 
 #[async_trait]
@@ -155,8 +171,8 @@ impl Server2Access for RemoteServer2Access {
 
         #[cfg(feature = "bytes-logging")]
         {
-            let store_request_bytes = bincode::serialize(&store_request)
-                .map_err(|_| OramError::SerializationFailed)?;
+            let store_request_bytes =
+                bincode::serialize(&store_request).map_err(|_| OramError::SerializationFailed)?;
             BytesMetric::new("batch_init_store_path_indices", store_request_bytes.len()).log();
         }
 
@@ -194,11 +210,15 @@ impl Server2Access for RemoteServer2Access {
     ) -> Result<Vec<Bucket>> {
         #[cfg(feature = "bytes-logging")]
         {
-            let indices_bytes = bincode::serialize(&indices)
-                .map_err(|_| OramError::SerializationFailed)?;
-            BytesMetric::new(&format!("client_read_paths_request_{}", batch_size), indices_bytes.len()).log();
+            let indices_bytes =
+                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+            BytesMetric::new(
+                &format!("client_read_paths_request_{}", batch_size),
+                indices_bytes.len(),
+            )
+            .log();
         }
-        
+
         // Then read in chunks.
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
         let futures = (0..chunks.len()).map(|chunk_idx| {
@@ -206,7 +226,7 @@ impl Server2Access for RemoteServer2Access {
                 indices: indices.clone(),
                 chunk_idx,
             };
-            
+
             self.post_bincode::<_, ChunkReadPathsClientResponse>("chunk_read_paths_client", request)
         });
 
@@ -221,7 +241,11 @@ impl Server2Access for RemoteServer2Access {
             let total_response_bytes = bincode::serialize(&all_buckets)
                 .map_err(|_| OramError::SerializationFailed)?
                 .len();
-            BytesMetric::new(&format!("client_read_paths_response_{}", batch_size), total_response_bytes).log();
+            BytesMetric::new(
+                &format!("client_read_paths_response_{}", batch_size),
+                total_response_bytes,
+            )
+            .log();
         }
 
         Ok(all_buckets)
@@ -234,9 +258,13 @@ impl Server2Access for RemoteServer2Access {
     ) -> Result<Vec<Bucket>> {
         #[cfg(feature = "bytes-logging")]
         {
-            let indices_bytes = bincode::serialize(&indices)
-                .map_err(|_| OramError::SerializationFailed)?;
-            BytesMetric::new(&format!("client_read_paths_request_{}", batch_size), indices_bytes.len()).log();
+            let indices_bytes =
+                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+            BytesMetric::new(
+                &format!("client_read_paths_request_{}", batch_size),
+                indices_bytes.len(),
+            )
+            .log();
         }
 
         let request = ReadPathsClientRequest { indices };
@@ -249,7 +277,11 @@ impl Server2Access for RemoteServer2Access {
             let total_response_bytes = bincode::serialize(&response.buckets)
                 .map_err(|_| OramError::SerializationFailed)?
                 .len();
-            BytesMetric::new(&format!("client_read_paths_response_{}", batch_size), total_response_bytes).log();
+            BytesMetric::new(
+                &format!("client_read_paths_response_{}", batch_size),
+                total_response_bytes,
+            )
+            .log();
         }
 
         Ok(response.buckets)
@@ -262,7 +294,7 @@ impl Server2Access for RemoteServer2Access {
         {
             let total_request = ChunkWriteRequest {
                 buckets: buckets.clone(),
-            prf_key: prf_key.clone(),
+                prf_key: prf_key.clone(),
                 chunk_idx: 0,
             };
             let total_bytes = bincode::serialize(&total_request)
@@ -349,6 +381,7 @@ impl RemoteServer2Access {
         let request_bytes =
             bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
 
+
         let response = self
             .client
             .post(&format!("{}/{}", self.base_url, endpoint))
@@ -414,7 +447,13 @@ pub trait Server1Access: Send {
 // Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer1Access {
-    pub server: Arc<Mutex<Server1>>,
+    pub server: Arc<RwLock<Server1>>,
+}
+
+impl LocalServer1Access {
+    pub fn new(server: Arc<RwLock<Server1>>) -> Self {
+        Self { server }
+    }
 }
 
 #[async_trait]
@@ -426,7 +465,10 @@ impl Server1Access for LocalServer1Access {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        self.server.lock().unwrap().queue_write(ct, f, k_oram_t, cs)
+        self.server
+            .write()
+            .unwrap()
+            .queue_write(ct, f, k_oram_t, cs)
     }
 }
 

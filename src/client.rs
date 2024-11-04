@@ -1,10 +1,18 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use crate::constants::{BLOCK_SIZE, D};
 use crate::dtypes::{Bucket, Key, Path};
 use crate::error::OramError;
 use crate::logging::LatencyMetric;
 use crate::network::{
-    Command, Local, LocalServer1Access, LocalServer2Access, ReadType, Server1Access, Server2Access,
-    WriteType,
+    Command, Local, LocalServer1Access, LocalServer2Access, ReadType, RemoteServer1Access,
+    Server1Access, Server2Access, WriteType,
 };
 use crate::tree::SparseBinaryTree;
 use crate::{decrypt, encrypt, get_path_indices, kdf, prf, trim_zeros, EncryptionType, BATCH_SIZE};
@@ -82,20 +90,22 @@ impl Client {
         keys: Vec<Key>,
         cs: String,
         epoch_past: usize,
-        batch_size: usize
+        batch_size: usize,
     ) -> Result<Vec<Vec<u8>>, OramError> {
         if keys.len() != batch_size {
             return Err(OramError::InvalidBatchSize);
         }
 
-        let end_to_end_latency = LatencyMetric::new(&format!("client_read_end_to_end_{}", batch_size));
+        let end_to_end_latency =
+            LatencyMetric::new(&format!("client_read_end_to_end_{}", batch_size));
         let mut local_latency = LatencyMetric::new(&format!("client_read_local_{}", batch_size));
         let epoch = self.epoch - 1 - epoch_past;
         let cs: Vec<u8> = cs.into_bytes();
 
         // Get PRF keys from server2
         local_latency.pause();
-        let get_prf_keys_latency = LatencyMetric::new(&format!("client_read_get_prf_keys_{}", batch_size));
+        let get_prf_keys_latency =
+            LatencyMetric::new(&format!("client_read_get_prf_keys_{}", batch_size));
         let server_keys = self
             .s2
             .get_prf_keys()
@@ -109,16 +119,17 @@ impl Client {
         }
 
         let k_s1_t = server_keys.get(server_keys.len() - 1 - epoch_past).unwrap();
-        
+
         // Calculate paths for all keys
         let mut paths = Vec::with_capacity(batch_size);
         let mut key_data = Vec::with_capacity(batch_size);
 
         for k in keys {
             let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-            let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+            let k_oram_t =
+                kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
             let f = prf(&k_prf, &epoch.to_be_bytes())?;
-            
+
             let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
             let l_path = Path::from(l);
             paths.push(l_path);
@@ -130,7 +141,9 @@ impl Client {
 
         local_latency.pause();
         let read_latency = LatencyMetric::new(&format!("client_read_read_paths_{}", batch_size));
-        let buckets = self.s2.read_paths_client(indices.clone(), batch_size)
+        let buckets = self
+            .s2
+            .read_paths_client(indices.clone(), batch_size)
             .await
             .map_err(|_| OramError::NoMessageFound)?;
         read_latency.finish();
@@ -138,21 +151,20 @@ impl Client {
 
         // Try to decrypt messages from all paths
         let mut messages = Vec::new();
-        
+
         // First, convert buckets into a BinaryTree
-        let mut bucket_tree = SparseBinaryTree::new_with_data(buckets, indices);
+        let bucket_tree = SparseBinaryTree::new_with_data(buckets, indices);
 
         // Now process each key along its specific path
         for ((k_msg, k_oram_t), path) in key_data.into_iter().zip(paths.iter()) {
             let mut found = false;
             // Only check buckets along this key's path
             let path_buckets = bucket_tree.get_all_nodes_along_path(&path);
-            
+
             for bucket in path_buckets {
                 for block in bucket.iter() {
                     if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
                         if let Ok(msg) = decrypt(&k_msg, &ct) {
-                            
                             messages.push(trim_zeros(&msg));
                             found = true;
                             break;
@@ -170,7 +182,7 @@ impl Client {
 
         local_latency.finish();
         end_to_end_latency.finish();
-        
+
         Ok(messages)
     }
 

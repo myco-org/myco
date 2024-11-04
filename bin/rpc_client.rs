@@ -1,3 +1,11 @@
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_assignments)]
+#![allow(unused_must_use)]
+#![allow(dead_code)]
+#![allow(unused_parens)]
+#![allow(private_bounds)]
+
 use myco_rs::{
     client::Client, constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS}, dtypes::Key, logging::calculate_and_append_averages, network::{RemoteServer1Access, RemoteServer2Access}
 };

@@ -127,3 +127,8 @@ pub struct BatchInitResponse {
 pub struct BatchWriteResponse {
     pub success: bool,
 }
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EpochNumberResponse {
+    pub epoch_number: u64,
+}

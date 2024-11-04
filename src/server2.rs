@@ -181,7 +181,7 @@ impl Server2 {
     }
 
     pub fn read_paths_client(&self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
-        let read_paths_latency = LatencyMetric::new("server2_read_paths_client");
+        let read_paths_latency = LatencyMetric::new("server2_read_paths_client!");
         let buckets: Vec<Bucket> = pathset
             .iter()
             .map(|i| self.tree.value[*i].clone().unwrap())
