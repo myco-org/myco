@@ -88,6 +88,18 @@ pub struct LocalServer2Access {
     pub server: Arc<Mutex<Server2>>,
 }
 
+impl LocalServer2Access {
+    pub fn new(server: Arc<Mutex<Server2>>) -> Self {
+        Self { server }
+    }
+
+    pub fn new_with_server() -> Self {
+        Self {
+            server: Arc::new(Mutex::new(Server2::new()))
+        }
+    }
+}
+
 #[async_trait]
 impl Server2Access for LocalServer2Access {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
@@ -415,6 +427,12 @@ pub trait Server1Access: Send {
 #[derive(Clone)]
 pub struct LocalServer1Access {
     pub server: Arc<Mutex<Server1>>,
+}
+
+impl LocalServer1Access {
+    pub fn new(server: Arc<Mutex<Server1>>) -> Self {
+        Self { server }
+    }
 }
 
 #[async_trait]

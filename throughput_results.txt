@@ -1,0 +1,3 @@
+Total messages: 2620
+Total time: 2.80 seconds
+Throughput: 936.34 messages/second
