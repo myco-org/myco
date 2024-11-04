@@ -381,7 +381,6 @@ impl RemoteServer2Access {
         let request_bytes =
             bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
 
-        println!("Base URL: {}", self.base_url);
 
         let response = self
             .client

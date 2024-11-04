@@ -108,7 +108,6 @@ async fn handle_store_path_indices(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    println!("Store path indices received");
     let request: StorePathIndicesRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -127,7 +126,6 @@ async fn handle_chunk_read_paths(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    println!("Chunk read paths received");
     {
         let mut count = state.write_count.lock().unwrap();
         *count += 1;
@@ -152,11 +150,8 @@ async fn handle_chunk_write(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    println!("Chunk write received");
     let request: ChunkWriteRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
-
-    println!("Chunk write deserialized");
 
     state
         .server2
@@ -174,7 +169,6 @@ async fn handle_finalize_epoch(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    println!("Finalize epoch received");
     let request: FinalizeEpochRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
