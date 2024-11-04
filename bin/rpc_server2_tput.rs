@@ -81,8 +81,8 @@ async fn main() {
 
     // Generate simulation keys used for the tput benchmarks.
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
-    let mut simulation_keys = Vec::with_capacity(128);
-    for _ in 0..128 {
+    let mut simulation_keys = Vec::with_capacity(16);
+    for _ in 0..16 {
         simulation_keys.push(Key::random(&mut rng));
     }
 
@@ -181,6 +181,7 @@ async fn handle_finalize_epoch(
     let request: FinalizeEpochRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
+    println!("Finalizing epoch");
     state.server2.write().await.finalize_epoch(&request.prf_key);
 
     // Now, let's read with all of the simulated clients.
@@ -196,6 +197,7 @@ async fn handle_finalize_epoch(
         .get_prf_keys()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    println!("Starting to perform the client reads");
     let futures = (0..NUM_CLIENTS).map(|i| {
         let client_name = format!("WriterClient_{}", i);
         read_without_client(
@@ -209,6 +211,8 @@ async fn handle_finalize_epoch(
     futures::future::try_join_all(futures)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    println!("Client reads finished");
 
     bincode::serialize(&FinalizeEpochResponse { success: true })
         .map(Bytes::from)

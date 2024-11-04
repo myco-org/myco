@@ -81,8 +81,8 @@ async fn main() {
 
     // Generate simulation keys
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
-    let mut simulation_keys = Vec::with_capacity(128);
-    for _ in 0..128 {
+    let mut simulation_keys = Vec::with_capacity(16);
+    for _ in 0..16 {
         simulation_keys.push(Key::random(&mut rng));
     }
     let simulation_keys = Arc::new(simulation_keys);
