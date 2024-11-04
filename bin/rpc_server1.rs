@@ -16,16 +16,21 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use myco_rs::{constants::{LATENCY_BENCH_COUNT, DELTA}, generate_test_certificates, rpc_types::{
-    BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest, QueueWriteResponse,
-}};
+use myco_rs::{
+    constants::{DELTA, LATENCY_BENCH_COUNT},
+    generate_test_certificates,
+    rpc_types::{
+        BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
+        QueueWriteResponse,
+    },
+};
 use myco_rs::{dtypes::Key, network::RemoteServer2Access, server1::Server1};
 use serde::{Deserialize, Serialize};
+use std::{fs, path::Path, process::Command};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tower::ServiceBuilder;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use std::{fs, process::Command, path::Path};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
@@ -36,7 +41,7 @@ struct Ports {
 
 #[derive(Clone)]
 struct AppState {
-    server1: Arc<Mutex<Server1>>,
+    server1: Arc<RwLock<Server1>>,
     batch_write_count: Arc<Mutex<usize>>,
 }
 
@@ -51,10 +56,10 @@ async fn main() {
         .init();
 
     let args: Vec<String> = std::env::args().collect();
-    let s2_addr = args.get(1)
+    let s2_addr = args
+        .get(1)
         .map(|s| s.to_string())
         .unwrap_or_else(|| "https://127.0.0.1:3003".to_string());
-
 
     println!("s2_addr: {}", s2_addr);
     let ports = Ports {
@@ -80,14 +85,10 @@ async fn main() {
         .unwrap();
 
     // Initialize Server1 with Server2 access using the provided or default address
-    let s2_access = Box::new(
-        RemoteServer2Access::new(&s2_addr)
-            .await
-            .unwrap(),
-    );
+    let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
     let server1 = Server1::new(s2_access);
     let state = AppState {
-        server1: Arc::new(Mutex::new(server1)),
+        server1: Arc::new(RwLock::new(server1)),
         batch_write_count: Arc::new(Mutex::new(0)),
     };
 
@@ -96,7 +97,11 @@ async fn main() {
         .route("/batch_write", get(batch_write))
         .route("/batch_init", post(batch_init))
         .route("/finalize_benchmark", post(handle_finalize_benchmark))
-        .layer(ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(1024 * 1024 * 1024 * 1024))) // Set the max request body size.
+        .layer(
+            ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(
+                1024 * 1024 * 1024 * 1024,
+            )),
+        ) // Set the max request body size.
         .with_state(state);
 
     // run tcp server
@@ -118,7 +123,7 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
     // TODO: This should not need a Mutex/RwLock once Server1 is refactored to make the queue_write method threadsafe with DashMap.
     state
         .server1
-        .lock()
+        .write()
         .await
         .queue_write(request.ct, request.f, request.k_oram_t, request.cs)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -131,10 +136,10 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
 /// Queue a write onto Server1. Uses the shared app state for Server1 to queue the write.
 async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /batch_write");
-    
+
     state
         .server1
-        .lock()
+        .write()
         .await
         .async_batch_write()
         .await
@@ -154,7 +159,7 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
     // TODO: This should not need a Mutex/RwLock once Server1 is refactored to make the queue_write method threadsafe with DashMap.
     state
         .server1
-        .lock()
+        .write()
         .await
         .async_batch_init(request.num_writes)
         .await;
@@ -167,9 +172,6 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
 // Add this new endpoint handler
 async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /finalize_benchmark");
-    myco_rs::logging::calculate_and_append_averages(
-        "server1_latency.csv",
-        "server1_bytes.csv",
-    );
+    myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
     Ok(Bytes::from("Benchmark finalized"))
 }

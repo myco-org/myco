@@ -13,20 +13,21 @@ use myco_rs::{
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
+use std::sync::RwLock;
 use std::{
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex},
     time::Instant,
 };
-use tokio::sync::{Mutex as TokioMutex, RwLock};
+use tokio::sync::Mutex as TokioMutex;
 use tower::ServiceBuilder;
 
 const THROUGHPUT_ITERATIONS: usize = 10;
 
 #[derive(Clone)]
-struct AppState {
-    server1: Arc<StdMutex<Server1>>,
+struct Server1TputState {
+    server1: Arc<RwLock<Server1>>,
     writer_clients: Arc<StdMutex<Vec<Client>>>,
     simulation_keys: Arc<Vec<Key>>,
     start_time: Arc<StdMutex<Option<Instant>>>,
@@ -60,7 +61,7 @@ async fn main() {
 
     // Initialize Server1 and state
     let server1 = Server1::new(s2_access);
-    let server1 = Arc::new(StdMutex::new(server1));
+    let server1 = Arc::new(RwLock::new(server1));
 
     // Generate simulation keys
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
@@ -89,7 +90,7 @@ async fn main() {
 
     println!("Writer clients initialized");
 
-    let state = AppState {
+    let state = Server1TputState {
         server1,
         writer_clients: Arc::new(StdMutex::new(writer_clients)),
         simulation_keys,
@@ -118,7 +119,7 @@ async fn main() {
         // TODO: This should not need a Mutex/RwLock once Server1 is refactored to make the queue_write method threadsafe with DashMap.
         state
             .server1
-            .lock()
+            .write()
             .unwrap()
             .async_batch_init(NUM_CLIENTS)
             .await;
@@ -144,7 +145,7 @@ async fn main() {
         // 3. Batch write
         state
             .server1
-            .lock()
+            .write()
             .unwrap()
             .async_batch_write()
             .await

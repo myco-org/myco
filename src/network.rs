@@ -4,7 +4,7 @@ use bincode::{deserialize, serialize};
 use futures::{StreamExt, TryStreamExt};
 use rustls::{Certificate, PrivateKey, RootCertStore, ServerName};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 use std::time::Duration;
 use std::{
     io::{Read, Write},
@@ -448,11 +448,11 @@ pub trait Server1Access: Send {
 // Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer1Access {
-    pub server: Arc<Mutex<Server1>>,
+    pub server: Arc<RwLock<Server1>>,
 }
 
 impl LocalServer1Access {
-    pub fn new(server: Arc<Mutex<Server1>>) -> Self {
+    pub fn new(server: Arc<RwLock<Server1>>) -> Self {
         Self { server }
     }
 }
@@ -466,7 +466,10 @@ impl Server1Access for LocalServer1Access {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        self.server.lock().unwrap().queue_write(ct, f, k_oram_t, cs)
+        self.server
+            .write()
+            .unwrap()
+            .queue_write(ct, f, k_oram_t, cs)
     }
 }
 
