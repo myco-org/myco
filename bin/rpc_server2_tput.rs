@@ -169,6 +169,7 @@ async fn handle_chunk_write(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
+/// This finalizes the epoch AND simulates the client reading from S2.
 async fn handle_finalize_epoch(
     State(state): State<AppState>,
     bytes: Bytes,
@@ -192,7 +193,7 @@ async fn handle_finalize_epoch(
         .get_prf_keys()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    for i in 0..NUM_CLIENTS {
+    let futures = (0..NUM_CLIENTS).map(|i| {
         let client_name = format!("WriterClient_{}", i);
         read_without_client(
             state.server2.clone(),
@@ -201,9 +202,10 @@ async fn handle_finalize_epoch(
             client_name,
             server_keys.clone(),
         )
+    });
+    futures::future::try_join_all(futures)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
 
     bincode::serialize(&FinalizeEpochResponse { success: true })
         .map(Bytes::from)

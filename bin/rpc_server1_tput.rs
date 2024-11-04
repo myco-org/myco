@@ -129,10 +129,15 @@ async fn main() {
         let mut clients = state.writer_clients.lock().unwrap();
         let message = vec![1u8; 16];
 
-        for client in clients.iter_mut() {
-            let key = state.simulation_keys[0].clone();
-            client.async_write(&message, &key).await.unwrap();
-        }
+        let key = state.simulation_keys[0].clone();
+        let futures = clients
+            .iter_mut()
+            .map(|client| client.async_write(&message, &key));
+        futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
 
         println!("All clients wrote");
 

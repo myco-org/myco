@@ -27,10 +27,6 @@ path = "bin/rpc_server1_tput.rs"
 name = "rpc_server2_tput"
 path = "bin/rpc_server2_tput.rs"
 
-[[bin]]
-name = "server2_client_tput_script"
-path = "bin/server2_client_tput_script.rs"
-
 [dependencies]
 aes = "0.8.4"
 aes-gcm = "0.10.3"
