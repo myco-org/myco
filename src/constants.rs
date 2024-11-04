@@ -10,6 +10,7 @@ pub const BATCH_SIZE: usize = 1;
 pub const BUCKET_SIZE_BYTES: usize = Z * BLOCK_SIZE;
 
 pub const LATENCY_BENCH_COUNT: usize = 30;
+pub const THROUGHPUT_ITERATIONS: usize = 10;
 pub const NONCE_SIZE: usize = 12;
 pub const TAG_SIZE: usize = 16;
 pub const BLOCK_SIZE: usize = INNER_BLOCK_SIZE + NONCE_SIZE + TAG_SIZE;

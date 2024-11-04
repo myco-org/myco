@@ -10,7 +10,7 @@ use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
-use myco_rs::constants::FIXED_SEED_TPUT_RNG;
+use myco_rs::constants::{FIXED_SEED_TPUT_RNG, THROUGHPUT_ITERATIONS};
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, NUM_CLIENTS},
@@ -30,8 +30,6 @@ use std::{
 };
 use tokio::sync::Mutex as TokioMutex;
 use tower::ServiceBuilder;
-
-const THROUGHPUT_ITERATIONS: usize = 10;
 
 #[derive(Clone)]
 struct Server1TputState {
@@ -81,8 +79,8 @@ async fn main() {
 
     // Generate simulation keys
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
-    let mut simulation_keys = Vec::with_capacity(16);
-    for _ in 0..16 {
+    let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
+    for _ in 0..BATCH_SIZE {
         simulation_keys.push(Key::random(&mut rng));
     }
     let simulation_keys = Arc::new(simulation_keys);
@@ -194,4 +192,7 @@ async fn main() {
         ),
     )
     .unwrap();
+
+    // Calculate and append averages for latency and bytes
+    myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
 }

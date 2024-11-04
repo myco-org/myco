@@ -15,7 +15,7 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::client::Client;
-use myco_rs::constants::{FIXED_SEED_TPUT_RNG, NUM_CLIENTS};
+use myco_rs::constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS};
 use myco_rs::dtypes::{Key, Path};
 use myco_rs::error::OramError;
 use myco_rs::rpc_types::EpochNumberResponse;
@@ -46,6 +46,9 @@ struct AppState {
     server2: Arc<RwLock<Server2>>,
     write_count: Arc<Mutex<usize>>,
     simulation_keys: Arc<Vec<Key>>,
+    simulation_k_msg: Arc<Vec<Vec<u8>>>,
+    simulation_k_oram: Arc<Vec<Vec<u8>>>,
+    simulation_k_prf: Arc<Vec<Vec<u8>>>,
 }
 
 #[tokio::main]
@@ -81,15 +84,29 @@ async fn main() {
 
     // Generate simulation keys used for the tput benchmarks.
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
-    let mut simulation_keys = Vec::with_capacity(16);
-    for _ in 0..16 {
+    let mut simulation_keys = Vec::with_capacity(BATCH_SIZE);
+    for _ in 0..BATCH_SIZE {
         simulation_keys.push(Key::random(&mut rng));
+    }
+
+    // Pre-compute derived keys
+    let mut simulation_k_msg = Vec::with_capacity(BATCH_SIZE);
+    let mut simulation_k_oram = Vec::with_capacity(BATCH_SIZE);
+    let mut simulation_k_prf = Vec::with_capacity(BATCH_SIZE);
+    
+    for k in &simulation_keys {
+        simulation_k_msg.push(kdf(&k.0, "MSG").unwrap());
+        simulation_k_oram.push(kdf(&k.0, "ORAM").unwrap());
+        simulation_k_prf.push(kdf(&k.0, "PRF").unwrap());
     }
 
     let state = AppState {
         server2: Arc::new(RwLock::new(server2)),
         write_count: Arc::new(Mutex::new(0)),
         simulation_keys: Arc::new(simulation_keys),
+        simulation_k_msg: Arc::new(simulation_k_msg),
+        simulation_k_oram: Arc::new(simulation_k_oram),
+        simulation_k_prf: Arc::new(simulation_k_prf),
     };
 
     let app = Router::new()
@@ -203,7 +220,9 @@ async fn handle_finalize_epoch(
         read_without_client(
             state.server2.clone(),
             epoch,
-            simulation_keys.clone(),
+            state.simulation_k_msg.clone(),
+            state.simulation_k_oram.clone(),
+            state.simulation_k_prf.clone(),
             client_name,
             server_keys.clone(),
         )
@@ -214,6 +233,16 @@ async fn handle_finalize_epoch(
 
     println!("Client reads finished");
 
+    // Increment write count at the end of finalize_epoch
+    let mut write_count = state.write_count.lock().unwrap();
+    *write_count += 1;
+
+    // Calculate averages when all epochs are complete
+    if *write_count == THROUGHPUT_ITERATIONS {
+        println!("All epochs complete, calculating averages");
+        myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
+    }
+
     bincode::serialize(&FinalizeEpochResponse { success: true })
         .map(Bytes::from)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -222,31 +251,28 @@ async fn handle_finalize_epoch(
 async fn read_without_client(
     server2: Arc<RwLock<Server2>>,
     current_epoch: usize,
-    simulation_keys: Vec<Key>,
+    simulation_k_msg: Arc<Vec<Vec<u8>>>,
+    simulation_k_oram: Arc<Vec<Vec<u8>>>,
+    simulation_k_prf: Arc<Vec<Vec<u8>>>,
     cs: String,
     current_prf_keys: Vec<Key>,
 ) -> Result<(), OramError> {
-    // current_epoch is the epoch of server2
     let epoch = current_epoch - 1;
     let cs: Vec<u8> = cs.into_bytes();
-
     let k_s1_t = current_prf_keys.get(current_prf_keys.len() - 1).unwrap();
 
-    // Calculate paths for all keys
     let mut paths = Vec::new();
     let mut key_data = Vec::new();
 
-    for k in simulation_keys {
-        let k_msg = kdf(&k.0, "MSG")?;
-        let k_oram = kdf(&k.0, "ORAM")?;
-        let k_prf = kdf(&k.0, "PRF")?;
-        let k_oram_t = kdf(&k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
-        let f = prf(&k_prf, &epoch.to_be_bytes())?;
+    for i in 0..simulation_k_msg.len() {
+        let k_oram_t = kdf(&simulation_k_oram[i], &epoch.to_string())
+            .map_err(|_| OramError::NoMessageFound)?;
+        let f = prf(&simulation_k_prf[i], &epoch.to_be_bytes())?;
 
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);
         paths.push(l_path);
-        key_data.push((k_msg.clone(), k_oram_t));
+        key_data.push((simulation_k_msg[i].clone(), k_oram_t));
     }
 
     // Get path indices and read paths
