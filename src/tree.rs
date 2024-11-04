@@ -466,6 +466,26 @@ where
 
         results
     }
+
+    pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<&T> {
+        let mut nodes = Vec::new();
+        let mut idx = 1;  // Start at root
+
+        // Check root
+        if let Some(value) = self.get_by_index(idx) {
+            nodes.push(value);
+        }
+
+        // Check each node along the path
+        for &direction in path {
+            idx = 2 * idx + u8::from(direction) as usize;
+            if let Some(value) = self.get_by_index(idx) {
+                nodes.push(value);
+            }
+        }
+
+        nodes
+    }
 }
 
 #[derive(Serialize, Deserialize)]

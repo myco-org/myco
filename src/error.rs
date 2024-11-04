@@ -34,6 +34,8 @@ pub enum OramError {
     TlsError(rustls::Error),
     #[error("Invalid server name")]
     InvalidServerName,
+    #[error("Invalid batch size")]
+    InvalidBatchSize,
 }
 
 impl From<std::io::Error> for OramError {

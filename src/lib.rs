@@ -10,15 +10,14 @@ use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use bincode::{deserialize, serialize};
 use error::OramError;
-use network::{Command, Local, ReadType, WriteType, Server1Access, Server2Access, LocalServer1Access, LocalServer2Access};
+use network::{Local, ReadType, WriteType, Server1Access, Server2Access, LocalServer1Access, LocalServer2Access};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use ring::{digest, hkdf, pbkdf2};
 
+use std::collections::HashSet;
 use std::{
-    collections::HashMap,
-    num::NonZeroU32,
-    sync::{Arc, Mutex},
+    fs, process::Command, path::Path as StdPath,
 };
 use tree::BinaryTree;
 
@@ -30,8 +29,9 @@ pub mod network;
 pub mod server1;
 pub mod server2;
 pub mod tree;
-pub mod tls_server;
 pub mod client;
+pub mod logging;
+pub mod rpc_types;
 
 // Import constants and server modules
 use constants::*;
@@ -99,7 +99,7 @@ pub fn encrypt(
     {
         // In no-enc mode, just pad the message and return it
         return Ok(match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
             EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
         });
     }
@@ -110,7 +110,7 @@ pub fn encrypt(
         let binding = rand::thread_rng().gen::<[u8; 12]>();
         let nonce = Nonce::from_slice(&binding);
         let mut buffer = match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, BLOCK_SIZE),
+            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
             EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
         };
 
@@ -157,6 +157,19 @@ pub fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
         .cloned()
         .collect();
     buf.into_iter().rev().collect()
+}
+
+pub fn get_path_indices(paths: Vec<Path>) -> Vec<usize> {
+    let mut pathset: HashSet<usize> = HashSet::new();
+    pathset.insert(1);
+    paths.iter().for_each(|p| {
+        p.clone().into_iter().fold(1, |acc, d| {
+            let idx = 2 * acc + u8::from(d) as usize;
+            pathset.insert(idx);
+            idx
+        });
+    });
+    pathset.into_iter().collect()
 }
 
 /// Helper function to calculate the bucket usage of the server.
@@ -235,4 +248,80 @@ pub fn calculate_bucket_usage(
         max_usage, max_depth, average_usage, median_usage, std_dev
     );
     (max_usage, max_depth, average_usage, median_usage, std_dev)
+}
+
+pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
+    // Use StdPath instead of Path
+    if !StdPath::new("certs").exists() {
+        fs::create_dir("certs")?;
+    }
+    if StdPath::new("certs/server-cert.pem").exists() && StdPath::new("certs/server-key.pem").exists() {
+        // Clean up old certificates to ensure we have fresh ones
+        fs::remove_file("certs/server-cert.pem")?;
+        fs::remove_file("certs/server-key.pem")?;
+    }
+
+    // Create a config file for OpenSSL
+    fs::write(
+        "openssl.cnf",
+        r#"
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+"#,
+    )?;
+
+    // Generate private key and self-signed certificate using OpenSSL
+    Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:4096",
+            "-keyout",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-cert.pem",
+            "-days",
+            "365",
+            "-nodes",
+            "-config",
+            "openssl.cnf",
+            "-extensions",
+            "v3_req",
+        ])
+        .output()?;
+
+    // Convert the key to PKCS8 format which rustls expects
+    Command::new("openssl")
+        .args([
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-key.pem.tmp",
+        ])
+        .output()?;
+
+    // Replace the original key with the PKCS8 version
+    fs::rename("certs/server-key.pem.tmp", "certs/server-key.pem")?;
+
+    // Clean up the config file
+    fs::remove_file("openssl.cnf")?;
+
+    Ok(())
 }

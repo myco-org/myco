@@ -7,7 +7,7 @@ use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA};
+use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA, Z};
 
 pub(crate) type Timestamp = u64;
 
@@ -184,7 +184,7 @@ pub struct Bucket(Vec<Block>);
 
 impl TreeValue for Bucket {
     fn new_random() -> Self {
-        Bucket(vec![Block::new_random(); BLOCK_SIZE])
+        Bucket(vec![Block::new_random(); Z])
     }
 }
 
@@ -229,6 +229,10 @@ impl Bucket {
 
     pub fn shuffle<R: RngCore + Rng>(&mut self, rng: &mut R) {
         self.0.shuffle(rng);
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Block> {
+        self.0.iter()
     }
 }
 

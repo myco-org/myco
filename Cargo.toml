@@ -8,12 +8,24 @@ name = "simulation"
 path = "bin/simulation.rs"
 
 [[bin]]
-name = "tls_server2"
-path = "bin/tls_server2.rs"
+name = "rpc_server1"
+path = "bin/rpc_server1.rs"
 
 [[bin]]
-name = "tls_server1"
-path = "bin/tls_server1.rs"
+name = "rpc_server2"
+path = "bin/rpc_server2.rs"
+
+[[bin]]
+name = "rpc_client"
+path = "bin/rpc_client.rs"
+
+[[bin]]
+name = "rpc_server1_tput"
+path = "bin/rpc_server1_tput.rs"
+
+[[bin]]
+name = "rpc_server2_tput"
+path = "bin/rpc_server2_tput.rs"
 
 [dependencies]
 aes = "0.8.4"
@@ -36,8 +48,20 @@ tokio-rustls = "0.24"
 rustls = "0.21"
 rustls-pemfile = "1.0"
 futures = "0.3"
+lazy_static = "1.4.0"
+axum-server = { version = "0.7.1", features = ["tls-rustls"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+axum = "0.7.7"
+reqwest = { version = "0.12.9", features = ["json"] }
+anyhow = "1.0.92"
+tower = "0.4"
+tower-http = { version = "0.4", features = ["timeout", "trace"] }
+socket2 = "0.5"
 
 [features]
 simulation = []
 no-enc = []
 network = []
+perf-logging = []
+bytes-logging = []
