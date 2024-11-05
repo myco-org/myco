@@ -3,3 +3,4 @@ db/
 certs/
 test_sims/
 logs/
+bucket_usage_sims/

@@ -127,11 +127,7 @@ impl Server1 {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        let t_exp = if self.epoch < DB_SIZE as u64 {
-            DB_SIZE as u64
-        } else {
-            self.epoch + DELTA as u64
-        };
+        let t_exp = self.epoch + DELTA as u64;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
