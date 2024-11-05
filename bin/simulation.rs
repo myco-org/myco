@@ -19,11 +19,13 @@ use rand::{Rng, SeedableRng};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
+use std::fs::create_dir_all;
 use std::sync::RwLock;
 use std::{
     process::Command,
     sync::{Arc, Mutex},
 };
+use std::io::Write;
 
 fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
@@ -63,7 +65,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
 
         // Measure write latency
         let write_start_time = std::time::Instant::now();
-        clients.iter_mut().for_each(|client| {
+        clients.par_iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             #[cfg(feature = "no-enc")]
             client.fake_write().expect("Write failed");
@@ -112,7 +114,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     );
 }
 
-fn run_single_client_simulation(num_epochs: usize) {
+fn run_simulation(num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
     use std::time::Duration;
 
@@ -124,35 +126,38 @@ fn run_single_client_simulation(num_epochs: usize) {
     let mut rng = ChaCha20Rng::from_entropy();
     let mut total_duration: Duration = Duration::new(0, 0);
     let mut successful_epochs = 0;
-
-    // Setup single client
     let key = Key::random(&mut rng);
-    let mut client = Client::new("Client_0".to_string(), s1_access.clone(), s2_access.clone());
-    client.setup(&key).expect("Setup failed");
+    // Setup multiple clients
+    let mut clients = Vec::new();
+    for i in 0..NUM_CLIENTS {
+        let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
+        client.setup(&key).expect("Setup failed");
+        clients.push(client);
+    }
 
     // Track bucket usage statistics over time
-    let check_interval = 100000 as usize;
+    let check_interval = 1000 as usize;
     let mut usage_stats: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
-    let k_msg = client.keys.get(&key).unwrap().0.clone();
+    let k_msg = clients[0].keys.get(&key).unwrap().0.clone();
 
     // Perform multiple epochs
     for epoch in 0..num_epochs {
-        println!("========== Starting epoch: {} ==========", epoch);
-
         let epoch_start_time = std::time::Instant::now();
 
-        // Single client batch_init
+        // Multi-client batch_init
         let batch_init_start_time = std::time::Instant::now();
-        s1.write().unwrap().batch_init(1);
+        s1.write().unwrap().batch_init(NUM_CLIENTS);
         let batch_init_duration = batch_init_start_time.elapsed();
 
-        // Single write
+        // Multiple writes
         let write_start_time = std::time::Instant::now();
-        let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
-        #[cfg(feature = "no-enc")]
-        client.fake_write().expect("Write failed");
-        #[cfg(not(feature = "no-enc"))]
-        client.write(&message, &key).expect("Write failed");
+        clients.par_iter_mut().for_each(|client| {
+            let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
+            #[cfg(feature = "no-enc")]
+            client.fake_write().expect("Write failed");
+            #[cfg(not(feature = "no-enc"))]
+            client.write(&message, &key).expect("Write failed");
+        });
         let write_duration = write_start_time.elapsed();
 
         // Batch write
@@ -160,28 +165,11 @@ fn run_single_client_simulation(num_epochs: usize) {
         s1.write().unwrap().batch_write();
         let batch_write_duration = batch_write_start_time.elapsed();
 
-        // Read
-        let read_start_time = std::time::Instant::now();
-        let read_result: Vec<u8> = client
-            .read(&key, client.id.clone(), 0)
-            .expect(&format!("Read failed in epoch {}", epoch));
-        let read_duration = read_start_time.elapsed();
-
         // Calculate durations
         let epoch_duration = epoch_start_time.elapsed();
         total_duration += epoch_duration;
         successful_epochs += 1;
 
-        println!(
-            "Epoch {} completed in {:?} (batch_init: {:?}, write: {:?}, batch_write: {:?}, read: {:?})",
-            epoch, epoch_duration, batch_init_duration, write_duration, batch_write_duration, read_duration,
-        );
-
-        println!(
-            "Total duration so far: {:?}, average duration: {:?}",
-            total_duration,
-            total_duration / successful_epochs as u32
-        );
 
         // Calculate bucket usage at specified intervals
         if (epoch + 1) % check_interval == 0 {
@@ -192,6 +180,29 @@ fn run_single_client_simulation(num_epochs: usize) {
                 &k_msg,
             );
             usage_stats.push(stats);
+
+            // Create directory if it doesn't exist
+            create_dir_all("bucket_usage_sims").expect("Failed to create directory");
+
+            // Open file in append mode
+            let filename = format!("bucket_usage_sims/bucket_usage1_{}_{}", DELTA, NUM_CLIENTS);
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(filename)
+                .expect("Failed to open file");
+
+            // Write the stats
+            writeln!(
+                file,
+                "{}\t{}\t{}\t{:.2}\t{:.2}\t{:.2}",
+                epoch + 1,
+                stats.0,  // max_usage
+                stats.1,  // max_depth
+                stats.2,  // avg_usage
+                stats.3,  // median_usage
+                stats.4   // std_dev
+            ).expect("Failed to write to file");
         }
     }
 
@@ -293,7 +304,7 @@ fn run_local_latency_benchmark() {
         let start = std::time::Instant::now();
         let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
         #[cfg(feature = "no-enc")]
-        client.fake_write().expect("Write failed");
+        clients[0].fake_write().expect("Write failed");
         #[cfg(not(feature = "no-enc"))]
         clients[0].write(&message, &keys[0]).expect("Write failed");
         write_times.push(start.elapsed());
@@ -356,7 +367,7 @@ fn main() {
     let simulation_type = &args[1];
 
     match simulation_type.as_str() {
-        "single" => run_single_client_simulation(262144),
+        "sim" => run_simulation(DELTA*DELTA*DELTA),
         "multi" => run_multi_client_simulation(NUM_CLIENTS, DELTA),
         "benchmark" => run_local_latency_benchmark(),
         _ => panic!("Unknown simulation type. Use: single, multi, or benchmark"),

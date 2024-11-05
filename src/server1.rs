@@ -116,11 +116,6 @@ impl Server1 {
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
-        println!(
-            "Server1: Initialized batch for epoch {}/{}",
-            self.epoch + 1,
-            DELTA
-        );
     }
 
     /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
@@ -294,7 +289,6 @@ impl Server1 {
         // Measure metadata overwrite time
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
 
-        println!("Server1: Writing to Server2");
         let write_result = futures::executor::block_on(
             self.s2
                 .write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()),
