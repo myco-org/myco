@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             assert!(response.success);
 
             // Process the single client for reading
-            let batch_sizes = vec![1, 16, 64, 128];
+            let batch_sizes = vec![2, 16, 64, 128];
             
             for batch_size in batch_sizes {
                 let simulation_keys_subset = simulation_keys[0..batch_size].to_vec();
