@@ -279,6 +279,21 @@ impl Server1 {
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
 
+        // After processing all buckets, find the maximum capacity
+        #[cfg(feature = "no-enc")]
+        {
+            let mut max_capacity = 0;
+            let mut max_depth = 0;
+            self.pt.packed_buckets.iter().enumerate().for_each(|(idx, bucket)| {
+                if bucket.len() > max_capacity {
+                    max_capacity = bucket.len();
+                    // For 1-based indexing (root at 1), depth = floor(log2(idx))
+                    max_depth = ((idx as f64).log2()).floor() as usize;
+                }
+            });
+            println!("Epoch: {} Usage: {} Depth: {}", self.epoch, max_capacity, max_depth);
+        }
+
         // Reset the message queue
         self.message_queue.clear();
 
@@ -445,6 +460,24 @@ impl Server1 {
                 }
             });
         process_queued_buckets_latency.finish();
+
+        // After processing all buckets, find the maximum capacity
+        #[cfg(feature = "no-enc")]
+        {
+            let mut max_capacity = 0;
+            let mut max_depth = 0;
+            self.pt.packed_buckets.iter().enumerate().for_each(|(idx, bucket)| {
+                if bucket.len() > max_capacity {
+                    max_capacity = bucket.len();
+                    // Calculate depth based on index in the tree
+                    max_depth = (idx as f64).log2().floor() as usize;
+                }
+            });
+            println!(
+                "Maximum bucket capacity at epoch {}: {} blocks at depth {}",
+                self.epoch, max_capacity, max_depth
+            );
+        }
 
         // Reset the message queue
         self.message_queue.clear();

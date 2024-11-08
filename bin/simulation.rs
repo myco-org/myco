@@ -171,39 +171,39 @@ fn run_simulation(num_epochs: usize) {
         successful_epochs += 1;
 
 
-        // Calculate bucket usage at specified intervals
-        if (epoch + 1) % check_interval == 0 {
-            println!("Calculating bucket usage at epoch {}...", epoch);
-            let stats = calculate_bucket_usage(
-                &s2.lock().unwrap().tree,
-                &s1.read().unwrap().metadata,
-                &k_msg,
-            );
-            usage_stats.push(stats);
+        // // Calculate bucket usage at specified intervals
+        // if (epoch + 1) % check_interval == 0 {
+        //     println!("Calculating bucket usage at epoch {}...", epoch);
+        //     let stats = calculate_bucket_usage(
+        //         &s2.lock().unwrap().tree,
+        //         &s1.read().unwrap().metadata,
+        //         &k_msg,
+        //     );
+        //     usage_stats.push(stats);
 
-            // Create directory if it doesn't exist
-            create_dir_all("bucket_usage_sims").expect("Failed to create directory");
+        //     // Create directory if it doesn't exist
+        //     create_dir_all("bucket_usage_sims").expect("Failed to create directory");
 
-            // Open file in append mode
-            let filename = format!("bucket_usage_sims/bucket_usage1_{}_{}", DELTA, NUM_CLIENTS);
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(filename)
-                .expect("Failed to open file");
+        //     // Open file in append mode
+        //     let filename = format!("bucket_usage_sims/bucket_usage1_{}_{}", DELTA, NUM_CLIENTS);
+        //     let mut file = std::fs::OpenOptions::new()
+        //         .create(true)
+        //         .append(true)
+        //         .open(filename)
+        //         .expect("Failed to open file");
 
-            // Write the stats
-            writeln!(
-                file,
-                "{}\t{}\t{}\t{:.2}\t{:.2}\t{:.2}",
-                epoch + 1,
-                stats.0,  // max_usage
-                stats.1,  // max_depth
-                stats.2,  // avg_usage
-                stats.3,  // median_usage
-                stats.4   // std_dev
-            ).expect("Failed to write to file");
-        }
+        //     // Write the stats
+        //     writeln!(
+        //         file,
+        //         "{}\t{}\t{}\t{:.2}\t{:.2}\t{:.2}",
+        //         epoch + 1,
+        //         stats.0,  // max_usage
+        //         stats.1,  // max_depth
+        //         stats.2,  // avg_usage
+        //         stats.3,  // median_usage
+        //         stats.4   // std_dev
+        //     ).expect("Failed to write to file");
+        // }
     }
 
     println!(

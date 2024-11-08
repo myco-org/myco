@@ -1,6 +1,6 @@
 /target
-db/
-certs/
-test_sims/
-logs/
-bucket_usage_sims/
+/db/
+/certs/
+/test_sims/
+/logs/
+/bucket_usage_sims/
