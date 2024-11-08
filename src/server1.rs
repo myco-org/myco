@@ -116,11 +116,6 @@ impl Server1 {
 
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
-        println!(
-            "Server1: Initialized batch for epoch {}/{}",
-            self.epoch + 1,
-            DELTA
-        );
     }
 
     /// Queues an individual write. Must be finalized with finalize_batch_write. Every time you finalize
@@ -132,11 +127,7 @@ impl Server1 {
         k_oram_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), OramError> {
-        let t_exp = if self.epoch < DB_SIZE as u64 {
-            DB_SIZE as u64
-        } else {
-            self.epoch + DELTA as u64
-        };
+        let t_exp = self.epoch + DELTA as u64;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
@@ -288,13 +279,27 @@ impl Server1 {
             });
         let bucket_processing_duration = bucket_processing_start.elapsed();
 
+        // After processing all buckets, find the maximum capacity
+        #[cfg(feature = "no-enc")]
+        {
+            let mut max_capacity = 0;
+            let mut max_depth = 0;
+            self.pt.packed_buckets.iter().enumerate().for_each(|(idx, bucket)| {
+                if bucket.len() > max_capacity {
+                    max_capacity = bucket.len();
+                    // For 1-based indexing (root at 1), depth = floor(log2(idx))
+                    max_depth = ((idx as f64).log2()).floor() as usize;
+                }
+            });
+            println!("Epoch: {} Usage: {} Depth: {}", self.epoch, max_capacity, max_depth);
+        }
+
         // Reset the message queue
         self.message_queue.clear();
 
         // Measure metadata overwrite time
         self.metadata.overwrite_from_sparse(&self.metadata_pt);
 
-        println!("Server1: Writing to Server2");
         let write_result = futures::executor::block_on(
             self.s2
                 .write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()),
@@ -455,6 +460,24 @@ impl Server1 {
                 }
             });
         process_queued_buckets_latency.finish();
+
+        // After processing all buckets, find the maximum capacity
+        #[cfg(feature = "no-enc")]
+        {
+            let mut max_capacity = 0;
+            let mut max_depth = 0;
+            self.pt.packed_buckets.iter().enumerate().for_each(|(idx, bucket)| {
+                if bucket.len() > max_capacity {
+                    max_capacity = bucket.len();
+                    // Calculate depth based on index in the tree
+                    max_depth = (idx as f64).log2().floor() as usize;
+                }
+            });
+            println!(
+                "Maximum bucket capacity at epoch {}: {} blocks at depth {}",
+                self.epoch, max_capacity, max_depth
+            );
+        }
 
         // Reset the message queue
         self.message_queue.clear();
