@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum OramError {
+pub enum MycoError {
     #[error("HKDF expansion failed")]
     HkdfExpansionFailed,
     #[error("HKDF fill failed")]
@@ -38,14 +38,14 @@ pub enum OramError {
     InvalidBatchSize,
 }
 
-impl From<std::io::Error> for OramError {
+impl From<std::io::Error> for MycoError {
     fn from(err: std::io::Error) -> Self {
-        OramError::IoError(err)
+        MycoError::IoError(err)
     }
 }
 
-impl From<rustls::Error> for OramError {
+impl From<rustls::Error> for MycoError {
     fn from(err: rustls::Error) -> Self {
-        OramError::TlsError(err)
+        MycoError::TlsError(err)
     }
 }

@@ -15,7 +15,7 @@ use crate::network::{
 use crate::tree::SparseBinaryTree;
 use crate::{
     constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
-    EncryptionType, Key, Metadata, OramError, Path,
+    EncryptionType, Key, Metadata, MycoError, Path,
 };
 use bincode::{deserialize, serialize};
 use dashmap::DashMap;
@@ -124,21 +124,21 @@ impl Server1 {
         &mut self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
         let t_exp = self.epoch + DELTA as u64;
         let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
             .pt
             .lca_idx(&intended_message_path)
-            .ok_or(OramError::LcaNotFound)?;
+            .ok_or(MycoError::LcaNotFound)?;
 
         // Queue the write.
         self.message_queue.entry(lca_idx).or_default().push((
             ct,
-            k_oram_t,
+            k_oblv_t,
             t_exp,
             intended_message_path,
         ));
@@ -146,7 +146,7 @@ impl Server1 {
         Ok(())
     }
 
-    pub fn batch_write(&mut self) -> Result<(), OramError> {
+    pub fn batch_write(&mut self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -160,15 +160,15 @@ impl Server1 {
                     let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
-                            let (l, k_oram_t, t_exp) = metadata_block;
+                            let (l, k_oblv_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
                                 // Real decryption
-                                let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
+                                let ct = decrypt(&k_oblv_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
                                     ct,
-                                    k_oram_t.clone(),
+                                    k_oblv_t.clone(),
                                     *t_exp,
                                     l.clone(),
                                 ));
@@ -198,9 +198,9 @@ impl Server1 {
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
                 let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
-                    for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
-                        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-                            .map_err(|_| OramError::EncryptionFailed)
+                    for (ct, k_oblv_t, t_exp, intended_message_path) in blocks.iter() {
+                        let c_msg = encrypt(&k_oblv_t.0, &ct, EncryptionType::DoubleEncrypt)
+                            .map_err(|_| MycoError::EncryptionFailed)
                             .unwrap();
 
                         // Insert the message into the pt bucket.
@@ -212,7 +212,7 @@ impl Server1 {
                         if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                             metadata_bucket.push(
                                 intended_message_path.clone(),
-                                k_oram_t.clone(),
+                                k_oblv_t.clone(),
                                 *t_exp,
                             );
                         }
@@ -315,10 +315,10 @@ impl Server1 {
             }
         };
 
-        result.map_err(|_| OramError::NoMessageFound)
+        result.map_err(|_| MycoError::NoMessageFound)
     }
 
-    pub async fn async_batch_write(&mut self) -> Result<(), OramError> {
+    pub async fn async_batch_write(&mut self) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("server1_batch_write_end_to_end");  
         let local_latency = LatencyMetric::new("server1_batch_write_local");
         let mut rng = ChaCha20Rng::from_entropy();
@@ -334,15 +334,15 @@ impl Server1 {
                     let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
-                            let (l, k_oram_t, t_exp) = metadata_block;
+                            let (l, k_oblv_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
                                 // Real decryption
-                                let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
+                                let ct = decrypt(&k_oblv_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
                                     ct,
-                                    k_oram_t.clone(),
+                                    k_oblv_t.clone(),
                                     *t_exp,
                                     l.clone(),
                                 ));
@@ -377,9 +377,9 @@ impl Server1 {
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
                 let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
-                    for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
-                        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-                            .map_err(|_| OramError::EncryptionFailed)
+                    for (ct, k_oblv_t, t_exp, intended_message_path) in blocks.iter() {
+                        let c_msg = encrypt(&k_oblv_t.0, &ct, EncryptionType::DoubleEncrypt)
+                            .map_err(|_| MycoError::EncryptionFailed)
                             .unwrap();
 
                         // Insert the message into the pt bucket.
@@ -391,7 +391,7 @@ impl Server1 {
                         if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                             metadata_bucket.push(
                                 intended_message_path.clone(),
-                                k_oram_t.clone(),
+                                k_oblv_t.clone(),
                                 *t_exp,
                             );
                         }
@@ -508,6 +508,6 @@ impl Server1 {
             }
         };
 
-        result.map_err(|_| OramError::NoMessageFound)
+        result.map_err(|_| MycoError::NoMessageFound)
     }
 }

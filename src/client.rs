@@ -8,7 +8,7 @@
 
 use crate::constants::{BLOCK_SIZE, D};
 use crate::dtypes::{Bucket, Key, Path};
-use crate::error::OramError;
+use crate::error::MycoError;
 use crate::logging::LatencyMetric;
 use crate::network::{
     Command, Local, LocalServer1Access, LocalServer2Access, ReadType, RemoteServer1Access,
@@ -44,45 +44,45 @@ impl Client {
         }
     }
 
-    pub fn setup(&mut self, k: &Key) -> Result<(), OramError> {
+    pub fn setup(&mut self, k: &Key) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("client_setup_end_to_end");
         let k_msg = kdf(&k.0, "MSG")?;
-        let k_oram = kdf(&k.0, "ORAM")?;
+        let k_oblv = kdf(&k.0, "ORAM")?;
         let k_prf = kdf(&k.0, "PRF")?;
-        self.keys.insert(k.clone(), (k_msg, k_oram, k_prf));
+        self.keys.insert(k.clone(), (k_msg, k_oblv, k_prf));
         end_to_end_latency.finish();
         Ok(())
     }
 
-    pub async fn async_write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
+    pub async fn async_write(&mut self, msg: &[u8], k: &Key) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("client_write_end_to_end");
         let local_latency = LatencyMetric::new("client_write_local");
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
-        let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
+        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap();
         let f = prf(k_prf, &epoch.to_be_bytes())?;
-        let k_oram_t = kdf(k_oram, &epoch.to_string())?;
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?;
         let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
 
         self.epoch += 1;
         local_latency.finish();
-        self.s1.queue_write(ct, f, Key::new(k_oram_t), cs).await;
+        self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs).await;
         end_to_end_latency.finish();
         Ok(())
     }
 
-    pub fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), OramError> {
+    pub fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), MycoError> {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
-        let (k_msg, k_oram, k_prf) = self.keys.get(k).unwrap();
+        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap();
         let f = prf(k_prf, &epoch.to_be_bytes())?;
-        let k_oram_t = kdf(k_oram, &epoch.to_string())?;
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?;
         let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
 
         self.epoch += 1;
-        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oram_t), cs))
+        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs))
     }
 
     pub async fn async_read(
@@ -91,9 +91,9 @@ impl Client {
         cs: String,
         epoch_past: usize,
         batch_size: usize,
-    ) -> Result<Vec<Vec<u8>>, OramError> {
+    ) -> Result<Vec<Vec<u8>>, MycoError> {
         if keys.len() != batch_size {
-            return Err(OramError::InvalidBatchSize);
+            return Err(MycoError::InvalidBatchSize);
         }
 
         let end_to_end_latency =
@@ -110,12 +110,12 @@ impl Client {
             .s2
             .get_prf_keys()
             .await
-            .map_err(|_| OramError::NoMessageFound)?;
+            .map_err(|_| MycoError::NoMessageFound)?;
         get_prf_keys_latency.finish();
         local_latency.resume();
 
         if server_keys.is_empty() || epoch_past >= server_keys.len() {
-            return Err(OramError::NoMessageFound);
+            return Err(MycoError::NoMessageFound);
         }
 
         let k_s1_t = server_keys.get(server_keys.len() - 1 - epoch_past).unwrap();
@@ -125,15 +125,15 @@ impl Client {
         let mut key_data = Vec::with_capacity(batch_size);
 
         for k in keys {
-            let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-            let k_oram_t =
-                kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+            let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap();
+            let k_oblv_t =
+                kdf(k_oblv, &epoch.to_string()).map_err(|_| MycoError::NoMessageFound)?;
             let f = prf(&k_prf, &epoch.to_be_bytes())?;
 
             let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
             let l_path = Path::from(l);
             paths.push(l_path);
-            key_data.push((k_msg.clone(), k_oram_t));
+            key_data.push((k_msg.clone(), k_oblv_t));
         }
 
         // Get path indices and read paths
@@ -145,7 +145,7 @@ impl Client {
             .s2
             .read_paths_client(indices.clone(), batch_size)
             .await
-            .map_err(|_| OramError::NoMessageFound)?;
+            .map_err(|_| MycoError::NoMessageFound)?;
         read_latency.finish();
         local_latency.resume();
 
@@ -156,14 +156,14 @@ impl Client {
         let bucket_tree = SparseBinaryTree::new_with_data(buckets, indices);
 
         // Now process each key along its specific path
-        for ((k_msg, k_oram_t), path) in key_data.into_iter().zip(paths.iter()) {
+        for ((k_msg, k_oblv_t), path) in key_data.into_iter().zip(paths.iter()) {
             let mut found = false;
             // Only check buckets along this key's path
             let path_buckets = bucket_tree.get_all_nodes_along_path(&path);
 
             for bucket in path_buckets {
                 for block in bucket.iter() {
-                    if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
+                    if let Ok(ct) = decrypt(&k_oblv_t, &block.0) {
                         if let Ok(msg) = decrypt(&k_msg, &ct) {
                             messages.push(trim_zeros(&msg));
                             found = true;
@@ -186,23 +186,23 @@ impl Client {
         Ok(messages)
     }
 
-    pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, OramError> {
+    pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, MycoError> {
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
 
-        let (k_msg, k_oram, k_prf) = self.keys.get(&k).unwrap();
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).map_err(|_| OramError::NoMessageFound)?;
+        let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap();
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string()).map_err(|_| MycoError::NoMessageFound)?;
         let f = prf(&k_prf, &epoch.to_be_bytes())?;
 
         let keys = futures::executor::block_on(self.s2.get_prf_keys())
-            .map_err(|_| OramError::NoMessageFound)?;
+            .map_err(|_| MycoError::NoMessageFound)?;
         if keys.is_empty() {
-            return Err(OramError::NoMessageFound);
+            return Err(MycoError::NoMessageFound);
         }
 
         // Add bounds checking
         if epoch_past >= keys.len() {
-            return Err(OramError::NoMessageFound);
+            return Err(MycoError::NoMessageFound);
         }
 
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
@@ -211,25 +211,25 @@ impl Client {
 
         let indices = get_path_indices(vec![l_path]);
         let path = futures::executor::block_on(self.s2.read_paths_client(indices, BATCH_SIZE))
-            .map_err(|_| OramError::NoMessageFound)?;
+            .map_err(|_| MycoError::NoMessageFound)?;
 
         for bucket in path {
             for block in bucket {
-                if let Ok(ct) = decrypt(&k_oram_t, &block.0) {
+                if let Ok(ct) = decrypt(&k_oblv_t, &block.0) {
                     return decrypt(k_msg, &ct).map(|buf| trim_zeros(&buf));
                 }
             }
         }
-        Err(OramError::NoMessageFound)
+        Err(MycoError::NoMessageFound)
     }
 
-    pub fn fake_write(&self) -> Result<(), OramError> {
+    pub fn fake_write(&self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
-        let k_oram_t: Key = Key::random(&mut rng);
+        let k_oblv_t: Key = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs: Vec<u8> = self.id.clone().into_bytes();
-        futures::executor::block_on(self.s1.queue_write(ct, l, k_oram_t, cs))
+        futures::executor::block_on(self.s1.queue_write(ct, l, k_oblv_t, cs))
     }
 
     pub fn fake_read(&self) -> Vec<Bucket> {

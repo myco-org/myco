@@ -10,7 +10,7 @@ use rand_chacha::ChaCha20Rng;
 use tokio::stream;
 
 use crate::{
-    error::OramError,
+    error::MycoError,
     logging::LatencyMetric,
     network::{Command, ReadType, WriteType},
     tree::{BinaryTree, TreeValue},
@@ -53,7 +53,7 @@ impl Server2 {
     }
 
     /// l is the leaf block.
-    pub fn read(&self, l: &Path) -> Result<Vec<Bucket>, OramError> {
+    pub fn read(&self, l: &Path) -> Result<Vec<Bucket>, MycoError> {
         let read_latency = LatencyMetric::new("server2_read");
         let buckets = self.tree.get_all_nodes_along_path(l);
         read_latency.finish();
@@ -113,7 +113,7 @@ impl Server2 {
         self.add_prf_key(key);
     }
 
-    pub fn get_prf_keys(&self) -> Result<Vec<Key>, OramError> {
+    pub fn get_prf_keys(&self) -> Result<Vec<Key>, MycoError> {
         Ok(self.prf_keys.clone())
     }
 
@@ -133,7 +133,7 @@ impl Server2 {
     }
 
     /// Read a chunk of buckets from the server.
-    pub fn read_pathset_chunk(&self, chunk_idx: usize) -> Result<Vec<Bucket>, OramError> {
+    pub fn read_pathset_chunk(&self, chunk_idx: usize) -> Result<Vec<Bucket>, MycoError> {
         let read_paths_latency: LatencyMetric = LatencyMetric::new("server2_read_paths");
         let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
@@ -151,7 +151,7 @@ impl Server2 {
         &self,
         chunk_idx: usize,
         indices: Vec<usize>,
-    ) -> Result<Vec<Bucket>, OramError> {
+    ) -> Result<Vec<Bucket>, MycoError> {
         let read_paths_latency: LatencyMetric = LatencyMetric::new("server2_read_paths_client");
         let start_idx = chunk_idx * NUM_BUCKETS_PER_READ_PATHS_CHUNK;
         let end_idx = start_idx + NUM_BUCKETS_PER_READ_PATHS_CHUNK;
@@ -168,7 +168,7 @@ impl Server2 {
     pub fn read_and_store_path_indices(
         &mut self,
         pathset: Vec<usize>,
-    ) -> Result<Vec<Bucket>, OramError> {
+    ) -> Result<Vec<Bucket>, MycoError> {
         let read_paths_latency = LatencyMetric::new("server2_read_paths");
         self.pathset_indices = pathset.clone();
 
@@ -180,7 +180,7 @@ impl Server2 {
         Ok(buckets)
     }
 
-    pub fn read_paths_client(&self, pathset: Vec<usize>) -> Result<Vec<Bucket>, OramError> {
+    pub fn read_paths_client(&self, pathset: Vec<usize>) -> Result<Vec<Bucket>, MycoError> {
         let read_paths_latency = LatencyMetric::new("server2_read_paths_client!");
         let buckets: Vec<Bucket> = pathset
             .iter()

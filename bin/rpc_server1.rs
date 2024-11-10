@@ -131,7 +131,7 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
         .server1
         .write()
         .await
-        .queue_write(request.ct, request.f, request.k_oram_t, request.cs)
+        .queue_write(request.ct, request.f, request.k_oblv_t, request.cs)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     bincode::serialize(&QueueWriteResponse { success: true })

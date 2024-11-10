@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct QueueWriteRequest {
     pub ct: Vec<u8>,
     pub f: Vec<u8>,
-    pub k_oram_t: Key,
+    pub k_oblv_t: Key,
     pub cs: Vec<u8>,
 }
 

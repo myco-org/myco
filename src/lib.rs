@@ -9,7 +9,7 @@
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use bincode::{deserialize, serialize};
-use error::OramError;
+use error::MycoError;
 use network::{Local, ReadType, WriteType, Server1Access, Server2Access, LocalServer1Access, LocalServer2Access};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -40,22 +40,22 @@ use server1::Server1;
 use server2::Server2;
 
 // Key Derivation Function (KDF)
-pub fn kdf(key: &[u8], input: &str) -> Result<Vec<u8>, OramError> {
+pub fn kdf(key: &[u8], input: &str) -> Result<Vec<u8>, MycoError> {
     let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
     let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
     let binding = [input.as_bytes()];
     let okm = prk
         .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| OramError::HkdfExpansionFailed)?;
+        .map_err(|_| MycoError::HkdfExpansionFailed)?;
     let mut result = vec![0u8; 32];
     okm.fill(&mut result)
-        .map_err(|_| OramError::HkdfFillFailed)?;
+        .map_err(|_| MycoError::HkdfFillFailed)?;
     Ok(result[..16].to_vec())
 }
 
 // Pseudorandom Function (PRF)
 // Make this an arbitrary-length PRF
-pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, OramError> {
+pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, MycoError> {
     // Fixed output length of 32 bytes
     let output_length = 32;
 
@@ -67,11 +67,11 @@ pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, OramError> {
     let binding = [input];
     let okm = prk
         .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| OramError::HkdfExpansionFailed)?;
+        .map_err(|_| MycoError::HkdfExpansionFailed)?;
 
     // Allocate output buffer with fixed length of 32 bytes
     let mut result = vec![0u8; output_length];
-    okm.fill(&mut result).map_err(|_| OramError::HkdfFillFailed)?;
+    okm.fill(&mut result).map_err(|_| MycoError::HkdfFillFailed)?;
     Ok(result)
 }
 
@@ -94,7 +94,7 @@ pub fn encrypt(
     key: &[u8],
     message: &[u8],
     encryption_type: EncryptionType,
-) -> Result<Vec<u8>, OramError> {
+) -> Result<Vec<u8>, MycoError> {
     #[cfg(feature = "no-enc")]
     {
         // In no-enc mode, just pad the message and return it
@@ -106,7 +106,7 @@ pub fn encrypt(
 
     #[cfg(not(feature = "no-enc"))]
     {
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::EncryptionFailed)?;
+        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::EncryptionFailed)?;
         let binding = rand::thread_rng().gen::<[u8; 12]>();
         let nonce = Nonce::from_slice(&binding);
         let mut buffer = match encryption_type {
@@ -116,14 +116,14 @@ pub fn encrypt(
 
         cipher
             .encrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| OramError::EncryptionFailed)?;
+            .map_err(|_| MycoError::EncryptionFailed)?;
 
         Ok([nonce.as_slice(), buffer.as_slice()].concat())
     }
 }
 
 // Decrypt a ciphertext
-pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, OramError> {
+pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, MycoError> {
     #[cfg(feature = "no-enc")]
     {
         // In no-enc mode, just return the input
@@ -133,17 +133,17 @@ pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, OramError> {
     #[cfg(not(feature = "no-enc"))]
     {
         if ciphertext.len() < 12 {
-            return Err(OramError::NoMessageFound);
+            return Err(MycoError::NoMessageFound);
         }
 
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| OramError::NoMessageFound)?;
+        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::NoMessageFound)?;
         let (nonce, ciphertext) = ciphertext.split_at(12);
         let nonce = Nonce::from_slice(nonce);
         let mut buffer = Vec::from(ciphertext);
 
         cipher
             .decrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| OramError::NoMessageFound)?;
+            .map_err(|_| MycoError::NoMessageFound)?;
 
         Ok(buffer)
     }
@@ -199,9 +199,9 @@ pub fn calculate_bucket_usage(
                         // With encryption, check if messages are decryptable
                         let mut decryptable_messages = 0;
                         for b in 0..bucket.len() {
-                            if let Some((_l, k_oram_t, _t_exp)) = metadata_bucket.get(b) {
+                            if let Some((_l, k_oblv_t, _t_exp)) = metadata_bucket.get(b) {
                                 if let Some(c_msg) = bucket.get(b) {
-                                    if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                    if let Ok(ct) = decrypt(&k_oblv_t.0, &c_msg.0) {
                                         if decrypt(k_msg, &ct).is_ok() {
                                             decryptable_messages += 1;
                                         }

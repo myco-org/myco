@@ -26,7 +26,7 @@ use crate::rpc_types::{
     ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest,
     StorePathIndicesResponse, WriteRequest, WriteResponse,
 };
-use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
+use crate::{error::MycoError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{
     BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK, Z,
 };
@@ -61,11 +61,11 @@ pub enum ReadType {
 }
 
 pub(crate) trait Local {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError>;
+    fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
 pub(crate) trait Network {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError>;
+    fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
 // Define how we interact with Server2
@@ -172,7 +172,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let store_request_bytes =
-                bincode::serialize(&store_request).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&store_request).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new("batch_init_store_path_indices", store_request_bytes.len()).log();
         }
 
@@ -195,7 +195,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new("batch_init_read_paths_response", total_response_bytes).log();
         }
@@ -211,7 +211,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
-                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&indices).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new(
                 &format!("client_read_paths_request_{}", batch_size),
                 indices_bytes.len(),
@@ -239,7 +239,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new(
                 &format!("client_read_paths_response_{}", batch_size),
@@ -259,7 +259,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
-                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&indices).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new(
                 &format!("client_read_paths_request_{}", batch_size),
                 indices_bytes.len(),
@@ -275,7 +275,7 @@ impl Server2Access for RemoteServer2Access {
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&response.buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new(
                 &format!("client_read_paths_response_{}", batch_size),
@@ -298,7 +298,7 @@ impl Server2Access for RemoteServer2Access {
                 chunk_idx: 0,
             };
             let total_bytes = bincode::serialize(&total_request)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new("batch_write", total_bytes).log();
         }
@@ -334,7 +334,7 @@ impl Server2Access for RemoteServer2Access {
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request",
                 ))
@@ -342,13 +342,13 @@ impl Server2Access for RemoteServer2Access {
             .bytes()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to get response bytes",
                 ))
             })
             .and_then(|bytes| {
-                bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)
+                bincode::deserialize(&bytes).map_err(|_| MycoError::DeserializationError)
             })?;
 
         Ok(response.keys)
@@ -356,12 +356,12 @@ impl Server2Access for RemoteServer2Access {
 }
 
 impl RemoteServer2Access {
-    pub async fn new(base_url: &str) -> Result<Self, OramError> {
+    pub async fn new(base_url: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to create HTTP client",
                 ))
@@ -377,9 +377,9 @@ impl RemoteServer2Access {
         &self,
         endpoint: &str,
         payload: T,
-    ) -> Result<R, OramError> {
+    ) -> Result<R, MycoError> {
         let request_bytes =
-            bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
+            bincode::serialize(&payload).map_err(|_| MycoError::DeserializationError)?;
 
 
         let response = self
@@ -390,20 +390,20 @@ impl RemoteServer2Access {
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request",
                 ))
             })?;
 
         let bytes = response.bytes().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
+            MycoError::IoError(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Failed to get response bytes",
             ))
         })?;
 
-        Ok(bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?)
+        Ok(bincode::deserialize(&bytes).map_err(|_| MycoError::DeserializationError)?)
     }
 }
 
@@ -414,12 +414,12 @@ pub struct RemoteServer1Access {
 }
 
 impl RemoteServer1Access {
-    pub async fn new(server1_addr: &str) -> Result<Self, OramError> {
+    pub async fn new(server1_addr: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to create HTTP client",
                 ))
@@ -439,9 +439,9 @@ pub trait Server1Access: Send {
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError>;
+    ) -> Result<(), MycoError>;
 }
 
 // Local access - direct memory access
@@ -462,13 +462,13 @@ impl Server1Access for LocalServer1Access {
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
         self.server
             .write()
             .unwrap()
-            .queue_write(ct, f, k_oram_t, cs)
+            .queue_write(ct, f, k_oblv_t, cs)
     }
 }
 
@@ -478,13 +478,13 @@ impl Server1Access for RemoteServer1Access {
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
         let queue_write_request = QueueWriteRequest {
             ct,
             f,
-            k_oram_t,
+            k_oblv_t,
             cs,
         };
 
@@ -499,7 +499,7 @@ impl Server1Access for RemoteServer1Access {
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request to Server1",
                 ))
@@ -512,7 +512,7 @@ impl Server1Access for RemoteServer1Access {
         if queue_write_response.success {
             Ok(())
         } else {
-            Err(OramError::IoError(std::io::Error::new(
+            Err(MycoError::IoError(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Unexpected response from Server1",
             )))
