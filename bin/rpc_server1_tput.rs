@@ -11,6 +11,7 @@ use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
 use myco_rs::constants::{FIXED_SEED_TPUT_RNG, THROUGHPUT_ITERATIONS};
+use myco_rs::error::MycoError;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, NUM_CLIENTS},
@@ -63,7 +64,7 @@ async fn main() {
         .join("server-key.pem");
 
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().expect("Failed to generate certificates");
+        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)
@@ -163,7 +164,7 @@ async fn main() {
             .unwrap()
             .async_batch_write()
             .await
-            .expect("Failed to batch write");
+            .map_err(|e| MycoError::DatabaseError(format!("Failed to batch write: {}", e))).unwrap();
 
         println!("Batch write finished");
 

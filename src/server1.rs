@@ -128,7 +128,7 @@ impl Server1 {
         cs: Vec<u8>,
     ) -> Result<(), MycoError> {
         let t_exp = self.epoch + DELTA as u64;
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).map_err(|_| MycoError::ProtocolError("PRF failed".to_string()))?;
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
             .pt

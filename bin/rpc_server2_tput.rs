@@ -73,7 +73,7 @@ async fn main() {
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().expect("Failed to generate certificates");
+        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)

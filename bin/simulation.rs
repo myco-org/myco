@@ -6,6 +6,7 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
+use myco_rs::error::MycoError;
 use myco_rs::network::{LocalServer1Access, LocalServer2Access};
 use myco_rs::{
     calculate_bucket_usage,
@@ -47,7 +48,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
         let client_name = format!("Client_{}", i);
         let mut client = Client::new(client_name, s1_access.clone(), s2_access.clone());
 
-        client.setup(&key).expect("Setup failed");
+        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
 
         clients.push(client);
     }
@@ -68,9 +69,9 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
         clients.par_iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             #[cfg(feature = "no-enc")]
-            client.fake_write().expect("Write failed");
+            client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
             #[cfg(not(feature = "no-enc"))]
-            client.write(&message, &key).expect("Write failed");
+            client.write(&message, &key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
         });
         let write_duration = write_start_time.elapsed();
 
@@ -86,7 +87,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
             let read_start_time = std::time::Instant::now();
             let read_result: Vec<u8> = client
                 .read(&key, client.id.clone(), 0)
-                .expect(&format!("Read failed in epoch {}", epoch));
+                .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e))).unwrap();
             let client_read_duration = read_start_time.elapsed();
             total_read_duration += client_read_duration;
         }
@@ -131,7 +132,7 @@ fn run_simulation(num_epochs: usize) {
     let mut clients = Vec::new();
     for i in 0..NUM_CLIENTS {
         let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
-        client.setup(&key).expect("Setup failed");
+        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
         clients.push(client);
     }
 
@@ -154,9 +155,9 @@ fn run_simulation(num_epochs: usize) {
         clients.par_iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             #[cfg(feature = "no-enc")]
-            client.fake_write().expect("Write failed");
+            client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
             #[cfg(not(feature = "no-enc"))]
-            client.write(&message, &key).expect("Write failed");
+            client.write(&message, &key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
         });
         let write_duration = write_start_time.elapsed();
 
@@ -252,7 +253,7 @@ fn run_local_latency_benchmark() {
             s1_access.clone(),
             s2_access.clone(),
         );
-        client.setup(&key).expect("Setup failed");
+        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
         keys.push(key);
         clients.push(client);
     }
@@ -273,9 +274,9 @@ fn run_local_latency_benchmark() {
             .for_each(|(client_idx, (client, key))| {
                 let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
                 #[cfg(feature = "no-enc")]
-                client.fake_write().expect("Write failed");
+                client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
                 #[cfg(not(feature = "no-enc"))]
-                client.write(&message, key).expect("Write failed");
+                client.write(&message, key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
 
                 if (epoch * NUM_CLIENTS + client_idx) % 1000 == 0 {
                     println!("Progress: Write {} in epoch {}", client_idx, epoch);
@@ -304,9 +305,9 @@ fn run_local_latency_benchmark() {
         let start = std::time::Instant::now();
         let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
         #[cfg(feature = "no-enc")]
-        clients[0].fake_write().expect("Write failed");
+        clients[0].fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
         #[cfg(not(feature = "no-enc"))]
-        clients[0].write(&message, &keys[0]).expect("Write failed");
+        clients[0].write(&message, &keys[0]).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
         write_times.push(start.elapsed());
 
         // Measure batch_write
@@ -318,7 +319,7 @@ fn run_local_latency_benchmark() {
         let start = std::time::Instant::now();
         clients[0]
             .read(&keys[0], clients[0].id.clone(), 0)
-            .expect("Read failed");
+            .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e))).unwrap();
         read_times.push(start.elapsed());
     }
 
@@ -333,10 +334,11 @@ fn run_local_latency_benchmark() {
     use std::io::Write;
 
     // Create directory if it doesn't exist
-    create_dir_all("test_sims").expect("Failed to create directory");
+    create_dir_all("test_sims").map_err(|e| MycoError::DatabaseError(format!("Failed to create directory: {}", e))).unwrap();
 
     // Open file for writing
-    let mut file = File::create("test_sims/latency").expect("Failed to create latency file");
+    let mut file = File::create("test_sims/latency").map_err(|e| MycoError::DatabaseError(format!("Failed to create latency file: {}", e))).unwrap();
+
 
     // Write results to file
     writeln!(file, "Average timings over 10 sequences:").unwrap();

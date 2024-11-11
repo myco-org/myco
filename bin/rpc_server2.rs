@@ -23,6 +23,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::constants::DELTA;
 use myco_rs::constants::LATENCY_BENCH_COUNT;
+use myco_rs::error::MycoError;
 use myco_rs::generate_test_certificates;
 use myco_rs::rpc_types::{
     ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse, FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsClientRequest, StorePathIndicesRequest, StorePathIndicesResponse
@@ -86,7 +87,7 @@ async fn main() {
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().expect("Failed to generate certificates");
+        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)

@@ -135,7 +135,7 @@ pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &st
     #[cfg(feature = "perf-logging")]
     {
         // Create logs directory if it doesn't exist
-        std::fs::create_dir_all("logs").expect("Failed to create logs directory");
+        std::fs::create_dir_all("logs").map_err(|e| format!("Failed to create logs directory: {}", e))?;
         
         let constants_prefix = format!("B{}_Z{}_D{}_BATCH{}_", 
             crate::constants::BLOCK_SIZE,
