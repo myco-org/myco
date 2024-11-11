@@ -1,4 +1,4 @@
-# Myco: A Metadata-Private Messaging System
+# Myco
 
 This is a pure Rust implementation of Myco, a metadata-private messaging system that achieves polylogarithmic read and write efficiency while maintaining strong cryptographic guarantees.
 
