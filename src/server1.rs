@@ -72,15 +72,20 @@ impl Server1 {
 
     /// Initialize the server for a new batch.
     pub async fn async_batch_init(&mut self, num_clients: usize) {
+        // Create metrics to track initialization latency
         let end_to_end_latency = LatencyMetric::new("server1_batch_init_end_to_end");
         let mut local_latency = LatencyMetric::new("server1_batch_init_local");
+        
+        // Initialize random number generator
         let mut rng = ChaCha20Rng::from_entropy();
 
+        // Generate random paths for each client
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
         self.pathset_indices = get_path_indices(paths);
 
+        // Pause local latency tracking while reading from Server2
         local_latency.pause();
         let buckets: Vec<Bucket> = self
             .s2
@@ -88,7 +93,11 @@ impl Server1 {
             .await
             .unwrap();
         local_latency.resume();
+        
+        // Get size of buckets for initializing trees
         let bucket_size = buckets.len();
+
+        // Initialize sparse binary trees with buckets and metadata
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
             vec![Bucket::default(); bucket_size],
@@ -99,24 +108,36 @@ impl Server1 {
             self.pathset_indices.clone(),
         );
 
+        // Set server state
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
+
+        // Record final latency metrics
         end_to_end_latency.finish();
         local_latency.finish();
     }
 
     /// Initialize the server for a new batch.
     pub fn batch_init(&mut self, num_clients: usize) {
+        // Create cryptographically secure random number generator
         let mut rng = ChaCha20Rng::from_entropy();
 
+        // Generate random paths for each client
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
+        // Convert paths to indices
         self.pathset_indices = get_path_indices(paths);
 
+        // Read buckets from Server2 synchronously by blocking on async call
         let buckets: Vec<Bucket> =
             futures::executor::block_on(self.s2.read_paths(self.pathset_indices.clone())).unwrap();
         let bucket_size = buckets.len();
+
+        // Initialize sparse binary trees:
+        // - p: Main tree with buckets from Server2
+        // - pt: Temporary tree for processing writes
+        // - metadata_pt: Temporary tree for metadata
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
             vec![Bucket::default(); bucket_size],
@@ -127,6 +148,7 @@ impl Server1 {
             self.pathset_indices.clone(),
         );
 
+        // Set number of clients and generate new random key for this batch
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }

@@ -1,6 +1,5 @@
 //! Crypto helper functions
 
-use aes_gcm::aead::KeyInit;
 use crate::{
     dtypes::*,
     tree::BinaryTree,
@@ -15,15 +14,21 @@ use std::{
 
 /// Helper function to get the indices of the paths.
 pub fn get_path_indices(paths: Vec<Path>) -> Vec<usize> {
+    // Initialize empty set to store unique node indices, starting with root (index 1)
     let mut pathset: HashSet<usize> = HashSet::new();
     pathset.insert(1);
+
+    // For each path, traverse from root to leaf and collect node indices
     paths.iter().for_each(|p| {
         p.clone().into_iter().fold(1, |acc, d| {
+            // Calculate child index: left child is 2*parent, right child is 2*parent + 1
             let idx = 2 * acc + u8::from(d) as usize;
             pathset.insert(idx);
             idx
         });
     });
+
+    // Convert set to vector and return
     pathset.into_iter().collect()
 }
 
@@ -33,16 +38,19 @@ pub fn calculate_bucket_usage(
     metadata_tree: &BinaryTree<Metadata>,
     k_msg: &[u8],
 ) -> (usize, usize, f64, f64, f64) {
+    // Track bucket usage statistics
     let mut bucket_usage = Vec::new();
     let mut total_messages = 0;
     let mut max_usage = 0;
     let mut max_depth = 0;
 
+    // Iterate through buckets and metadata to calculate usage
     server2_tree
         .zip(metadata_tree)
         .into_iter()
         .for_each(|(bucket, metadata_bucket, path)| {
             if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                // Count messages in this bucket based on encryption mode
                 let messages_in_bucket = {
                     #[cfg(feature = "no-enc")]
                     {
@@ -56,6 +64,7 @@ pub fn calculate_bucket_usage(
                         for b in 0..bucket.len() {
                             if let Some((_l, k_oblv_t, _t_exp)) = metadata_bucket.get(b) {
                                 if let Some(c_msg) = bucket.get(b) {
+                                    // Try to decrypt with both keys to verify message
                                     if let Ok(ct) = decrypt(&k_oblv_t.0, &c_msg.0) {
                                         if decrypt(k_msg, &ct).is_ok() {
                                             decryptable_messages += 1;
@@ -68,6 +77,7 @@ pub fn calculate_bucket_usage(
                     }
                 };
 
+                // Update statistics
                 bucket_usage.push(messages_in_bucket);
                 total_messages += messages_in_bucket;
                 if messages_in_bucket > max_usage {
@@ -77,10 +87,11 @@ pub fn calculate_bucket_usage(
             }
         });
 
+    // Calculate summary statistics
     let total_buckets = bucket_usage.len();
     let average_usage = total_messages as f64 / total_buckets as f64;
 
-    // Calculate median
+    // Calculate median usage
     bucket_usage.sort_unstable();
     let median_usage = if total_buckets % 2 == 0 {
         (bucket_usage[total_buckets / 2 - 1] + bucket_usage[total_buckets / 2]) as f64 / 2.0
@@ -98,10 +109,14 @@ pub fn calculate_bucket_usage(
         .sum::<f64>()
         / total_buckets as f64;
     let std_dev = variance.sqrt();
+
+    // Print summary statistics
     println!(
         "Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}",
         max_usage, max_depth, average_usage, median_usage, std_dev
     );
+
+    // Return tuple of statistics
     (max_usage, max_depth, average_usage, median_usage, std_dev)
 }
 

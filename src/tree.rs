@@ -368,23 +368,37 @@ where
         Some((idx, current_path.clone()))
     }
 
-    /// Find the lowest common ancestor (LCA) of a given path
+    /// Find the lowest common ancestor (LCA) of a given path and return a mutable reference to its value
+    /// along with the path to reach it.
+    ///
+    /// # Arguments
+    /// * `path` - The path to find the LCA for
+    ///
+    /// # Returns
+    /// * `Option<(&mut T, Path)>` - A tuple containing:
+    ///   - A mutable reference to the LCA node's value
+    ///   - The path from root to the LCA node
     pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
+        // Initialize empty path starting from root
         let mut current_path = Path::new(Vec::new());
         let mut idx = 1; // Start at the root
 
+        // Traverse down the tree following the given path
         for &direction in path {
             let next_idx = 2 * idx + u8::from(direction) as usize;
+            // If next node doesn't exist, current node is the LCA
             if self.get_by_index(next_idx).is_none() {
                 return self
-                    .get_by_index_mut(idx) // Get mutable reference here
+                    .get_by_index_mut(idx)
                     .map(|value| (value, current_path.clone()));
             }
+            // Continue down the path
             idx = next_idx;
             current_path.push(direction);
         }
 
-        self.get_by_index_mut(idx) // Get mutable reference at the end
+        // If we reach the end of the path, that node is the LCA
+        self.get_by_index_mut(idx)
             .map(|value| (value, current_path.clone()))
     }
 
@@ -479,11 +493,20 @@ pub struct ZipMutIterator<'a, T, S> {
 }
 
 impl<'a, T, S> ZipMutIterator<'a, T, S> {
+    /// Creates a new ZipMutIterator from two sparse binary trees
+    /// 
+    /// # Arguments
+    /// * `left_tree` - First sparse binary tree to zip
+    /// * `right_tree` - Second sparse binary tree to zip
+    ///
+    /// # Panics
+    /// Panics if the trees have different numbers of elements
     fn new(left_tree: &'a mut SparseBinaryTree<T>, right_tree: &'a mut SparseBinaryTree<S>) -> Self {
         if left_tree.packed_indices.len() != right_tree.packed_indices.len() {
             panic!("Trees must have the same number of elements to zip.");
         }
 
+        // Create slice pairs to track current position in both trees
         let slices = Some(SlicePair {
             left_indices: &left_tree.packed_indices[..],
             right_indices: &right_tree.packed_indices[..],
@@ -496,9 +519,15 @@ impl<'a, T, S> ZipMutIterator<'a, T, S> {
 }
 
 impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
+    /// Each iteration returns a tuple containing:
+    /// - Optional mutable reference to left tree bucket
+    /// - Optional mutable reference to right tree bucket  
+    /// - Path representing the current position
     type Item = (Box<Option<&'a mut T>>, Box<Option<&'a mut S>>, Path);
 
+    /// Advances the iterator and returns the next pair of corresponding buckets
     fn next(&mut self) -> Option<Self::Item> {
+        // Take ownership of the current slices
         let slices = self.slices.take()?;
         
         // If we have no more elements, return None
@@ -506,13 +535,13 @@ impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
             return None;
         }
 
-        // Get the first elements and the rest of the slices
+        // Split off the first elements and the remaining slices for both trees
         let (left_idx, rest_left_indices) = slices.left_indices.split_first()?;
         let (right_idx, rest_right_indices) = slices.right_indices.split_first()?;
         let (left_bucket, rest_left_buckets) = slices.left_buckets.split_first_mut()?;
         let (right_bucket, rest_right_buckets) = slices.right_buckets.split_first_mut()?;
 
-        // Store the rest of the slices for the next iteration
+        // Store the remaining slices for the next iteration
         self.slices = Some(SlicePair {
             left_indices: rest_left_indices,
             right_indices: rest_right_indices,
@@ -520,10 +549,11 @@ impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
             right_buckets: rest_right_buckets,
         });
 
+        // Indices should match since we verified equal lengths in new()
         if left_idx == right_idx {
             Some((
                 Box::new(Some(left_bucket)),
-                Box::new(Some(right_bucket)),
+                Box::new(Some(right_bucket)), 
                 Path::from(*left_idx),
             ))
         } else {

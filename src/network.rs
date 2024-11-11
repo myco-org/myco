@@ -185,11 +185,12 @@ pub struct RemoteServer2Access {
 #[async_trait]
 impl Server2Access for RemoteServer2Access {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
-        // First store the path indices.
+        // First store the path indices on the server
         let store_request = StorePathIndicesRequest {
             pathset: indices.clone(),
         };
 
+        // Log the size of the store request if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let store_request_bytes =
@@ -197,22 +198,27 @@ impl Server2Access for RemoteServer2Access {
             BytesMetric::new("batch_init_store_path_indices", store_request_bytes.len()).log();
         }
 
+        // Send request to store path indices
         self.post_bincode::<_, StorePathIndicesResponse>("store_path_indices", store_request)
             .await?;
 
-        // Then read in chunks.
+        // Split indices into chunks for batched reading
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
+        
+        // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsRequest { chunk_idx };
             self.post_bincode::<_, ChunkReadPathsResponse>("chunk_read_paths", request)
         });
 
+        // Collect responses from all chunks
         let mut all_buckets = Vec::new();
         for response in futures::future::join_all(futures).await {
             let chunk_response = response?;
             all_buckets.extend(chunk_response.buckets);
         }
 
+        // Log total response size if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
@@ -229,6 +235,7 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
+        // Log the size of the request indices if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
@@ -240,8 +247,10 @@ impl Server2Access for RemoteServer2Access {
             .log();
         }
 
-        // Then read in chunks.
+        // Split indices into chunks based on configured chunk size
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
+        
+        // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsClientRequest {
                 indices: indices.clone(),
@@ -251,12 +260,14 @@ impl Server2Access for RemoteServer2Access {
             self.post_bincode::<_, ChunkReadPathsClientResponse>("chunk_read_paths_client", request)
         });
 
+        // Collect and combine responses from all chunks
         let mut all_buckets = Vec::<Bucket>::new();
         for response in futures::future::join_all(futures).await {
             let chunk_response = response?;
             all_buckets.extend(chunk_response.buckets);
         }
 
+        // Log the total size of all responses if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
@@ -277,6 +288,7 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
+        // Log the size of the request indices if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
@@ -288,11 +300,13 @@ impl Server2Access for RemoteServer2Access {
             .log();
         }
 
+        // Create and send request to read paths
         let request = ReadPathsClientRequest { indices };
         let response: ReadPathsResponse = self
             .post_bincode(&format!("read_paths_client"), &request)
             .await?;
 
+        // Log the total size of the response if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&response.buckets)
@@ -349,6 +363,7 @@ impl Server2Access for RemoteServer2Access {
     }
 
     async fn get_prf_keys(&self) -> Result<Vec<Key>> {
+        // Make GET request to the PRF keys endpoint
         let response: GetPrfKeysResponse = self
             .client
             .get(&format!("{}/get_prf_keys", self.base_url))
@@ -360,6 +375,7 @@ impl Server2Access for RemoteServer2Access {
                     "Failed to send request",
                 ))
             })?
+            // Get response bytes
             .bytes()
             .await
             .map_err(|_| {
@@ -368,10 +384,12 @@ impl Server2Access for RemoteServer2Access {
                     "Failed to get response bytes",
                 ))
             })
+            // Deserialize response bytes into GetPrfKeysResponse
             .and_then(|bytes| {
                 bincode::deserialize(&bytes).map_err(|_| MycoError::DeserializationError)
             })?;
 
+        // Return the vector of PRF keys
         Ok(response.keys)
     }
 }
@@ -509,6 +527,7 @@ impl Server1Access for RemoteServer1Access {
         k_oblv_t: Key,
         cs: Vec<u8>,
     ) -> Result<(), MycoError> {
+        // Create the request payload
         let queue_write_request = QueueWriteRequest {
             ct,
             f,
@@ -516,9 +535,12 @@ impl Server1Access for RemoteServer1Access {
             cs,
         };
 
+        // Serialize the request and log the size
         let request_bytes = serialize(&queue_write_request).unwrap();
         let queue_write_bytes_metric = BytesMetric::new("queue_write_bytes", request_bytes.len());
         queue_write_bytes_metric.log();
+
+        // Send POST request to Server1's queue_write endpoint
         let response = self
             .client
             .post(&format!("{}/queue_write", self.base_url))
@@ -533,6 +555,7 @@ impl Server1Access for RemoteServer1Access {
                 ))
             })?;
 
+        // Deserialize the response
         let queue_write_response: QueueWriteResponse =
             deserialize(&response.bytes().await.unwrap()).unwrap();
 

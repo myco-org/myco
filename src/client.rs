@@ -49,6 +49,8 @@ impl Client {
         let k_msg = kdf(&k.0, "MSG")?;
         let k_oblv = kdf(&k.0, "ORAM")?;
         let k_prf = kdf(&k.0, "PRF")?;
+
+        // Insert keys into the client
         self.keys.insert(k.clone(), (k_msg, k_oblv, k_prf));
         end_to_end_latency.finish();
         Ok(())
@@ -62,12 +64,14 @@ impl Client {
         let cs = self.id.clone().into_bytes();
 
         let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap();
-        let f = prf(k_prf, &epoch.to_be_bytes())?;
-        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?;
-        let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
+        let f = prf(k_prf, &epoch.to_be_bytes())?; // PRF for this epoch
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?; // Oblivious key for this epoch
+        let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?; // Encrypt the message
 
         self.epoch += 1;
         local_latency.finish();
+
+        // Upload the message to Server1
         self.s1
             .queue_write(ct, f, Key::new(k_oblv_t), cs)
             .await
@@ -81,13 +85,13 @@ impl Client {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
-        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap();
-        let f = prf(k_prf, &epoch.to_be_bytes())?;
-        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?;
-        let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
+        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap(); // Get the keys for this key 
+        let f = prf(k_prf, &epoch.to_be_bytes())?; // PRF for this epoch
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string())?; // Oblivious key for this epoch
+        let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?; // Encrypt the message
 
         self.epoch += 1;
-        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs))
+        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs)) // Upload the message to Server1
     }
 
     /// Asynchronously read messages from Server2.
@@ -106,7 +110,7 @@ impl Client {
             LatencyMetric::new(&format!("client_read_end_to_end_{}", batch_size));
         let mut local_latency = LatencyMetric::new(&format!("client_read_local_{}", batch_size));
         let epoch = self.epoch - 1 - epoch_past;
-        let cs: Vec<u8> = cs.into_bytes();
+        let cs: Vec<u8> = cs.into_bytes(); // Convert the client ID to a byte vector
 
         // Get PRF keys from server2
         local_latency.pause();
@@ -124,18 +128,20 @@ impl Client {
             return Err(MycoError::NoMessageFound);
         }
 
-        let k_s1_t = server_keys.get(server_keys.len() - 1 - epoch_past).unwrap();
+        let k_s1_t = server_keys.get(server_keys.len() - 1 - epoch_past).unwrap(); // Get the S1 key for this epoch
 
         // Calculate paths for all keys
         let mut paths = Vec::with_capacity(batch_size);
         let mut key_data = Vec::with_capacity(batch_size);
 
+        // For each key, derive the necessary cryptographic values for the current epoch
         for k in keys {
-            let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap();
+            let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap(); 
             let k_oblv_t =
                 kdf(k_oblv, &epoch.to_string()).map_err(|_| MycoError::NoMessageFound)?;
             let f = prf(&k_prf, &epoch.to_be_bytes())?;
 
+            // Calculate the path location using the server's key and the derived PRF value
             let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
             let l_path = Path::from(l);
             paths.push(l_path);
@@ -167,22 +173,23 @@ impl Client {
             // Only check buckets along this key's path
             let path_buckets = bucket_tree.get_all_nodes_along_path(&path);
 
+            // Iterate over each bucket along the path to find and decrypt the message
             for bucket in path_buckets {
                 for block in bucket.iter() {
+                    // Attempt to decrypt the block with the oblivious key
                     if let Ok(ct) = decrypt(&k_oblv_t, &block.0) {
+                        // If successful, attempt to decrypt the ciphertext with the message key
                         if let Ok(msg) = decrypt(&k_msg, &ct) {
+                            // If decryption is successful, trim any padding and add the message to the list
                             messages.push(trim_zeros(&msg));
                             found = true;
-                            break;
+                            break; // Exit the loop once the message is found
                         }
                     }
                 }
                 if found {
-                    break;
+                    break; // Exit the outer loop if the message has been found
                 }
-            }
-            if !found {
-                messages.push(Vec::new()); // Push empty message if nothing found for this key
             }
         }
 
@@ -197,6 +204,7 @@ impl Client {
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
 
+        // Retrieve the cryptographic keys for the given key and derive the necessary values for the current epoch
         let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap();
         let k_oblv_t = kdf(k_oblv, &epoch.to_string()).map_err(|_| MycoError::NoMessageFound)?;
         let f = prf(&k_prf, &epoch.to_be_bytes())?;
@@ -212,10 +220,12 @@ impl Client {
             return Err(MycoError::NoMessageFound);
         }
 
+        // Retrieve the server's key for the specified past epoch and calculate the path location
         let k_s1_t = keys.get(keys.len() - 1 - epoch_past).unwrap();
         let l = prf(k_s1_t.0.as_slice(), &[&f[..], &cs[..]].concat())?;
         let l_path = Path::from(l);
 
+        // Calculate path indices and read the corresponding paths from Server2
         let indices = get_path_indices(vec![l_path]);
         let path = futures::executor::block_on(self.s2.read_paths_client(indices, BATCH_SIZE))
             .map_err(|_| MycoError::NoMessageFound)?;
@@ -234,6 +244,8 @@ impl Client {
     pub fn fake_write(&self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
+
+        // Generate random data for a fake write operation
         let k_oblv_t: Key = Key::random(&mut rng);
         let ct: Vec<u8> = (0..BLOCK_SIZE).map(|_| rng.gen()).collect();
         let cs: Vec<u8> = self.id.clone().into_bytes();
