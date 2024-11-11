@@ -1,65 +1,18 @@
 //! Utility functions for the Myco protocol.
-use ring::{digest, hkdf};
-use crate::error::MycoError;
-use crate::constants::{INNER_BLOCK_SIZE, MESSAGE_SIZE};
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes128Gcm, Nonce};
-use rand::Rng;
 
-/// Key Derivation Function (KDF) that derives a 16-byte key from an input key and string.
-///
-/// Uses HKDF-SHA256 with a fixed salt to derive the key.
-///
-/// # Arguments
-/// * `key` - The input key bytes to derive from
-/// * `input` - String input to mix into the derivation
-///
-/// # Returns
-/// * `Ok(Vec<u8>)` - The derived 16-byte key
-/// * `Err(MycoError)` - If HKDF expansion or fill fails
-pub fn kdf(key: &[u8], input: &str) -> Result<Vec<u8>, MycoError> {
-    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
-    let binding = [input.as_bytes()];
-    let okm = prk
-        .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| MycoError::HkdfExpansionFailed)?;
-    let mut result = vec![0u8; 32];
-    okm.fill(&mut result)
-        .map_err(|_| MycoError::HkdfFillFailed)?;
-    Ok(result[..16].to_vec())
-}
+use crate::{
+    dtypes::*,
+    tree::BinaryTree,
+    crypto::decrypt,
+};
 
-/// Pseudorandom Function (PRF) that generates a 32-byte pseudorandom output.
-///
-/// Uses HKDF-SHA256 with a fixed salt to generate pseudorandom bytes.
-///
-/// # Arguments
-/// * `key` - The key bytes to use as input
-/// * `input` - Input bytes to mix into the PRF
-///
-/// # Returns
-/// * `Ok(Vec<u8>)` - 32 bytes of pseudorandom output
-/// * `Err(MycoError)` - If HKDF expansion or fill fails
-pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, MycoError> {
-    // Fixed output length of 32 bytes
-    let output_length = 32;
+use std::{
+    collections::HashSet,
+    fs,
+    path::Path as StdPath,
+    process::Command,
+};
 
-    // Using a fixed salt for HKDF
-    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
-
-    // Use info directly as the context for HKDF expansion
-    let binding = [input];
-    let okm = prk
-        .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| MycoError::HkdfExpansionFailed)?;
-
-    // Allocate output buffer with fixed length of 32 bytes
-    let mut result = vec![0u8; output_length];
-    okm.fill(&mut result).map_err(|_| MycoError::HkdfFillFailed)?;
-    Ok(result)
-}
 
 /// Pads a message to a target length by appending zeros.
 ///
@@ -94,82 +47,188 @@ pub fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
     buf.into_iter().rev().collect()
 }
 
+/// Helper function to get the indices of the paths.
+pub fn get_path_indices(paths: Vec<Path>) -> Vec<usize> {
+    // Initialize empty set to store unique node indices, starting with root (index 1)
+    let mut pathset: HashSet<usize> = HashSet::new();
+    pathset.insert(1);
 
-/// An enum representing the type of encryption to perform
-#[derive(Debug)]
-pub enum EncryptionType {
-    /// Single encryption using AES-GCM
-    Encrypt,
-    /// Double encryption using AES-GCM twice
-    DoubleEncrypt,
-}
-
-
-/// Encrypt a padded message using AES-GCM encryption
-///
-/// # Arguments
-/// * `key` - The encryption key
-/// * `message` - The message to encrypt
-/// * `encryption_type` - Whether to do single or double encryption
-///
-/// # Returns
-/// The encrypted message as a byte vector, or an error if encryption fails
-pub fn encrypt(
-    key: &[u8],
-    message: &[u8],
-    encryption_type: EncryptionType,
-) -> Result<Vec<u8>, MycoError> {
-    #[cfg(feature = "no-enc")]
-    {
-        // In no-enc mode, just pad the message and return it
-        return Ok(match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
-            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
+    // For each path, traverse from root to leaf and collect node indices
+    paths.iter().for_each(|p| {
+        p.clone().into_iter().fold(1, |acc, d| {
+            // Calculate child index: left child is 2*parent, right child is 2*parent + 1
+            let idx = 2 * acc + u8::from(d) as usize;
+            pathset.insert(idx);
+            idx
         });
-    }
+    });
 
-    #[cfg(not(feature = "no-enc"))]
-    {
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::EncryptionFailed)?;
-        let binding = rand::thread_rng().gen::<[u8; 12]>();
-        let nonce = Nonce::from_slice(&binding);
-        let mut buffer = match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
-            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
-        };
-
-        cipher
-            .encrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| MycoError::EncryptionFailed)?;
-
-        Ok([nonce.as_slice(), buffer.as_slice()].concat())
-    }
+    // Convert set to vector and return
+    pathset.into_iter().collect()
 }
 
-/// Decrypt a ciphertext
-pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, MycoError> {
-    #[cfg(feature = "no-enc")]
-    {
-        // In no-enc mode, just return the input
-        return Ok(ciphertext.to_vec());
-    }
+/// Helper function to calculate the bucket usage of the server.
+pub fn calculate_bucket_usage(
+    server2_tree: &BinaryTree<Bucket>,
+    metadata_tree: &BinaryTree<Metadata>,
+    k_msg: &[u8],
+) -> (usize, usize, f64, f64, f64) {
+    // Track bucket usage statistics
+    let mut bucket_usage = Vec::new();
+    let mut total_messages = 0;
+    let mut max_usage = 0;
+    let mut max_depth = 0;
 
-    #[cfg(not(feature = "no-enc"))]
-    {
-        if ciphertext.len() < 12 {
-            return Err(MycoError::NoMessageFound);
-        }
+    // Iterate through buckets and metadata to calculate usage
+    server2_tree
+        .zip(metadata_tree)
+        .into_iter()
+        .for_each(|(bucket, metadata_bucket, path)| {
+            if let (Some(bucket), Some(metadata_bucket)) = (bucket, metadata_bucket) {
+                // Count messages in this bucket based on encryption mode
+                let messages_in_bucket = {
+                    #[cfg(feature = "no-enc")]
+                    {
+                        // In no-enc mode, just count non-empty blocks
+                        bucket.len()
+                    }
+                    #[cfg(not(feature = "no-enc"))]
+                    {
+                        // With encryption, check if messages are decryptable
+                        let mut decryptable_messages = 0;
+                        for b in 0..bucket.len() {
+                            if let Some((_l, k_oblv_t, _t_exp)) = metadata_bucket.get(b) {
+                                if let Some(c_msg) = bucket.get(b) {
+                                    // Try to decrypt with both keys to verify message
+                                    if let Ok(ct) = decrypt(&k_oblv_t.0, &c_msg.0) {
+                                        if decrypt(k_msg, &ct).is_ok() {
+                                            decryptable_messages += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        decryptable_messages
+                    }
+                };
 
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::NoMessageFound)?;
-        let (nonce, ciphertext) = ciphertext.split_at(12);
-        let nonce = Nonce::from_slice(nonce);
-        let mut buffer = Vec::from(ciphertext);
+                // Update statistics
+                bucket_usage.push(messages_in_bucket);
+                total_messages += messages_in_bucket;
+                if messages_in_bucket > max_usage {
+                    max_usage = messages_in_bucket;
+                    max_depth = path.len();
+                }
+            }
+        });
 
-        cipher
-            .decrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| MycoError::NoMessageFound)?;
+    // Calculate summary statistics
+    let total_buckets = bucket_usage.len();
+    let average_usage = total_messages as f64 / total_buckets as f64;
 
-        Ok(buffer)
-    }
+    // Calculate median usage
+    bucket_usage.sort_unstable();
+    let median_usage = if total_buckets % 2 == 0 {
+        (bucket_usage[total_buckets / 2 - 1] + bucket_usage[total_buckets / 2]) as f64 / 2.0
+    } else {
+        bucket_usage[total_buckets / 2] as f64
+    };
+
+    // Calculate standard deviation
+    let variance = bucket_usage
+        .iter()
+        .map(|&x| {
+            let diff = x as f64 - average_usage;
+            diff * diff
+        })
+        .sum::<f64>()
+        / total_buckets as f64;
+    let std_dev = variance.sqrt();
+
+    // Print summary statistics
+    println!(
+        "Max usage: {}, Max depth: {}, Average usage: {:.2}, Median: {:.2}, Std dev: {:.2}",
+        max_usage, max_depth, average_usage, median_usage, std_dev
+    );
+
+    // Return tuple of statistics
+    (max_usage, max_depth, average_usage, median_usage, std_dev)
 }
 
+/// Generates self-signed TLS certificates for testing purposes.
+/// Creates a certificate and private key in the 'certs' directory.
+pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
+    // Use StdPath instead of Path
+    if !StdPath::new("certs").exists() {
+        fs::create_dir("certs")?;
+    }
+    if StdPath::new("certs/server-cert.pem").exists() && StdPath::new("certs/server-key.pem").exists() {
+        // Clean up old certificates to ensure we have fresh ones
+        fs::remove_file("certs/server-cert.pem")?;
+        fs::remove_file("certs/server-key.pem")?;
+    }
+
+    // Create a config file for OpenSSL
+    fs::write(
+        "openssl.cnf",
+        r#"
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = localhost
+
+[v3_req]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+"#,
+    )?;
+
+    // Generate private key and self-signed certificate using OpenSSL
+    Command::new("openssl")
+        .args([
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:4096",
+            "-keyout",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-cert.pem",
+            "-days",
+            "365",
+            "-nodes",
+            "-config",
+            "openssl.cnf",
+            "-extensions",
+            "v3_req",
+        ])
+        .output()?;
+
+    // Convert the key to PKCS8 format which rustls expects
+    Command::new("openssl")
+        .args([
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "certs/server-key.pem",
+            "-out",
+            "certs/server-key.pem.tmp",
+        ])
+        .output()?;
+
+    // Replace the original key with the PKCS8 version
+    fs::rename("certs/server-key.pem.tmp", "certs/server-key.pem")?;
+
+    // Clean up the config file
+    fs::remove_file("openssl.cnf")?;
+
+    Ok(())
+}

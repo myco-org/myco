@@ -9,7 +9,7 @@
 use myco_rs::{
     client::Client,
     constants::{DB_SIZE, DELTA, NUM_CLIENTS},
-    crypto::calculate_bucket_usage,
+    utils::calculate_bucket_usage,
     dtypes::Key,
     error::MycoError,
     network::{LocalServer1Access, LocalServer2Access},

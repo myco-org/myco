@@ -11,7 +11,7 @@
 //! any gaps) to maintain privacy.
 
 use crate::{
-    constants::{BATCH_SIZE, BLOCK_SIZE, D}, crypto::get_path_indices, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, network::{Server1Access, Server2Access}, tree::SparseBinaryTree, utils::{decrypt, encrypt, kdf, prf, trim_zeros, EncryptionType}
+    constants::{BATCH_SIZE, BLOCK_SIZE, D}, utils::{get_path_indices, trim_zeros}, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, network::{Server1Access, Server2Access}, tree::SparseBinaryTree, crypto::{decrypt, encrypt, kdf, prf, EncryptionType}
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;

@@ -13,7 +13,7 @@ use futures::future::join_all;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
-    crypto::generate_test_certificates,
+    utils::generate_test_certificates,
     dtypes::Key,
     error::MycoError,
     network::{LocalServer1Access, RemoteServer2Access},

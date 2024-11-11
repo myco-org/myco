@@ -17,7 +17,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
-    crypto::{generate_test_certificates, get_path_indices},
+    utils::{generate_test_certificates, get_path_indices},
     dtypes::{Key, Path},
     error::MycoError,
     rpc_types::{
@@ -27,7 +27,7 @@ use myco_rs::{
     },
     server2::Server2,
     tree::SparseBinaryTree,
-    utils::{kdf, prf},
+    crypto::{kdf, prf},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;

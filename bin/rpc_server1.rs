@@ -24,7 +24,7 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
     constants::{DELTA, LATENCY_BENCH_COUNT},
-    crypto::generate_test_certificates,
+    utils::generate_test_certificates,
     dtypes::Key,
     error::MycoError,
     network::RemoteServer2Access,

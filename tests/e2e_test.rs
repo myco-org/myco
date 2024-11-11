@@ -14,7 +14,7 @@ mod e2e_tests {
     };
 
     use myco_rs::{
-        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, dtypes::{Bucket, Key, Metadata, Path}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, utils::{decrypt, encrypt, kdf, prf, trim_zeros, EncryptionType}
+        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, dtypes::{Bucket, Key, Metadata, Path}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, crypto::{decrypt, encrypt, kdf, prf, EncryptionType}, utils::trim_zeros
     };
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
