@@ -1,5 +1,7 @@
-use myco_rs::tree::{BinaryTree, TreeValue};
-use myco_rs::dtypes::{Direction, Path};
+use myco_rs::{
+    tree::{BinaryTree, TreeValue},
+    dtypes::{Direction, Path},
+};
 use rand_chacha::ChaCha20Rng;
 
 #[cfg(test)]

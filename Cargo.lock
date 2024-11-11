@@ -1072,6 +1072,7 @@ dependencies = [
  "bincode",
  "block-padding",
  "cbc",
+ "cfg-if",
  "dashmap",
  "futures",
  "generic-array 1.1.0",

@@ -1,7 +1,7 @@
 //! Utility functions for the Myco protocol.
 use ring::{digest, hkdf};
 use crate::error::MycoError;
-use crate::{INNER_BLOCK_SIZE, MESSAGE_SIZE};
+use crate::constants::{INNER_BLOCK_SIZE, MESSAGE_SIZE};
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use rand::Rng;

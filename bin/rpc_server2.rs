@@ -21,28 +21,28 @@ use axum::{
     BoxError, Json, Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use myco_rs::constants::DELTA;
-use myco_rs::constants::LATENCY_BENCH_COUNT;
-use myco_rs::error::MycoError;
-use myco_rs::generate_test_certificates;
-use myco_rs::rpc_types::{
-    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse, FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsClientRequest, StorePathIndicesRequest, StorePathIndicesResponse
-};
 use myco_rs::{
+    constants::{DELTA, LATENCY_BENCH_COUNT},
+    crypto::generate_test_certificates,
     dtypes::{Bucket, Key, Path},
+    error::MycoError,
     network::RemoteServer2Access,
     rpc_types::{
-        GetPrfKeysResponse, ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse,
-        WriteRequest, WriteResponse,
+        ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
+        ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse, FinalizeEpochRequest,
+        FinalizeEpochResponse, GetPrfKeysResponse, ReadPathsClientRequest, ReadPathsRequest,
+        ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest,
+        StorePathIndicesResponse, WriteRequest, WriteResponse,
     },
     server1::Server1,
     server2::Server2,
 };
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path as StdPath, process::Command};
 use std::{
+    fs,
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path as StdPath, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
 };
 use tokio::sync::RwLock;
@@ -299,6 +299,7 @@ async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, Sta
 
 async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /finalize_benchmark");
+    #[cfg(feature = "perf-logging")]
     myco_rs::logging::calculate_and_append_averages(
         "server2_latency.csv",
         "server2_bytes.csv",

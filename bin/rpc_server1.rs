@@ -23,12 +23,17 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
-    constants::{DELTA, LATENCY_BENCH_COUNT}, error::MycoError, generate_test_certificates, rpc_types::{
+    constants::{DELTA, LATENCY_BENCH_COUNT},
+    crypto::generate_test_certificates,
+    dtypes::Key,
+    error::MycoError,
+    network::RemoteServer2Access,
+    rpc_types::{
         BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
         QueueWriteResponse,
-    }
+    },
+    server1::Server1,
 };
-use myco_rs::{dtypes::Key, network::RemoteServer2Access, server1::Server1};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
@@ -176,6 +181,7 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
 // Add this new endpoint handler
 async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /finalize_benchmark");
+    #[cfg(feature = "perf-logging")]
     myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
     Ok(Bytes::from("Benchmark finalized"))
 }

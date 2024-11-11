@@ -9,8 +9,7 @@
 
 #[cfg(test)]
 mod dtypes_tests {
-    use myco_rs::dtypes::{Path, Direction};
-    use myco_rs::constants::D;
+    use myco_rs::{dtypes::{Path, Direction}, constants::D};
     #[test]
     fn test_into_vecu8_empty_path() {
         let path = Path(Vec::new());

@@ -14,10 +14,12 @@ lazy_static! {
 /// Tracks latency metrics for an operation, with support for pausing/resuming timing
 pub struct LatencyMetric {
     /// Name of the operation being timed
+    #[allow(dead_code)]
     operation: String,
     /// Start time of the operation
     start_time: Instant,
     /// Unix timestamp in microseconds when operation started
+    #[allow(dead_code)]
     start_timestamp: u64,
     /// Total duration accumulated when paused
     accumulated_duration: Duration,
@@ -28,8 +30,10 @@ pub struct LatencyMetric {
 /// Tracks bytes metrics for an operation
 pub struct BytesMetric {
     /// Name of the operation being measured
+    #[allow(dead_code)]
     operation: String,
     /// Number of bytes processed
+    #[allow(dead_code)]
     bytes: usize,
 }
 
@@ -119,6 +123,7 @@ impl BytesMetric {
 }
 
 /// Internal helper to parse and log a latency metric
+#[allow(dead_code)]
 fn log_latency(message: &str) {
     #[cfg(feature = "perf-logging")]
     {
@@ -141,6 +146,7 @@ fn log_latency(message: &str) {
 }
 
 /// Internal helper to parse and log a bytes metric
+#[allow(dead_code)]
 fn log_bytes(message: &str) {
     #[cfg(feature = "perf-logging")]
     {
@@ -161,11 +167,17 @@ fn log_bytes(message: &str) {
 ///
 /// Files are written to a "logs" directory with a prefix containing block size,
 /// Z, D and batch size constants.
+#[cfg(feature = "perf-logging")]
 pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &str) {
-    #[cfg(feature = "perf-logging")]
+    use std::fs::{File, OpenOptions};
+    use std::io::Write;
+    use std::collections::HashMap;
+
+
+
     {
         // Create logs directory if it doesn't exist
-        std::fs::create_dir_all("logs").map_err(|e| format!("Failed to create logs directory: {}", e))?;
+        std::fs::create_dir_all("logs").unwrap();
         
         let constants_prefix = format!("B{}_Z{}_D{}_BATCH{}_", 
             crate::constants::BLOCK_SIZE,

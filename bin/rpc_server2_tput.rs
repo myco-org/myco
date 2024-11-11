@@ -14,21 +14,20 @@ use axum::{
     Router,
 };
 use axum_server::tls_rustls::RustlsConfig;
-use myco_rs::client::Client;
-use myco_rs::constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS};
-use myco_rs::dtypes::{Key, Path};
-use myco_rs::error::MycoError;
-use myco_rs::rpc_types::EpochNumberResponse;
-use myco_rs::tree::SparseBinaryTree;
-use myco_rs::{utils::{decrypt, kdf, prf, trim_zeros}, get_path_indices};
 use myco_rs::{
-    generate_test_certificates,
+    client::Client,
+    constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
+    crypto::{generate_test_certificates, get_path_indices},
+    dtypes::{Key, Path},
+    error::MycoError,
     rpc_types::{
         ChunkReadPathsRequest, ChunkReadPathsResponse, ChunkWriteRequest, ChunkWriteResponse,
-        FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsRequest, ReadPathsResponse,
-        StorePathIndicesRequest, StorePathIndicesResponse,
+        EpochNumberResponse, FinalizeEpochRequest, FinalizeEpochResponse, ReadPathsRequest,
+        ReadPathsResponse, StorePathIndicesRequest, StorePathIndicesResponse,
     },
     server2::Server2,
+    tree::SparseBinaryTree,
+    utils::{kdf, prf},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -240,6 +239,7 @@ async fn handle_finalize_epoch(
     // Calculate averages when all epochs are complete
     if *write_count == THROUGHPUT_ITERATIONS {
         println!("All epochs complete, calculating averages");
+        #[cfg(feature = "perf-logging")]
         myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
     }
 

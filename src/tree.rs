@@ -10,12 +10,11 @@ use std::{
     fmt::{self, Debug},
     fs::File,
     io::{Read, Write},
-    time::Instant,
 };
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Bucket, Metadata, Path};
+use crate::dtypes::{Bucket, Metadata, Path};
 
 /// A binary tree implementation that stores values of type T.
 /// 
@@ -126,22 +125,18 @@ impl<T: TreeValue> BinaryTree<T> {
 
     /// Gets the index for a given path
     pub fn get_index(&self, path: &Path) -> usize {
-        let mut current = 1;
         let mut idx = 1;
         for &direction in path {
             idx = 2 * idx + u8::from(direction) as usize;
             if idx >= self.value.len() {
                 return 1;
             }
-            current = idx;
         }
         idx
     }
 
     /// Gets all nodes along a given path
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<T> {
-        let start = Instant::now();
-
         let mut nodes = vec![];
         let mut idx = 1;
 

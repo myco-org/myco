@@ -14,17 +14,19 @@ use std::{
     sync::Arc,
 };
 use tokio::io::AsyncWriteExt;
-
-use crate::logging::BytesMetric;
-use crate::rpc_types::{
-    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
-    ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
-    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsResponse, StorePathIndicesRequest,
-    StorePathIndicesResponse, WriteResponse,
-};
-use crate::{error::MycoError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{
-    NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK,
+    dtypes::{Bucket, Key, Path},
+    error::MycoError,
+    logging::BytesMetric,
+    rpc_types::{
+        ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
+        ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
+        GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest,
+        ReadPathsResponse, StorePathIndicesRequest, StorePathIndicesResponse, WriteResponse,
+    },
+    server1::Server1,
+    server2::Server2,
+    constants::{NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK},
 };
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -68,10 +70,12 @@ pub enum ReadType {
 }
 
 /// A trait for local communication
+#[allow(dead_code)]
 pub(crate) trait Local {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
+#[allow(dead_code)]
 pub(crate) trait Network {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }

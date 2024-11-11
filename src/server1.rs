@@ -13,16 +13,8 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
-use crate::client::Client;
-use crate::get_path_indices;
-use crate::logging::{BytesMetric, LatencyMetric};
-use crate::network::{
-    Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access,
-};
-use crate::tree::SparseBinaryTree;
 use crate::{
-    constants::*, utils::{prf, EncryptionType, encrypt, decrypt}, server2::Server2, tree::BinaryTree, Block, Bucket,
-    Key, Metadata, MycoError, Path,
+    client::Client, constants::*, crypto::get_path_indices, dtypes::{Block, Bucket, Key, Metadata, Path}, error::MycoError, logging::{BytesMetric, LatencyMetric}, network::{Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access}, tree::{BinaryTree, SparseBinaryTree}, utils::{decrypt, encrypt, prf, EncryptionType}
 };
 use bincode::{deserialize, serialize};
 use dashmap::DashMap;

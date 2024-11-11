@@ -1,5 +1,4 @@
 //! Server2
-//! Server2
 //! 
 //! S2 (Server 2) functions as a storage server, maintaining a tree-based data structure for message 
 //! storage and handling client read operations. It receives batched updates from S1 with re-encrypted 
@@ -11,12 +10,16 @@
 use std::cmp::min;
 
 use crate::{
-    error::MycoError,
-    logging::LatencyMetric,
-    tree::BinaryTree,
-    Bucket, Key, Path, D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK,
-    NUM_BUCKETS_PER_READ_PATHS_CHUNK,
+    constants::{D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK}, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, tree::BinaryTree
 };
+
+cfg_if::cfg_if! {
+    if #[cfg(feature = "perf-logging")] {
+        use crate::tree::TreeValue;
+        use rand::SeedableRng;
+        use rand_chacha::ChaCha20Rng;
+    }
+}
 
 /// The main server2 struct.
 pub struct Server2 {

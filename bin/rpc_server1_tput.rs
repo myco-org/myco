@@ -10,13 +10,12 @@ use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
-use myco_rs::constants::{FIXED_SEED_TPUT_RNG, THROUGHPUT_ITERATIONS};
-use myco_rs::error::MycoError;
 use myco_rs::{
     client::Client,
-    constants::{BATCH_SIZE, NUM_CLIENTS},
+    constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
+    crypto::generate_test_certificates,
     dtypes::Key,
-    generate_test_certificates,
+    error::MycoError,
     network::{LocalServer1Access, RemoteServer2Access},
     server1::Server1,
 };
@@ -195,5 +194,6 @@ async fn main() {
     .unwrap();
 
     // Calculate and append averages for latency and bytes
+    #[cfg(feature = "perf-logging")]
     myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
 }

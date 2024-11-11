@@ -10,16 +10,9 @@
 //! ("cover traffic"), and must perform a fixed number of reads per epoch (using fake reads to fill 
 //! any gaps) to maintain privacy.
 
-use crate::constants::{BLOCK_SIZE, D};
-use crate::dtypes::{Bucket, Key, Path};
-use crate::error::MycoError;
-use crate::logging::LatencyMetric;
-use crate::network::{
-    Server1Access, Server2Access,
+use crate::{
+    constants::{BATCH_SIZE, BLOCK_SIZE, D}, crypto::get_path_indices, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, network::{Server1Access, Server2Access}, tree::SparseBinaryTree, utils::{decrypt, encrypt, kdf, prf, trim_zeros, EncryptionType}
 };
-use crate::tree::SparseBinaryTree;
-use crate::utils::trim_zeros;
-use crate::{get_path_indices, utils::{kdf, prf, EncryptionType, encrypt, decrypt}, BATCH_SIZE};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::collections::HashMap;
@@ -75,7 +68,10 @@ impl Client {
 
         self.epoch += 1;
         local_latency.finish();
-        self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs).await;
+        self.s1
+            .queue_write(ct, f, Key::new(k_oblv_t), cs)
+            .await
+            .map_err(|_| MycoError::NoMessageFound)?;
         end_to_end_latency.finish();
         Ok(())
     }

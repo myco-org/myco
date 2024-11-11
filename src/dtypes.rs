@@ -19,7 +19,7 @@ use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{tree::TreeValue, BLOCK_SIZE, D, LAMBDA, Z};
+use crate::{tree::TreeValue, constants::{BLOCK_SIZE, D, LAMBDA, Z}};
 
 pub(crate) type Timestamp = u64;
 
