@@ -404,40 +404,11 @@ where
         results
     }
 
-    pub fn zip_mut<'a, 'b, S>(
+    pub fn zip_mut<'a, S>(
         &'a mut self,
-        rhs: &'b mut SparseBinaryTree<S>,
-    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
-        // Ensure both trees have the same number of elements
-        if self.packed_indices.len() != rhs.packed_indices.len() {
-            panic!("Trees must have the same number of elements to zip.");
-        }
-
-        let mut result = Vec::new();
-
-        for i in 0..self.packed_indices.len() {
-            let lhs_idx = self.packed_indices[i];
-            let rhs_idx = rhs.packed_indices[i];
-
-            if lhs_idx == rhs_idx {
-                // SAFETY: We know `i` is in bounds due to the length check above.
-                let lhs_value = &mut self.packed_buckets[i] as *mut T;
-                let rhs_value = &mut rhs.packed_buckets[i] as *mut S;
-
-                unsafe {
-                    result.push((
-                        Some(&mut *lhs_value),
-                        Some(&mut *rhs_value),
-                        Path::from(lhs_idx),
-                    ));
-                }
-            } else {
-                // The indices don't match, this case shouldn't happen given the assumption
-                panic!("Indices don't match in the same-length trees.");
-            }
-        }
-
-        result
+        rhs: &'a mut SparseBinaryTree<S>,
+    ) -> ZipMutIterator<'a, T, S> {
+        ZipMutIterator::new(self, rhs)
     }
 
     pub fn zip_with_binary_tree<S: Clone>(
@@ -487,6 +458,73 @@ where
         nodes
     }
 }
+
+/// Helper struct to track which parts of the slices we're working with
+struct SlicePair<'a, T, S> {
+    left_indices: &'a [usize],
+    right_indices: &'a [usize],
+    left_buckets: &'a mut [T],
+    right_buckets: &'a mut [S],
+}
+
+pub struct ZipMutIterator<'a, T, S> {
+    slices: Option<SlicePair<'a, T, S>>,
+}
+
+impl<'a, T, S> ZipMutIterator<'a, T, S> {
+    fn new(left_tree: &'a mut SparseBinaryTree<T>, right_tree: &'a mut SparseBinaryTree<S>) -> Self {
+        if left_tree.packed_indices.len() != right_tree.packed_indices.len() {
+            panic!("Trees must have the same number of elements to zip.");
+        }
+
+        let slices = Some(SlicePair {
+            left_indices: &left_tree.packed_indices[..],
+            right_indices: &right_tree.packed_indices[..],
+            left_buckets: &mut left_tree.packed_buckets[..],
+            right_buckets: &mut right_tree.packed_buckets[..],
+        });
+
+        Self { slices }
+    }
+}
+
+impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
+    type Item = (Box<Option<&'a mut T>>, Box<Option<&'a mut S>>, Path);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let slices = self.slices.take()?;
+        
+        // If we have no more elements, return None
+        if slices.left_indices.is_empty() {
+            return None;
+        }
+
+        // Get the first elements and the rest of the slices
+        let (left_idx, rest_left_indices) = slices.left_indices.split_first()?;
+        let (right_idx, rest_right_indices) = slices.right_indices.split_first()?;
+        let (left_bucket, rest_left_buckets) = slices.left_buckets.split_first_mut()?;
+        let (right_bucket, rest_right_buckets) = slices.right_buckets.split_first_mut()?;
+
+        // Store the rest of the slices for the next iteration
+        self.slices = Some(SlicePair {
+            left_indices: rest_left_indices,
+            right_indices: rest_right_indices,
+            left_buckets: rest_left_buckets,
+            right_buckets: rest_right_buckets,
+        });
+
+        if left_idx == right_idx {
+            Some((
+                Box::new(Some(left_bucket)),
+                Box::new(Some(right_bucket)),
+                Path::from(*left_idx),
+            ))
+        } else {
+            panic!("Indices don't match in the same-length trees.");
+        }
+    }
+}
+
 
 #[derive(Serialize, Deserialize)]
 struct DBState {

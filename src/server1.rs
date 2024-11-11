@@ -23,7 +23,7 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge, ParallelIterator
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -189,9 +189,9 @@ impl Server1 {
         // This enumerated index doesn't match the index inside of the message queue.
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .par_iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
+            .par_bridge()
+            .for_each(|(idx, (mut bucket, mut metadata_bucket, bucket_path))| {
                 // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
 
@@ -229,7 +229,7 @@ impl Server1 {
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
-                if let Some(bucket) = bucket {
+                if let Some(bucket) = bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the block, no padding or shuffling needed
@@ -253,7 +253,7 @@ impl Server1 {
                         Z
                     );
                 }
-                if let Some(metadata_bucket) = metadata_bucket {
+                if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the metadata, no padding or shuffling needed
@@ -368,9 +368,9 @@ impl Server1 {
         let process_queued_buckets_latency = LatencyMetric::new("server1_batch_write_process_queued_buckets");
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .par_iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
+            .par_bridge()
+            .for_each(|(idx, (mut bucket, mut metadata_bucket, bucket_path))| {
                 // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
 
@@ -410,7 +410,7 @@ impl Server1 {
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
-                if let Some(bucket) = bucket {
+                if let Some(bucket) = bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the block, no padding or shuffling needed
@@ -434,7 +434,7 @@ impl Server1 {
                         Z
                     );
                 }
-                if let Some(metadata_bucket) = metadata_bucket {
+                if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the metadata, no padding or shuffling needed
