@@ -58,6 +58,7 @@ anyhow = "1.0.92"
 tower = "0.4"
 tower-http = { version = "0.4", features = ["timeout", "trace"] }
 socket2 = "0.5"
+cfg-if = "1.0.0"
 
 [features]
 simulation = []

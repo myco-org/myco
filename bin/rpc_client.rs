@@ -7,8 +7,10 @@
 #![allow(private_bounds)]
 
 use myco_rs::{
-    client::Client, constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS}, dtypes::Key, logging::calculate_and_append_averages, network::{RemoteServer1Access, RemoteServer2Access}
+    client::Client, constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS}, dtypes::Key, network::{RemoteServer1Access, RemoteServer2Access}
 };
+#[cfg(feature = "perf-logging")]
+use myco_rs::logging::calculate_and_append_averages;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::error::Error;
@@ -124,6 +126,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     assert!(response.status().is_success());
 
     // Calculate client averages
+    #[cfg(feature = "perf-logging")]
     calculate_and_append_averages("client_latency.csv", "client_bytes.csv");
     Ok(())
 }

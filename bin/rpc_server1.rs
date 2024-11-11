@@ -24,13 +24,16 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
     constants::{DELTA, LATENCY_BENCH_COUNT},
-    generate_test_certificates,
+    utils::generate_test_certificates,
+    dtypes::Key,
+    error::MycoError,
+    network::RemoteServer2Access,
     rpc_types::{
         BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
         QueueWriteResponse,
     },
+    server1::Server1,
 };
-use myco_rs::{dtypes::Key, network::RemoteServer2Access, server1::Server1};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
@@ -83,7 +86,7 @@ async fn main() {
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().expect("Failed to generate certificates");
+        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)
@@ -131,7 +134,7 @@ async fn queue_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byte
         .server1
         .write()
         .await
-        .queue_write(request.ct, request.f, request.k_oram_t, request.cs)
+        .queue_write(request.ct, request.f, request.k_oblv_t, request.cs)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     bincode::serialize(&QueueWriteResponse { success: true })
@@ -178,6 +181,7 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
 // Add this new endpoint handler
 async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /finalize_benchmark");
+    #[cfg(feature = "perf-logging")]
     myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
     Ok(Bytes::from("Benchmark finalized"))
 }

@@ -1,3 +1,10 @@
+//! Server1 
+//! 
+//! S1 (Server 1) acts as the entry point for client writes in Myco, coordinating a tree-based 
+//! oblivious data structure system. When clients write messages, S1 receives encrypted message 
+//! content along with a pseudorandom location value and encryption key. S1 effectively functions 
+//! as an "ORAM-like client" that mediates between the writing clients and S2's storage tree.
+
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
@@ -6,16 +13,8 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
-use crate::client::Client;
-use crate::get_path_indices;
-use crate::logging::{BytesMetric, LatencyMetric};
-use crate::network::{
-    Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access,
-};
-use crate::tree::SparseBinaryTree;
 use crate::{
-    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
-    EncryptionType, Key, Metadata, OramError, Path,
+    client::Client, constants::*, utils::get_path_indices, dtypes::{Block, Bucket, Key, Metadata, Path}, error::MycoError, logging::{BytesMetric, LatencyMetric}, network::{Command, LocalServer1Access, LocalServer2Access, RemoteServer2Access, Server2Access}, tree::{BinaryTree, SparseBinaryTree}, crypto::{encrypt, decrypt, prf, EncryptionType}
 };
 use bincode::{deserialize, serialize};
 use dashmap::DashMap;
@@ -23,27 +22,39 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use rayon::iter::{
-    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelBridge, ParallelIterator
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Mutex as TokioMutex;
 
+/// The main server1 struct.
 pub struct Server1 {
+    /// The current epoch of the server.
     pub epoch: u64,
+    /// The key used for server1 transactions.
     pub k_s1_t: Key,
+    /// The number of clients connected to the server.
     pub num_clients: usize,
+    /// Access to Server2.
     pub s2: Box<dyn Server2Access>,
+    /// Sparse binary tree for storing buckets.
     pub p: SparseBinaryTree<Bucket>,
+    /// Sparse binary tree for temporary storage of buckets.
     pub pt: SparseBinaryTree<Bucket>,
+    /// Sparse binary tree for temporary storage of metadata.
     pub metadata_pt: SparseBinaryTree<Metadata>,
+    /// Binary tree for storing metadata.
     pub metadata: BinaryTree<Metadata>,
+    /// Indices of the pathset.
     pub pathset_indices: Vec<usize>,
+    /// Queue for storing messages.
     pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
 impl Server1 {
+    /// Create a new Server1 instance.
     pub fn new(s2: Box<dyn Server2Access>) -> Self {
         Self {
             epoch: 0,
@@ -59,16 +70,22 @@ impl Server1 {
         }
     }
 
+    /// Initialize the server for a new batch.
     pub async fn async_batch_init(&mut self, num_clients: usize) {
+        // Create metrics to track initialization latency
         let end_to_end_latency = LatencyMetric::new("server1_batch_init_end_to_end");
         let mut local_latency = LatencyMetric::new("server1_batch_init_local");
+        
+        // Initialize random number generator
         let mut rng = ChaCha20Rng::from_entropy();
 
+        // Generate random paths for each client
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
         self.pathset_indices = get_path_indices(paths);
 
+        // Pause local latency tracking while reading from Server2
         local_latency.pause();
         let buckets: Vec<Bucket> = self
             .s2
@@ -76,7 +93,11 @@ impl Server1 {
             .await
             .unwrap();
         local_latency.resume();
+        
+        // Get size of buckets for initializing trees
         let bucket_size = buckets.len();
+
+        // Initialize sparse binary trees with buckets and metadata
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
             vec![Bucket::default(); bucket_size],
@@ -87,23 +108,36 @@ impl Server1 {
             self.pathset_indices.clone(),
         );
 
+        // Set server state
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
+
+        // Record final latency metrics
         end_to_end_latency.finish();
         local_latency.finish();
     }
 
+    /// Initialize the server for a new batch.
     pub fn batch_init(&mut self, num_clients: usize) {
+        // Create cryptographically secure random number generator
         let mut rng = ChaCha20Rng::from_entropy();
 
+        // Generate random paths for each client
         let paths = (0..(NU * num_clients))
             .map(|_| Path::random(&mut rng))
             .collect::<Vec<Path>>();
+        // Convert paths to indices
         self.pathset_indices = get_path_indices(paths);
 
+        // Read buckets from Server2 synchronously by blocking on async call
         let buckets: Vec<Bucket> =
             futures::executor::block_on(self.s2.read_paths(self.pathset_indices.clone())).unwrap();
         let bucket_size = buckets.len();
+
+        // Initialize sparse binary trees:
+        // - p: Main tree with buckets from Server2
+        // - pt: Temporary tree for processing writes
+        // - metadata_pt: Temporary tree for metadata
         self.p = SparseBinaryTree::new_with_data(buckets, self.pathset_indices.clone());
         self.pt = SparseBinaryTree::new_with_data(
             vec![Bucket::default(); bucket_size],
@@ -114,6 +148,7 @@ impl Server1 {
             self.pathset_indices.clone(),
         );
 
+        // Set number of clients and generate new random key for this batch
         self.num_clients = num_clients;
         self.k_s1_t = Key::random(&mut rng);
     }
@@ -124,21 +159,21 @@ impl Server1 {
         &mut self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
         let t_exp = self.epoch + DELTA as u64;
-        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).expect("PRF failed");
+        let l: Vec<u8> = prf(&self.k_s1_t.0, &[&f[..], &cs[..]].concat()).map_err(|_| MycoError::ProtocolError("PRF failed".to_string()))?;
         let intended_message_path = Path::from(l);
         let (lca_idx, _) = self
             .pt
             .lca_idx(&intended_message_path)
-            .ok_or(OramError::LcaNotFound)?;
+            .ok_or(MycoError::LcaNotFound)?;
 
         // Queue the write.
         self.message_queue.entry(lca_idx).or_default().push((
             ct,
-            k_oram_t,
+            k_oblv_t,
             t_exp,
             intended_message_path,
         ));
@@ -146,7 +181,8 @@ impl Server1 {
         Ok(())
     }
 
-    pub fn batch_write(&mut self) -> Result<(), OramError> {
+    /// Finalize a batch write.
+    pub fn batch_write(&mut self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
 
@@ -160,15 +196,15 @@ impl Server1 {
                     let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
-                            let (l, k_oram_t, t_exp) = metadata_block;
+                            let (l, k_oblv_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
                                 // Real decryption
-                                let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
+                                let ct = decrypt(&k_oblv_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
                                     ct,
-                                    k_oram_t.clone(),
+                                    k_oblv_t.clone(),
                                     *t_exp,
                                     l.clone(),
                                 ));
@@ -189,18 +225,18 @@ impl Server1 {
         // This enumerated index doesn't match the index inside of the message queue.
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .par_iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
+            .par_bridge()
+            .for_each(|(idx, (mut bucket, mut metadata_bucket, bucket_path))| {
                 // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
 
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
                 let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
-                    for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
-                        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-                            .map_err(|_| OramError::EncryptionFailed)
+                    for (ct, k_oblv_t, t_exp, intended_message_path) in blocks.iter() {
+                        let c_msg = encrypt(&k_oblv_t.0, &ct, EncryptionType::DoubleEncrypt)
+                            .map_err(|_| MycoError::EncryptionFailed)
                             .unwrap();
 
                         // Insert the message into the pt bucket.
@@ -212,7 +248,7 @@ impl Server1 {
                         if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                             metadata_bucket.push(
                                 intended_message_path.clone(),
-                                k_oram_t.clone(),
+                                k_oblv_t.clone(),
                                 *t_exp,
                             );
                         }
@@ -229,7 +265,7 @@ impl Server1 {
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
-                if let Some(bucket) = bucket {
+                if let Some(bucket) = bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the block, no padding or shuffling needed
@@ -253,7 +289,7 @@ impl Server1 {
                         Z
                     );
                 }
-                if let Some(metadata_bucket) = metadata_bucket {
+                if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the metadata, no padding or shuffling needed
@@ -315,10 +351,11 @@ impl Server1 {
             }
         };
 
-        result.map_err(|_| OramError::NoMessageFound)
+        result.map_err(|_| MycoError::NoMessageFound)
     }
 
-    pub async fn async_batch_write(&mut self) -> Result<(), OramError> {
+    /// Finalize a batch write.
+    pub async fn async_batch_write(&mut self) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("server1_batch_write_end_to_end");  
         let local_latency = LatencyMetric::new("server1_batch_write_local");
         let mut rng = ChaCha20Rng::from_entropy();
@@ -334,15 +371,15 @@ impl Server1 {
                     let mut real_decrypt_count = 0;
                     (0..bucket.len()).for_each(|b| {
                         if let Some(metadata_block) = metadata_bucket.get(b) {
-                            let (l, k_oram_t, t_exp) = metadata_block;
+                            let (l, k_oblv_t, t_exp) = metadata_block;
                             if self.epoch < *t_exp {
                                 let c_msg = bucket.get(b).unwrap();
                                 // Real decryption
-                                let ct = decrypt(&k_oram_t.0, &c_msg.0).unwrap();
+                                let ct = decrypt(&k_oblv_t.0, &c_msg.0).unwrap();
                                 let (lca_idx, _) = self.pt.lca_idx(&l).unwrap();
                                 self.message_queue.entry(lca_idx).or_default().push((
                                     ct,
-                                    k_oram_t.clone(),
+                                    k_oblv_t.clone(),
                                     *t_exp,
                                     l.clone(),
                                 ));
@@ -368,18 +405,18 @@ impl Server1 {
         let process_queued_buckets_latency = LatencyMetric::new("server1_batch_write_process_queued_buckets");
         self.pt
             .zip_mut(&mut self.metadata_pt)
-            .par_iter_mut()
             .enumerate()
-            .for_each(|(idx, (bucket, metadata_bucket, bucket_path))| {
+            .par_bridge()
+            .for_each(|(idx, (mut bucket, mut metadata_bucket, bucket_path))| {
                 // Get the original index in the p and metadata tree from the index in pt.
                 let original_idx = self.pathset_indices[idx];
 
                 // Insert both the new and non-expired messages into the pt and metadata_pt.
                 let mut real_encrypt_count = 0;
                 if let Some(blocks) = self.message_queue.get(&original_idx) {
-                    for (ct, k_oram_t, t_exp, intended_message_path) in blocks.iter() {
-                        let c_msg = encrypt(&k_oram_t.0, &ct, EncryptionType::DoubleEncrypt)
-                            .map_err(|_| OramError::EncryptionFailed)
+                    for (ct, k_oblv_t, t_exp, intended_message_path) in blocks.iter() {
+                        let c_msg = encrypt(&k_oblv_t.0, &ct, EncryptionType::DoubleEncrypt)
+                            .map_err(|_| MycoError::EncryptionFailed)
                             .unwrap();
 
                         // Insert the message into the pt bucket.
@@ -391,7 +428,7 @@ impl Server1 {
                         if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                             metadata_bucket.push(
                                 intended_message_path.clone(),
-                                k_oram_t.clone(),
+                                k_oblv_t.clone(),
                                 *t_exp,
                             );
                         }
@@ -410,7 +447,7 @@ impl Server1 {
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
-                if let Some(bucket) = bucket {
+                if let Some(bucket) = bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the block, no padding or shuffling needed
@@ -434,7 +471,7 @@ impl Server1 {
                         Z
                     );
                 }
-                if let Some(metadata_bucket) = metadata_bucket {
+                if let Some(metadata_bucket) = metadata_bucket.as_mut() {
                     #[cfg(feature = "no-enc")]
                     {
                         // Just push the metadata, no padding or shuffling needed
@@ -508,6 +545,6 @@ impl Server1 {
             }
         };
 
-        result.map_err(|_| OramError::NoMessageFound)
+        result.map_err(|_| MycoError::NoMessageFound)
     }
 }

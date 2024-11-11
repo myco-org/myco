@@ -14,36 +14,24 @@ mod e2e_tests {
     };
 
     use myco_rs::{
-        client::Client,
-        constants::{D, DELTA, NUM_CLIENTS, Z},
-        decrypt,
-        dtypes::{Bucket, Key, Metadata, Path},
-        encrypt,
-        error::OramError,
-        kdf,
-        network::{LocalServer1Access, LocalServer2Access},
-        prf,
-        server1::Server1,
-        server2::Server2,
-        tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams},
-        trim_zeros, EncryptionType,
+        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, dtypes::{Bucket, Key, Metadata, Path}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, crypto::{decrypt, encrypt, kdf, prf, EncryptionType}, utils::trim_zeros
     };
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
 
     fn try_to_decrypt_data_on_path(
         path: Vec<Bucket>,
-        k_oram_t: &Key,
+        k_oblv_t: &Key,
         k_msg: &Key,
-    ) -> Result<Vec<u8>, OramError> {
+    ) -> Result<Vec<u8>, MycoError> {
         for bucket in path {
             for block in bucket {
-                if let Ok(c_msg) = decrypt(&k_oram_t.0, &block.0) {
+                if let Ok(c_msg) = decrypt(&k_oblv_t.0, &block.0) {
                     return decrypt(&k_msg.0, &c_msg);
                 }
             }
         }
-        Err(OramError::NoMessageFound)
+        Err(MycoError::NoMessageFound)
     }
 
     #[test]
@@ -440,17 +428,17 @@ mod e2e_tests {
             .zip(&s1.read().unwrap().metadata)
             .into_iter()
             .try_for_each(|(bucket, metadata_bucket, _path)| {
-                let bucket = bucket.clone().ok_or(OramError::BucketNotFound)?;
+                let bucket = bucket.clone().ok_or(MycoError::BucketNotFound)?;
                 (0..bucket.len()).try_for_each(|b| {
                     metadata_bucket
                         .as_ref()
-                        .ok_or(OramError::MetadataBucketNotFound)
+                        .ok_or(MycoError::MetadataBucketNotFound)
                         .and_then(|metadata_bucket| {
-                            let (_l, k_oram_t, t_exp) = metadata_bucket
+                            let (_l, k_oblv_t, t_exp) = metadata_bucket
                                 .get(b)
-                                .ok_or(OramError::MetadataIndexError(b))?;
-                            let c_msg = bucket.get(b).ok_or(OramError::BucketIndexError(b))?;
-                            if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                                .ok_or(MycoError::MetadataIndexError(b))?;
+                            let c_msg = bucket.get(b).ok_or(MycoError::BucketIndexError(b))?;
+                            if let Ok(ct) = decrypt(&k_oblv_t.0, &c_msg.0) {
                                 if let Ok(decrypted) = decrypt(&k_msg, &ct) {
                                     decrypted_messages.push(trim_zeros(&decrypted));
                                 }
@@ -500,14 +488,14 @@ mod e2e_tests {
         // Doing a client write manually and extracting the intended path of this message
         let epoch = client.epoch;
         let cs = client.id.clone().into_bytes();
-        let (k_msg, k_oram, k_prf) = client.keys.get(&key).unwrap();
+        let (k_msg, k_oblv, k_prf) = client.keys.get(&key).unwrap();
         let f: Vec<u8> = prf(k_prf, &epoch.to_be_bytes()).expect("PRF failed");
-        let k_oram_t = kdf(k_oram, &epoch.to_string()).expect("KDF failed");
+        let k_oblv_t = kdf(k_oblv, &epoch.to_string()).expect("KDF failed");
         let ct = encrypt(k_msg, &message, EncryptionType::Encrypt).expect("Encryption failed");
         client.epoch += 1;
         client
             .s1
-            .queue_write(ct, f.clone(), Key::new(k_oram_t), cs.clone())
+            .queue_write(ct, f.clone(), Key::new(k_oblv_t), cs.clone())
             .await
             .expect("Initial write failed");
         let k_s1_t = s1.read().unwrap().k_s1_t.0.clone();
@@ -532,15 +520,15 @@ mod e2e_tests {
                 .expect("Metadata not found at LCA");
             let mut found = false;
             for b in 0..lca_bucket.len() {
-                let (l, k_oram_t, t_exp) = metadata_bucket
+                let (l, k_oblv_t, t_exp) = metadata_bucket
                     .get(b)
-                    .ok_or(OramError::MetadataIndexError(b))
+                    .ok_or(MycoError::MetadataIndexError(b))
                     .expect("Failed to get metadata");
                 let c_msg = lca_bucket
                     .get(b)
-                    .ok_or(OramError::BucketIndexError(b))
+                    .ok_or(MycoError::BucketIndexError(b))
                     .expect("Failed to get bucket item");
-                if let Ok(ct) = decrypt(&k_oram_t.0, &c_msg.0) {
+                if let Ok(ct) = decrypt(&k_oblv_t.0, &c_msg.0) {
                     if let Some((k_msg, _, _)) = client.keys.get(&key) {
                         if let Ok(decrypted) = decrypt(k_msg, &ct) {
                             let trimmed = trim_zeros(&decrypted);

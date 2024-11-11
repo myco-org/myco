@@ -1,46 +1,51 @@
+//! # Myco Network Module
+//!
+//! This module contains the network communication code for the Myco library.
+//!
+//! It defines the traits and structures for interacting with the servers over the network.
 use anyhow::Result;
 use axum::async_trait;
 use bincode::{deserialize, serialize};
 use futures::{StreamExt, TryStreamExt};
-use rustls::{Certificate, PrivateKey, RootCertStore, ServerName};
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, RwLock};
-use std::time::Duration;
 use std::{
     io::{Read, Write},
     sync::Arc,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    sync::Mutex as TokioMutex,
-};
-use tokio_rustls::client::TlsStream;
-use tokio_rustls::TlsConnector;
-
-use crate::logging::{BytesMetric, LatencyMetric};
-use crate::rpc_types::{
-    ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
-    ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
-    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest,
-    ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest,
-    StorePathIndicesResponse, WriteRequest, WriteResponse,
-};
-use crate::{error::OramError, server1::Server1, server2::Server2, Bucket, Key, Path};
+use tokio::io::AsyncWriteExt;
 use crate::{
-    BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK, Z,
+    dtypes::{Bucket, Key, Path},
+    error::MycoError,
+    logging::BytesMetric,
+    rpc_types::{
+        ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
+        ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
+        GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest,
+        ReadPathsResponse, StorePathIndicesRequest, StorePathIndicesResponse, WriteResponse,
+    },
+    server1::Server1,
+    server2::Server2,
+    constants::{NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK},
 };
 
 #[derive(Serialize, Deserialize, Debug)]
+/// An enum representing the different types of commands that can be sent to the servers
 pub enum Command {
+    /// Command to write to Server1
     Server1Write(Vec<u8>, Vec<u8>, Key, Vec<u8>),
+    /// Command to write to Server2
     Server2Write(WriteType),
+    /// Command to read from Server2
     Server2Read(ReadType),
+    /// Command to indicate success
     Success,
 }
 
 #[derive(Serialize, Deserialize)]
+/// A type representing the different types of write commands that can be sent to Server2
 pub enum WriteType {
+    /// Command to write to Server2
     Write(Vec<Bucket>, Key),
 }
 
@@ -54,49 +59,64 @@ impl std::fmt::Debug for WriteType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+/// A type representing the different types of read commands that can be sent to Server2
 pub enum ReadType {
+    /// Command to read a single path
     Read(Path),
+    /// Command to read multiple paths
     ReadPaths(Vec<usize>),
+    /// Command to get PRF keys
     GetPrfKeys,
 }
 
+/// A trait for local communication
+#[allow(dead_code)]
 pub(crate) trait Local {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError>;
+    fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
+#[allow(dead_code)]
 pub(crate) trait Network {
-    fn send(&self, command: &[u8]) -> Result<Vec<u8>, OramError>;
+    fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
-// Define how we interact with Server2
+/// A trait for remote communication with Server2
 #[async_trait]
 pub trait Server2Access: Send + Sync {
+    /// Read paths from Server2
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>>;
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>>;
+    /// Write to Server2
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
+    /// Get PRF keys from Server2
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
 
-// Local access - direct memory access
+/// Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer2Access {
+    /// The server instance
     pub server: Arc<Mutex<Server2>>,
 }
 
 impl LocalServer2Access {
+    /// Create a new LocalServer2Access instance
     pub fn new(server: Arc<Mutex<Server2>>) -> Self {
         Self { server }
     }
 
+    /// Create a new LocalServer2Access instance with a new Server2 instance
     pub fn new_with_server() -> Self {
         Self {
             server: Arc::new(Mutex::new(Server2::new())),
@@ -106,6 +126,7 @@ impl LocalServer2Access {
 
 #[async_trait]
 impl Server2Access for LocalServer2Access {
+    /// Read paths from Server2
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
         self.server
             .lock()
@@ -114,6 +135,7 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client(
         &self,
         indices: Vec<usize>,
@@ -126,7 +148,6 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
-    //TODO: Clean, for now just use read_paths_client
     async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
@@ -155,7 +176,7 @@ impl Server2Access for LocalServer2Access {
     }
 }
 
-// Remote access - serialized network access
+/// Remote access - serialized network access
 pub struct RemoteServer2Access {
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
@@ -164,38 +185,44 @@ pub struct RemoteServer2Access {
 #[async_trait]
 impl Server2Access for RemoteServer2Access {
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
-        // First store the path indices.
+        // First store the path indices on the server
         let store_request = StorePathIndicesRequest {
             pathset: indices.clone(),
         };
 
+        // Log the size of the store request if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let store_request_bytes =
-                bincode::serialize(&store_request).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&store_request).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new("batch_init_store_path_indices", store_request_bytes.len()).log();
         }
 
+        // Send request to store path indices
         self.post_bincode::<_, StorePathIndicesResponse>("store_path_indices", store_request)
             .await?;
 
-        // Then read in chunks.
+        // Split indices into chunks for batched reading
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
+        
+        // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsRequest { chunk_idx };
             self.post_bincode::<_, ChunkReadPathsResponse>("chunk_read_paths", request)
         });
 
+        // Collect responses from all chunks
         let mut all_buckets = Vec::new();
         for response in futures::future::join_all(futures).await {
             let chunk_response = response?;
             all_buckets.extend(chunk_response.buckets);
         }
 
+        // Log total response size if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new("batch_init_read_paths_response", total_response_bytes).log();
         }
@@ -208,10 +235,11 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
+        // Log the size of the request indices if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
-                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&indices).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new(
                 &format!("client_read_paths_request_{}", batch_size),
                 indices_bytes.len(),
@@ -219,8 +247,10 @@ impl Server2Access for RemoteServer2Access {
             .log();
         }
 
-        // Then read in chunks.
+        // Split indices into chunks based on configured chunk size
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
+        
+        // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsClientRequest {
                 indices: indices.clone(),
@@ -230,16 +260,18 @@ impl Server2Access for RemoteServer2Access {
             self.post_bincode::<_, ChunkReadPathsClientResponse>("chunk_read_paths_client", request)
         });
 
+        // Collect and combine responses from all chunks
         let mut all_buckets = Vec::<Bucket>::new();
         for response in futures::future::join_all(futures).await {
             let chunk_response = response?;
             all_buckets.extend(chunk_response.buckets);
         }
 
+        // Log the total size of all responses if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&all_buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new(
                 &format!("client_read_paths_response_{}", batch_size),
@@ -256,10 +288,11 @@ impl Server2Access for RemoteServer2Access {
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>> {
+        // Log the size of the request indices if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let indices_bytes =
-                bincode::serialize(&indices).map_err(|_| OramError::SerializationFailed)?;
+                bincode::serialize(&indices).map_err(|_| MycoError::SerializationFailed)?;
             BytesMetric::new(
                 &format!("client_read_paths_request_{}", batch_size),
                 indices_bytes.len(),
@@ -267,15 +300,17 @@ impl Server2Access for RemoteServer2Access {
             .log();
         }
 
+        // Create and send request to read paths
         let request = ReadPathsClientRequest { indices };
         let response: ReadPathsResponse = self
             .post_bincode(&format!("read_paths_client"), &request)
             .await?;
 
+        // Log the total size of the response if bytes logging is enabled
         #[cfg(feature = "bytes-logging")]
         {
             let total_response_bytes = bincode::serialize(&response.buckets)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new(
                 &format!("client_read_paths_response_{}", batch_size),
@@ -298,7 +333,7 @@ impl Server2Access for RemoteServer2Access {
                 chunk_idx: 0,
             };
             let total_bytes = bincode::serialize(&total_request)
-                .map_err(|_| OramError::SerializationFailed)?
+                .map_err(|_| MycoError::SerializationFailed)?
                 .len();
             BytesMetric::new("batch_write", total_bytes).log();
         }
@@ -328,40 +363,45 @@ impl Server2Access for RemoteServer2Access {
     }
 
     async fn get_prf_keys(&self) -> Result<Vec<Key>> {
+        // Make GET request to the PRF keys endpoint
         let response: GetPrfKeysResponse = self
             .client
             .get(&format!("{}/get_prf_keys", self.base_url))
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request",
                 ))
             })?
+            // Get response bytes
             .bytes()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to get response bytes",
                 ))
             })
+            // Deserialize response bytes into GetPrfKeysResponse
             .and_then(|bytes| {
-                bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)
+                bincode::deserialize(&bytes).map_err(|_| MycoError::DeserializationError)
             })?;
 
+        // Return the vector of PRF keys
         Ok(response.keys)
     }
 }
 
 impl RemoteServer2Access {
-    pub async fn new(base_url: &str) -> Result<Self, OramError> {
+    /// Create a new RemoteServer2Access instance
+    pub async fn new(base_url: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to create HTTP client",
                 ))
@@ -373,13 +413,14 @@ impl RemoteServer2Access {
         })
     }
 
+    /// Send a bincoded request to the server
     async fn post_bincode<T: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
         payload: T,
-    ) -> Result<R, OramError> {
+    ) -> Result<R, MycoError> {
         let request_bytes =
-            bincode::serialize(&payload).map_err(|_| OramError::DeserializationError)?;
+            bincode::serialize(&payload).map_err(|_| MycoError::DeserializationError)?;
 
 
         let response = self
@@ -390,36 +431,38 @@ impl RemoteServer2Access {
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request",
                 ))
             })?;
 
         let bytes = response.bytes().await.map_err(|_| {
-            OramError::IoError(std::io::Error::new(
+            MycoError::IoError(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Failed to get response bytes",
             ))
         })?;
 
-        Ok(bincode::deserialize(&bytes).map_err(|_| OramError::DeserializationError)?)
+        Ok(bincode::deserialize(&bytes).map_err(|_| MycoError::DeserializationError)?)
     }
 }
 
-// Remote access - serialized network access
+/// Remote access - serialized network access
 pub struct RemoteServer1Access {
+    /// The HTTP client
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
 }
 
 impl RemoteServer1Access {
-    pub async fn new(server1_addr: &str) -> Result<Self, OramError> {
+    /// Create a new RemoteServer1Access instance
+    pub async fn new(server1_addr: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
             .build()
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to create HTTP client",
                 ))
@@ -432,25 +475,28 @@ impl RemoteServer1Access {
     }
 }
 
-// Define how we interact with Server1
+/// A trait for interacting with Server1
 #[async_trait]
 pub trait Server1Access: Send {
+    /// Queue a write to Server1
     async fn queue_write(
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError>;
+    ) -> Result<(), MycoError>;
 }
 
-// Local access - direct memory access
+/// Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer1Access {
+    /// The server instance
     pub server: Arc<RwLock<Server1>>,
 }
 
 impl LocalServer1Access {
+    /// Create a new LocalServer1Access instance
     pub fn new(server: Arc<RwLock<Server1>>) -> Self {
         Self { server }
     }
@@ -462,13 +508,13 @@ impl Server1Access for LocalServer1Access {
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
         self.server
             .write()
             .unwrap()
-            .queue_write(ct, f, k_oram_t, cs)
+            .queue_write(ct, f, k_oblv_t, cs)
     }
 }
 
@@ -478,19 +524,23 @@ impl Server1Access for RemoteServer1Access {
         &self,
         ct: Vec<u8>,
         f: Vec<u8>,
-        k_oram_t: Key,
+        k_oblv_t: Key,
         cs: Vec<u8>,
-    ) -> Result<(), OramError> {
+    ) -> Result<(), MycoError> {
+        // Create the request payload
         let queue_write_request = QueueWriteRequest {
             ct,
             f,
-            k_oram_t,
+            k_oblv_t,
             cs,
         };
 
+        // Serialize the request and log the size
         let request_bytes = serialize(&queue_write_request).unwrap();
         let queue_write_bytes_metric = BytesMetric::new("queue_write_bytes", request_bytes.len());
         queue_write_bytes_metric.log();
+
+        // Send POST request to Server1's queue_write endpoint
         let response = self
             .client
             .post(&format!("{}/queue_write", self.base_url))
@@ -499,12 +549,13 @@ impl Server1Access for RemoteServer1Access {
             .send()
             .await
             .map_err(|_| {
-                OramError::IoError(std::io::Error::new(
+                MycoError::IoError(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "Failed to send request to Server1",
                 ))
             })?;
 
+        // Deserialize the response
         let queue_write_response: QueueWriteResponse =
             deserialize(&response.bytes().await.unwrap()).unwrap();
 
@@ -512,7 +563,7 @@ impl Server1Access for RemoteServer1Access {
         if queue_write_response.success {
             Ok(())
         } else {
-            Err(OramError::IoError(std::io::Error::new(
+            Err(MycoError::IoError(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "Unexpected response from Server1",
             )))
