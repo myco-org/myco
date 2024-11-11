@@ -1,6 +1,6 @@
 # Myco: A Metadata-Private Messaging System
 
-Myco is an implementation of a metadata-private messaging system that achieves polylogarithmic read and write efficiency while maintaining strong cryptographic guarantees. It uses a distributed-trust model with two non-colluding servers and a novel tree-based oblivious data structure that enables private communication between clients.
+This is a pure Rust implementation of Myco, a metadata-private messaging system that achieves polylogarithmic read and write efficiency while maintaining strong cryptographic guarantees.
 
 ## Project Structure
 
