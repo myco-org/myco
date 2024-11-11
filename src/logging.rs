@@ -123,38 +123,32 @@ impl BytesMetric {
 }
 
 /// Internal helper to parse and log a latency metric
-#[allow(dead_code)]
+#[cfg(feature = "perf-logging")]
 fn log_latency(message: &str) {
-    #[cfg(feature = "perf-logging")]
-    {
-        let parts: Vec<&str> = message.trim().split(',').collect();
-        if parts.len() >= 4 {
-            if let (Ok(value), Ok(start), Ok(end)) = (
-                parts[1].parse::<f64>(),
-                parts[2].parse::<u64>(),
-                parts[3].parse::<u64>(),
-            ) {
-                LATENCY_LOG.lock().unwrap().push((
-                    parts[0].to_string(),
-                    value,
-                    start,
-                    end,
-                ));
-            }
+    let parts: Vec<&str> = message.trim().split(',').collect();
+    if parts.len() >= 4 {
+        if let (Ok(value), Ok(start), Ok(end)) = (
+            parts[1].parse::<f64>(),
+            parts[2].parse::<u64>(),
+            parts[3].parse::<u64>(),
+        ) {
+            LATENCY_LOG.lock().unwrap().push((
+                parts[0].to_string(),
+                value,
+                start,
+                end,
+            ));
         }
     }
 }
 
 /// Internal helper to parse and log a bytes metric
-#[allow(dead_code)]
+#[cfg(feature = "perf-logging")]
 fn log_bytes(message: &str) {
-    #[cfg(feature = "perf-logging")]
-    {
-        let parts: Vec<&str> = message.trim().split(',').collect();
-        if parts.len() >= 2 {
-            if let Ok(value) = parts[1].parse::<usize>() {
-                BYTES_LOG.lock().unwrap().push((parts[0].to_string(), value));
-            }
+    let parts: Vec<&str> = message.trim().split(',').collect();
+    if parts.len() >= 2 {
+        if let Ok(value) = parts[1].parse::<usize>() {
+            BYTES_LOG.lock().unwrap().push((parts[0].to_string(), value));
         }
     }
 }

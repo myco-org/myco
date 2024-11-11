@@ -242,34 +242,7 @@ impl<T: TreeValue> BinaryTree<T> {
             })
             .collect()
     }
-
-    /// Zips this tree with another tree, returning tuples of mutable references and paths
-    pub fn zip_mut<'a, 'b, S>(
-        &'a mut self,
-        rhs: &'b mut BinaryTree<S>,
-    ) -> Vec<(Option<&'a mut T>, Option<&'b mut S>, Path)> {
-        let len = std::cmp::max(self.value.len(), rhs.value.len());
-
-        // Ensure both trees have the same size by resizing them
-        self.value.resize_with(len, || None);
-        rhs.value.resize_with(len, || None);
-
-        // Iterate over both trees, returning mutable references
-        self.value
-            .iter_mut()
-            .zip(rhs.value.iter_mut())
-            .enumerate()
-            .filter_map(|(i, (a, b))| {
-                if a.is_some() {
-                    Some((a.as_mut(), b.as_mut(), Path::from(i)))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
 }
-
 impl fmt::Display for BinaryTree<Bucket> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "Binary Tree:")?;
