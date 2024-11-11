@@ -138,7 +138,7 @@ fn run_simulation(num_epochs: usize) {
 
     // Track bucket usage statistics over time
     let check_interval = 1000 as usize;
-    let mut usage_stats: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
+    let usage_stats: Vec<(usize, usize, f64, f64, f64)> = Vec::new();
     let k_msg = clients[0].keys.get(&key).unwrap().0.clone();
 
     // Perform multiple epochs

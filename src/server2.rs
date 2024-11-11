@@ -1,31 +1,37 @@
-use std::{
-    cmp::min,
-    collections::HashSet,
-    sync::{Arc, Mutex},
-};
+//! Server2
+//! Server2
+//! 
+//! S2 (Server 2) functions as a storage server, maintaining a tree-based data structure for message 
+//! storage and handling client read operations. It receives batched updates from S1 with re-encrypted 
+//! and reorganized messages, but cannot discern their intended locations. Clients read messages by 
+//! downloading paths from S2's tree, but S2 cannot link these reads to previous writes due to the 
+//! random path selection. S2 also stores and provides PRF keys for clients to compute message paths, 
+//! ensuring privacy by preventing correlation between writes and reads.
 
-use bincode::{deserialize, serialize};
-use rand::SeedableRng;
-use rand_chacha::ChaCha20Rng;
-use tokio::stream;
+use std::cmp::min;
 
 use crate::{
     error::MycoError,
     logging::LatencyMetric,
-    network::{Command, ReadType, WriteType},
-    tree::{BinaryTree, TreeValue},
+    tree::BinaryTree,
     Bucket, Key, Path, D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK,
     NUM_BUCKETS_PER_READ_PATHS_CHUNK,
 };
 
+/// The main server2 struct.
 pub struct Server2 {
+    /// The tree storing the buckets.
     pub tree: BinaryTree<Bucket>,
+    /// The PRF keys.
     pub prf_keys: Vec<Key>,
+    /// The current epoch.
     pub epoch: u64,
+    /// The pathset indices.
     pathset_indices: Vec<usize>,
 }
 
 impl Server2 {
+    /// Create a new Server2 instance.
     pub fn new() -> Self {
         let mut tree = BinaryTree::new_with_depth(D);
 
@@ -52,7 +58,7 @@ impl Server2 {
         }
     }
 
-    /// l is the leaf block.
+    /// Read a path from the tree.
     pub fn read(&self, l: &Path) -> Result<Vec<Bucket>, MycoError> {
         let read_latency = LatencyMetric::new("server2_read");
         let buckets = self.tree.get_all_nodes_along_path(l);
@@ -65,6 +71,7 @@ impl Server2 {
         &self.tree
     }
 
+    /// Write a batch of buckets to the tree.
     pub fn write(&mut self, packed_buckets: Vec<Bucket>) {
         let write_latency = LatencyMetric::new("server2_write");
         // Ensure the number of elements in packed_buckets matches the number of pathset_indices
@@ -113,10 +120,12 @@ impl Server2 {
         self.add_prf_key(key);
     }
 
+    /// Get the PRF keys.
     pub fn get_prf_keys(&self) -> Result<Vec<Key>, MycoError> {
         Ok(self.prf_keys.clone())
     }
 
+    /// Add a PRF key to the server.
     pub fn add_prf_key(&mut self, key: &Key) {
         let add_prf_key_latency = LatencyMetric::new("server2_add_prf_key");
         self.prf_keys.push(key.clone());
@@ -180,6 +189,7 @@ impl Server2 {
         Ok(buckets)
     }
 
+    /// Read a chunk of buckets from the server for a client request.
     pub fn read_paths_client(&self, pathset: Vec<usize>) -> Result<Vec<Bucket>, MycoError> {
         let read_paths_latency = LatencyMetric::new("server2_read_paths_client!");
         let buckets: Vec<Bucket> = pathset

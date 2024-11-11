@@ -1,39 +1,45 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unused_assignments)]
-#![allow(unused_must_use)]
-#![allow(dead_code)]
-#![allow(unused_parens)]
-#![allow(private_bounds)]
+//! Client
+//! 
+//! In Myco, clients in Myco participate in two main activities: sending (writing) and receiving 
+//! (reading) messages. When sending, a client encrypts their message using a shared key, derives a 
+//! pseudorandom location using another shared key, and sends this encrypted message to S1 along with 
+//! a specially derived encryption key for that epoch. When receiving, a client computes where their 
+//! message should be located using shared keys and the epoch information, downloads the corresponding 
+//! path from S2's tree structure, and then decrypts their message using their shared keys. 
+//! Importantly, clients must participate in every epoch by either sending real messages or fake ones 
+//! ("cover traffic"), and must perform a fixed number of reads per epoch (using fake reads to fill 
+//! any gaps) to maintain privacy.
 
 use crate::constants::{BLOCK_SIZE, D};
 use crate::dtypes::{Bucket, Key, Path};
 use crate::error::MycoError;
 use crate::logging::LatencyMetric;
 use crate::network::{
-    Command, Local, LocalServer1Access, LocalServer2Access, ReadType, RemoteServer1Access,
-    Server1Access, Server2Access, WriteType,
+    Server1Access, Server2Access,
 };
 use crate::tree::SparseBinaryTree;
-use crate::{decrypt, encrypt, get_path_indices, kdf, prf, trim_zeros, EncryptionType, BATCH_SIZE};
-use aes_gcm::aead::{AeadInPlace, KeyInit};
-use aes_gcm::{Aes128Gcm, Nonce};
-use bincode::{deserialize, serialize};
+use crate::utils::trim_zeros;
+use crate::{get_path_indices, utils::{kdf, prf, EncryptionType, encrypt, decrypt}, BATCH_SIZE};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-use ring::{digest, hkdf, pbkdf2};
 use std::collections::HashMap;
 
 /// A Myco client (user).
 pub struct Client {
+    /// The client's ID.
     pub id: String,
+    /// The current epoch of the client.
     pub epoch: usize,
+    /// The client's keys.
     pub keys: HashMap<Key, (Vec<u8>, Vec<u8>, Vec<u8>)>,
+    /// Access to Server1.
     pub s1: Box<dyn Server1Access>,
+    /// Access to Server2.
     pub s2: Box<dyn Server2Access>,
 }
 
 impl Client {
+    /// Create a new Client instance.
     pub fn new(id: String, s1: Box<dyn Server1Access>, s2: Box<dyn Server2Access>) -> Self {
         Client {
             id,
@@ -44,6 +50,7 @@ impl Client {
         }
     }
 
+    /// Setup the client with a key.
     pub fn setup(&mut self, k: &Key) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("client_setup_end_to_end");
         let k_msg = kdf(&k.0, "MSG")?;
@@ -54,6 +61,7 @@ impl Client {
         Ok(())
     }
 
+    /// Asynchronously write a message to Server1.
     pub async fn async_write(&mut self, msg: &[u8], k: &Key) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("client_write_end_to_end");
         let local_latency = LatencyMetric::new("client_write_local");
@@ -72,6 +80,7 @@ impl Client {
         Ok(())
     }
 
+    /// Write a message to Server1.
     pub fn write(&mut self, msg: &[u8], k: &Key) -> Result<(), MycoError> {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
@@ -85,6 +94,7 @@ impl Client {
         futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs))
     }
 
+    /// Asynchronously read messages from Server2.
     pub async fn async_read(
         &self,
         keys: Vec<Key>,
@@ -186,6 +196,7 @@ impl Client {
         Ok(messages)
     }
 
+    /// Read messages from Server2.
     pub fn read(&self, k: &Key, cs: String, epoch_past: usize) -> Result<Vec<u8>, MycoError> {
         let epoch = self.epoch - 1 - epoch_past;
         let cs = cs.into_bytes();
@@ -223,6 +234,7 @@ impl Client {
         Err(MycoError::NoMessageFound)
     }
 
+    /// Generate fake write data.
     pub fn fake_write(&self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
@@ -232,6 +244,7 @@ impl Client {
         futures::executor::block_on(self.s1.queue_write(ct, l, k_oblv_t, cs))
     }
 
+    /// Generate fake read data.
     pub fn fake_read(&self) -> Vec<Bucket> {
         let mut rng = ChaCha20Rng::from_entropy();
         let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();

@@ -1,5 +1,4 @@
-use myco_rs::{kdf, prf, encrypt, decrypt, trim_zeros, EncryptionType};
-use myco_rs::dtypes::Key;
+use myco_rs::{utils::{kdf, prf, encrypt, decrypt, trim_zeros, EncryptionType}, dtypes::Key};
 #[cfg(test)]
 mod util_tests {
     use myco_rs::constants::INNER_BLOCK_SIZE;

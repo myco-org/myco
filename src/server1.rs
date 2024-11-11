@@ -1,3 +1,10 @@
+//! Server1 
+//! 
+//! S1 (Server 1) acts as the entry point for client writes in Myco, coordinating a tree-based 
+//! oblivious data structure system. When clients write messages, S1 receives encrypted message 
+//! content along with a pseudorandom location value and encryption key. S1 effectively functions 
+//! as an "ORAM-like client" that mediates between the writing clients and S2's storage tree.
+
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
@@ -14,8 +21,8 @@ use crate::network::{
 };
 use crate::tree::SparseBinaryTree;
 use crate::{
-    constants::*, decrypt, encrypt, prf, server2::Server2, tree::BinaryTree, Block, Bucket,
-    EncryptionType, Key, Metadata, MycoError, Path,
+    constants::*, utils::{prf, EncryptionType, encrypt, decrypt}, server2::Server2, tree::BinaryTree, Block, Bucket,
+    Key, Metadata, MycoError, Path,
 };
 use bincode::{deserialize, serialize};
 use dashmap::DashMap;
@@ -30,20 +37,32 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::Mutex as TokioMutex;
 
+/// The main server1 struct.
 pub struct Server1 {
+    /// The current epoch of the server.
     pub epoch: u64,
+    /// The key used for server1 transactions.
     pub k_s1_t: Key,
+    /// The number of clients connected to the server.
     pub num_clients: usize,
+    /// Access to Server2.
     pub s2: Box<dyn Server2Access>,
+    /// Sparse binary tree for storing buckets.
     pub p: SparseBinaryTree<Bucket>,
+    /// Sparse binary tree for temporary storage of buckets.
     pub pt: SparseBinaryTree<Bucket>,
+    /// Sparse binary tree for temporary storage of metadata.
     pub metadata_pt: SparseBinaryTree<Metadata>,
+    /// Binary tree for storing metadata.
     pub metadata: BinaryTree<Metadata>,
+    /// Indices of the pathset.
     pub pathset_indices: Vec<usize>,
+    /// Queue for storing messages.
     pub message_queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
 }
 
 impl Server1 {
+    /// Create a new Server1 instance.
     pub fn new(s2: Box<dyn Server2Access>) -> Self {
         Self {
             epoch: 0,
@@ -59,6 +78,7 @@ impl Server1 {
         }
     }
 
+    /// Initialize the server for a new batch.
     pub async fn async_batch_init(&mut self, num_clients: usize) {
         let end_to_end_latency = LatencyMetric::new("server1_batch_init_end_to_end");
         let mut local_latency = LatencyMetric::new("server1_batch_init_local");
@@ -93,6 +113,7 @@ impl Server1 {
         local_latency.finish();
     }
 
+    /// Initialize the server for a new batch.
     pub fn batch_init(&mut self, num_clients: usize) {
         let mut rng = ChaCha20Rng::from_entropy();
 
@@ -146,6 +167,7 @@ impl Server1 {
         Ok(())
     }
 
+    /// Finalize a batch write.
     pub fn batch_write(&mut self) -> Result<(), MycoError> {
         let mut rng = ChaCha20Rng::from_entropy();
         let seed: [u8; 32] = rng.gen();
@@ -318,6 +340,7 @@ impl Server1 {
         result.map_err(|_| MycoError::NoMessageFound)
     }
 
+    /// Finalize a batch write.
     pub async fn async_batch_write(&mut self) -> Result<(), MycoError> {
         let end_to_end_latency = LatencyMetric::new("server1_batch_write_end_to_end");  
         let local_latency = LatencyMetric::new("server1_batch_write_local");

@@ -1,19 +1,23 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unused_assignments)]
-#![allow(unused_must_use)]
-#![allow(dead_code)]
-#![allow(unused_parens)]
-#![allow(private_bounds)]
+//! # Myco
+
+//! "Myco" is a Rust library that enhances user anonymity in encrypted messaging by hiding metadata 
+//! like communication timing and participant relationships. It uses an innovative data structure 
+//! inspired by ORAM to achieve efficient read and write operations, while maintaining strong 
+//! cryptographic guarantees. By separating message writing and reading across two servers, Myco 
+//! significantly improves performance compared to existing systems.
+
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![deny(rustdoc::broken_intra_doc_links)]
+#![deny(missing_docs)]
+#![deny(unsafe_code)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::many_single_char_names)]
 
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
-use bincode::{deserialize, serialize};
 use error::MycoError;
-use network::{Local, ReadType, WriteType, Server1Access, Server2Access, LocalServer1Access, LocalServer2Access};
-use rand::{Rng, SeedableRng};
-use rand_chacha::ChaCha20Rng;
-use ring::{digest, hkdf, pbkdf2};
+use rand::Rng;
+use utils::{decrypt, pad_message};
 
 use std::collections::HashSet;
 use std::{
@@ -25,6 +29,7 @@ use tree::BinaryTree;
 pub mod constants;
 pub mod dtypes;
 pub mod error;
+pub mod utils;
 pub mod network;
 pub mod server1;
 pub mod server2;
@@ -36,129 +41,8 @@ pub mod rpc_types;
 // Import constants and server modules
 use constants::*;
 use dtypes::*;
-use server1::Server1;
-use server2::Server2;
 
-// Key Derivation Function (KDF)
-pub fn kdf(key: &[u8], input: &str) -> Result<Vec<u8>, MycoError> {
-    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
-    let binding = [input.as_bytes()];
-    let okm = prk
-        .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| MycoError::HkdfExpansionFailed)?;
-    let mut result = vec![0u8; 32];
-    okm.fill(&mut result)
-        .map_err(|_| MycoError::HkdfFillFailed)?;
-    Ok(result[..16].to_vec())
-}
-
-// Pseudorandom Function (PRF)
-// Make this an arbitrary-length PRF
-pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, MycoError> {
-    // Fixed output length of 32 bytes
-    let output_length = 32;
-
-    // Using a fixed salt for HKDF
-    let salt = digest::digest(&digest::SHA256, b"MC-OSAM-Salt");
-    let prk = hkdf::Salt::new(hkdf::HKDF_SHA256, salt.as_ref()).extract(key);
-
-    // Use info directly as the context for HKDF expansion
-    let binding = [input];
-    let okm = prk
-        .expand(&binding, hkdf::HKDF_SHA256)
-        .map_err(|_| MycoError::HkdfExpansionFailed)?;
-
-    // Allocate output buffer with fixed length of 32 bytes
-    let mut result = vec![0u8; output_length];
-    okm.fill(&mut result).map_err(|_| MycoError::HkdfFillFailed)?;
-    Ok(result)
-}
-
-// Pad a message to the right with zeros
-fn pad_message(message: &[u8], target_length: usize) -> Vec<u8> {
-    let mut padded = message.to_vec();
-    if padded.len() < target_length {
-        padded.resize(target_length, 0);
-    }
-    padded
-}
-
-pub enum EncryptionType {
-    Encrypt,
-    DoubleEncrypt,
-}
-
-// Encrypt a padded message
-pub fn encrypt(
-    key: &[u8],
-    message: &[u8],
-    encryption_type: EncryptionType,
-) -> Result<Vec<u8>, MycoError> {
-    #[cfg(feature = "no-enc")]
-    {
-        // In no-enc mode, just pad the message and return it
-        return Ok(match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
-            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
-        });
-    }
-
-    #[cfg(not(feature = "no-enc"))]
-    {
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::EncryptionFailed)?;
-        let binding = rand::thread_rng().gen::<[u8; 12]>();
-        let nonce = Nonce::from_slice(&binding);
-        let mut buffer = match encryption_type {
-            EncryptionType::Encrypt => pad_message(message, MESSAGE_SIZE),
-            EncryptionType::DoubleEncrypt => pad_message(message, INNER_BLOCK_SIZE),
-        };
-
-        cipher
-            .encrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| MycoError::EncryptionFailed)?;
-
-        Ok([nonce.as_slice(), buffer.as_slice()].concat())
-    }
-}
-
-// Decrypt a ciphertext
-pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, MycoError> {
-    #[cfg(feature = "no-enc")]
-    {
-        // In no-enc mode, just return the input
-        return Ok(ciphertext.to_vec());
-    }
-
-    #[cfg(not(feature = "no-enc"))]
-    {
-        if ciphertext.len() < 12 {
-            return Err(MycoError::NoMessageFound);
-        }
-
-        let cipher = Aes128Gcm::new_from_slice(key).map_err(|_| MycoError::NoMessageFound)?;
-        let (nonce, ciphertext) = ciphertext.split_at(12);
-        let nonce = Nonce::from_slice(nonce);
-        let mut buffer = Vec::from(ciphertext);
-
-        cipher
-            .decrypt_in_place(nonce, b"", &mut buffer)
-            .map_err(|_| MycoError::NoMessageFound)?;
-
-        Ok(buffer)
-    }
-}
-
-pub fn trim_zeros(buffer: &[u8]) -> Vec<u8> {
-    let buf: Vec<u8> = buffer
-        .iter()
-        .rev()
-        .skip_while(|&&x| x == 0)
-        .cloned()
-        .collect();
-    buf.into_iter().rev().collect()
-}
-
+/// Helper function to get the indices of the paths.
 pub fn get_path_indices(paths: Vec<Path>) -> Vec<usize> {
     let mut pathset: HashSet<usize> = HashSet::new();
     pathset.insert(1);
@@ -250,6 +134,8 @@ pub fn calculate_bucket_usage(
     (max_usage, max_depth, average_usage, median_usage, std_dev)
 }
 
+/// Generates self-signed TLS certificates for testing purposes.
+/// Creates a certificate and private key in the 'certs' directory.
 pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
     // Use StdPath instead of Path
     if !StdPath::new("certs").exists() {

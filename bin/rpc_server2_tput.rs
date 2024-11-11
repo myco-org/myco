@@ -20,7 +20,7 @@ use myco_rs::dtypes::{Key, Path};
 use myco_rs::error::MycoError;
 use myco_rs::rpc_types::EpochNumberResponse;
 use myco_rs::tree::SparseBinaryTree;
-use myco_rs::{decrypt, get_path_indices, kdf, prf, trim_zeros};
+use myco_rs::{utils::{decrypt, kdf, prf, trim_zeros}, get_path_indices};
 use myco_rs::{
     generate_test_certificates,
     rpc_types::{

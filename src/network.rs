@@ -1,46 +1,49 @@
+//! # Myco Network Module
+//!
+//! This module contains the network communication code for the Myco library.
+//!
+//! It defines the traits and structures for interacting with the servers over the network.
 use anyhow::Result;
 use axum::async_trait;
 use bincode::{deserialize, serialize};
 use futures::{StreamExt, TryStreamExt};
-use rustls::{Certificate, PrivateKey, RootCertStore, ServerName};
 use serde::{Deserialize, Serialize};
 use std::sync::{Mutex, RwLock};
-use std::time::Duration;
 use std::{
     io::{Read, Write},
     sync::Arc,
 };
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    sync::Mutex as TokioMutex,
-};
-use tokio_rustls::client::TlsStream;
-use tokio_rustls::TlsConnector;
+use tokio::io::AsyncWriteExt;
 
-use crate::logging::{BytesMetric, LatencyMetric};
+use crate::logging::BytesMetric;
 use crate::rpc_types::{
     ChunkReadPathsClientRequest, ChunkReadPathsClientResponse, ChunkReadPathsRequest,
     ChunkReadPathsResponse, ChunkWriteRequest, FinalizeEpochRequest, FinalizeEpochResponse,
-    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest,
-    ReadPathsRequest, ReadPathsResponse, ReadRequest, ReadResponse, StorePathIndicesRequest,
-    StorePathIndicesResponse, WriteRequest, WriteResponse,
+    GetPrfKeysResponse, QueueWriteRequest, QueueWriteResponse, ReadPathsClientRequest, ReadPathsResponse, StorePathIndicesRequest,
+    StorePathIndicesResponse, WriteResponse,
 };
 use crate::{error::MycoError, server1::Server1, server2::Server2, Bucket, Key, Path};
 use crate::{
-    BATCH_SIZE, BLOCK_SIZE, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK, Z,
+    NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK,
 };
 
 #[derive(Serialize, Deserialize, Debug)]
+/// An enum representing the different types of commands that can be sent to the servers
 pub enum Command {
+    /// Command to write to Server1
     Server1Write(Vec<u8>, Vec<u8>, Key, Vec<u8>),
+    /// Command to write to Server2
     Server2Write(WriteType),
+    /// Command to read from Server2
     Server2Read(ReadType),
+    /// Command to indicate success
     Success,
 }
 
 #[derive(Serialize, Deserialize)]
+/// A type representing the different types of write commands that can be sent to Server2
 pub enum WriteType {
+    /// Command to write to Server2
     Write(Vec<Bucket>, Key),
 }
 
@@ -54,12 +57,17 @@ impl std::fmt::Debug for WriteType {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+/// A type representing the different types of read commands that can be sent to Server2
 pub enum ReadType {
+    /// Command to read a single path
     Read(Path),
+    /// Command to read multiple paths
     ReadPaths(Vec<usize>),
+    /// Command to get PRF keys
     GetPrfKeys,
 }
 
+/// A trait for local communication
 pub(crate) trait Local {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
@@ -68,35 +76,43 @@ pub(crate) trait Network {
     fn send(&self, command: &[u8]) -> Result<Vec<u8>, MycoError>;
 }
 
-// Define how we interact with Server2
+/// A trait for remote communication with Server2
 #[async_trait]
 pub trait Server2Access: Send + Sync {
+    /// Read paths from Server2
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>>;
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>>;
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
         batch_size: usize,
     ) -> Result<Vec<Bucket>>;
+    /// Write to Server2
     async fn write(&self, buckets: Vec<Bucket>, prf_key: Key) -> Result<()>;
+    /// Get PRF keys from Server2
     async fn get_prf_keys(&self) -> Result<Vec<Key>>;
 }
 
-// Local access - direct memory access
+/// Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer2Access {
+    /// The server instance
     pub server: Arc<Mutex<Server2>>,
 }
 
 impl LocalServer2Access {
+    /// Create a new LocalServer2Access instance
     pub fn new(server: Arc<Mutex<Server2>>) -> Self {
         Self { server }
     }
 
+    /// Create a new LocalServer2Access instance with a new Server2 instance
     pub fn new_with_server() -> Self {
         Self {
             server: Arc::new(Mutex::new(Server2::new())),
@@ -106,6 +122,7 @@ impl LocalServer2Access {
 
 #[async_trait]
 impl Server2Access for LocalServer2Access {
+    /// Read paths from Server2
     async fn read_paths(&self, indices: Vec<usize>) -> Result<Vec<Bucket>> {
         self.server
             .lock()
@@ -114,6 +131,7 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
+    /// Read paths from Server2 in a client-side chunked manner
     async fn read_paths_client(
         &self,
         indices: Vec<usize>,
@@ -155,7 +173,7 @@ impl Server2Access for LocalServer2Access {
     }
 }
 
-// Remote access - serialized network access
+/// Remote access - serialized network access
 pub struct RemoteServer2Access {
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
@@ -356,6 +374,7 @@ impl Server2Access for RemoteServer2Access {
 }
 
 impl RemoteServer2Access {
+    /// Create a new RemoteServer2Access instance
     pub async fn new(base_url: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -373,6 +392,7 @@ impl RemoteServer2Access {
         })
     }
 
+    /// Send a bincoded request to the server
     async fn post_bincode<T: serde::Serialize, R: serde::de::DeserializeOwned>(
         &self,
         endpoint: &str,
@@ -407,13 +427,15 @@ impl RemoteServer2Access {
     }
 }
 
-// Remote access - serialized network access
+/// Remote access - serialized network access
 pub struct RemoteServer1Access {
+    /// The HTTP client
     pub(crate) client: reqwest::Client,
     pub(crate) base_url: String,
 }
 
 impl RemoteServer1Access {
+    /// Create a new RemoteServer1Access instance
     pub async fn new(server1_addr: &str) -> Result<Self, MycoError> {
         let client = reqwest::Client::builder()
             .danger_accept_invalid_certs(true)
@@ -432,9 +454,10 @@ impl RemoteServer1Access {
     }
 }
 
-// Define how we interact with Server1
+/// A trait for interacting with Server1
 #[async_trait]
 pub trait Server1Access: Send {
+    /// Queue a write to Server1
     async fn queue_write(
         &self,
         ct: Vec<u8>,
@@ -444,13 +467,15 @@ pub trait Server1Access: Send {
     ) -> Result<(), MycoError>;
 }
 
-// Local access - direct memory access
+/// Local access - direct memory access
 #[derive(Clone)]
 pub struct LocalServer1Access {
+    /// The server instance
     pub server: Arc<RwLock<Server1>>,
 }
 
 impl LocalServer1Access {
+    /// Create a new LocalServer1Access instance
     pub fn new(server: Arc<RwLock<Server1>>) -> Self {
         Self { server }
     }

@@ -1,30 +1,41 @@
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+//! Logging utilities for tracking latency and bytes metrics.
+
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use lazy_static::lazy_static;
-use std::collections::HashMap;
-use std::io::BufReader;
-use std::io::BufRead;
 
 lazy_static! {
+    /// Global log for storing latency metrics with operation name, duration in ms, and timestamps
     static ref LATENCY_LOG: Mutex<Vec<(String, f64, u64, u64)>> = Mutex::new(Vec::new());
+    /// Global log for storing bytes metrics with operation name and byte count
     static ref BYTES_LOG: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
 }
 
+/// Tracks latency metrics for an operation, with support for pausing/resuming timing
 pub struct LatencyMetric {
+    /// Name of the operation being timed
     operation: String,
+    /// Start time of the operation
     start_time: Instant,
+    /// Unix timestamp in microseconds when operation started
     start_timestamp: u64,
+    /// Total duration accumulated when paused
     accumulated_duration: Duration,
+    /// Whether timing is currently paused
     is_paused: bool,
 }
 
+/// Tracks bytes metrics for an operation
 pub struct BytesMetric {
+    /// Name of the operation being measured
     operation: String,
+    /// Number of bytes processed
     bytes: usize,
 }
+
 impl LatencyMetric {
+    /// Creates a new LatencyMetric for the given operation name.
+    /// Starts timing immediately.
     pub fn new(operation: &str) -> Self {
         Self {
             operation: operation.to_string(),
@@ -38,6 +49,8 @@ impl LatencyMetric {
         }
     }
 
+    /// Pauses timing of the operation.
+    /// Accumulated duration is preserved.
     pub fn pause(&mut self) {
         if !self.is_paused {
             self.accumulated_duration += self.start_time.elapsed();
@@ -45,6 +58,8 @@ impl LatencyMetric {
         }
     }
 
+    /// Resumes timing of the operation.
+    /// Continues from accumulated duration.
     pub fn resume(&mut self) {
         if self.is_paused {
             self.start_time = Instant::now();
@@ -52,6 +67,8 @@ impl LatencyMetric {
         }
     }
 
+    /// Finishes timing and logs the final duration.
+    /// Only logs if perf-logging feature is enabled.
     pub fn finish(self) {
         #[cfg(feature = "perf-logging")]
         {
@@ -79,6 +96,7 @@ impl LatencyMetric {
 }
 
 impl BytesMetric {
+    /// Creates a new BytesMetric for the given operation and byte count
     pub fn new(operation: &str, bytes: usize) -> Self {
         Self {
             operation: operation.to_string(),
@@ -86,6 +104,8 @@ impl BytesMetric {
         }
     }
 
+    /// Logs the bytes metric.
+    /// Only logs if perf-logging feature is enabled.
     pub fn log(self) {
         #[cfg(feature = "perf-logging")]
         {
@@ -98,6 +118,7 @@ impl BytesMetric {
     }
 }
 
+/// Internal helper to parse and log a latency metric
 fn log_latency(message: &str) {
     #[cfg(feature = "perf-logging")]
     {
@@ -119,6 +140,7 @@ fn log_latency(message: &str) {
     }
 }
 
+/// Internal helper to parse and log a bytes metric
 fn log_bytes(message: &str) {
     #[cfg(feature = "perf-logging")]
     {
@@ -131,6 +153,14 @@ fn log_bytes(message: &str) {
     }
 }
 
+/// Calculates averages from logged metrics and writes them to CSV files.
+/// 
+/// # Arguments
+/// * `latency_filename` - Name of file to write latency metrics to
+/// * `bytes_filename` - Name of file to write bytes metrics to
+///
+/// Files are written to a "logs" directory with a prefix containing block size,
+/// Z, D and batch size constants.
 pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &str) {
     #[cfg(feature = "perf-logging")]
     {
