@@ -174,7 +174,6 @@ async fn handle_chunk_read_paths(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    // println!("Received request: /chunk_read_paths");
     {
         let mut count = state.write_count.lock().unwrap();
         *count += 1;
@@ -240,7 +239,6 @@ async fn handle_chunk_write(
     State(state): State<AppState>,
     bytes: Bytes,
 ) -> Result<Bytes, StatusCode> {
-    // println!("Received request: /chunk_write");
     let request: ChunkWriteRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
