@@ -148,7 +148,6 @@ impl Server2Access for LocalServer2Access {
             .map_err(|e| e.into())
     }
 
-    //TODO: Clean, for now just use read_paths_client
     async fn read_paths_client_chunked(
         &self,
         indices: Vec<usize>,
