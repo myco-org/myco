@@ -52,6 +52,14 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // Add tracing subscriber initialization
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| format!("{}=debug", env!("CARGO_CRATE_NAME")).into()),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
     // Get bind address from command line args
     let args: Vec<String> = std::env::args().collect();
@@ -60,7 +68,7 @@ async fn main() {
         .map(|s| s.parse().unwrap())
         .unwrap_or_else(|| SocketAddr::from(([0, 0, 0, 0], 3003)));
 
-    println!("Server2 binding to: {}", bind_addr);
+    tracing::debug!("Server2 binding to: {}", bind_addr);
 
     // configure certificate and private key used by https
     let cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -203,7 +211,7 @@ async fn handle_finalize_epoch(
     let request: FinalizeEpochRequest =
         bincode::deserialize(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    println!("Finalizing epoch");
+    tracing::info!("Finalizing epoch");
     state.server2.write().await.finalize_epoch(&request.prf_key);
 
     // Now, let's read with all of the simulated clients.
@@ -219,7 +227,7 @@ async fn handle_finalize_epoch(
         .get_prf_keys()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    println!("Starting to perform the client reads");
+    tracing::info!("Starting to perform the client reads");
     let futures = (0..NUM_CLIENTS).map(|i| {
         let client_name = format!("WriterClient_{}", i);
         read_without_client(
@@ -236,7 +244,7 @@ async fn handle_finalize_epoch(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    println!("Client reads finished");
+    tracing::info!("Client reads finished");
 
     // Increment write count at the end of finalize_epoch
     let mut write_count = state.write_count.lock().unwrap();
@@ -244,7 +252,7 @@ async fn handle_finalize_epoch(
 
     // Calculate averages when all epochs are complete
     if *write_count == THROUGHPUT_ITERATIONS {
-        println!("All epochs complete, calculating averages");
+        tracing::info!("All epochs complete, calculating averages");
         #[cfg(feature = "perf-logging")]
         myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
     }
