@@ -547,4 +547,16 @@ impl Server1 {
 
         result.map_err(|_| MycoError::NoMessageFound)
     }
+    /// Sets the message queue manually
+    /// 
+    /// # Arguments
+    /// * `queue` - The new message queue to set, containing messages mapped by their bucket index
+    pub fn set_message_queue(&mut self, queue: DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>) {
+        self.message_queue = queue;
+    }
+
+    /// Gets a reference to the temporary sparse binary tree
+    pub fn get_pt(&self) -> &SparseBinaryTree<Bucket> {
+        &self.pt
+    }
 }

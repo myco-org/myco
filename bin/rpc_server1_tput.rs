@@ -10,7 +10,10 @@ use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
+use myco_rs::constants::{D, DELTA};
 use myco_rs::crypto::{encrypt, kdf, prf, EncryptionType};
+use myco_rs::dtypes::{Bucket, Path};
+use myco_rs::tree::SparseBinaryTree;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
@@ -20,7 +23,7 @@ use myco_rs::{
     network::{LocalServer1Access, RemoteServer2Access},
     server1::Server1,
 };
-use rand::SeedableRng;
+use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::sync::RwLock;
 use std::{
@@ -32,16 +35,19 @@ use std::{
 use tokio::sync::Mutex as TokioMutex;
 use tower::ServiceBuilder;
 use rayon::prelude::*;
+use dashmap::DashMap;
 
 #[derive(Clone)]
 struct Server1TputState {
     server1: Arc<RwLock<Server1>>,
+    message_queue: Arc<DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>>,
     simulation_keys: Arc<Vec<Key>>,
     simulation_k_msg: Arc<Vec<Vec<u8>>>,
     simulation_k_oblv: Arc<Vec<Vec<u8>>>,
     simulation_k_prf: Arc<Vec<Vec<u8>>>,
     start_time: Arc<StdMutex<Option<Instant>>>,
     message_count: Arc<StdMutex<usize>>,
+    pt: Arc<SparseBinaryTree<Bucket>>,
 }
 
 #[tokio::main]
@@ -83,9 +89,19 @@ async fn main() {
     // Initialize Server2 connection using provided address
     let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
 
-    // Initialize Server1 and state
+    // Initialize Server1 and get pt after batch_init
     let server1 = Server1::new(s2_access);
     let server1 = Arc::new(RwLock::new(server1));
+    
+    // Do batch init
+    server1.write().unwrap().async_batch_init(NUM_CLIENTS).await;
+    
+    // Get pt after initialization
+    let pt = {
+        let server1 = server1.read().unwrap();
+        server1.get_pt().clone()
+    };
+    let pt = Arc::new(pt);
 
     // Generate simulation keys
     let mut rng = ChaCha20Rng::from_seed(FIXED_SEED_TPUT_RNG);
@@ -109,15 +125,17 @@ async fn main() {
 
     println!("Key initialization complete");
 
-    // Create the state directly without creating clients
+    // Create the state with pt
     let state = Server1TputState {
         server1,
+        message_queue: Arc::new(DashMap::new()),
         simulation_keys: Arc::new(simulation_keys.to_vec()),
         simulation_k_msg: Arc::new(simulation_k_msg),
         simulation_k_oblv: Arc::new(simulation_k_oblv),
         simulation_k_prf: Arc::new(simulation_k_prf),
         start_time: Arc::new(StdMutex::new(None)),
         message_count: Arc::new(StdMutex::new(0)),
+        pt: pt.clone(),
     };
 
     // Run experiment directly
@@ -156,7 +174,7 @@ async fn main() {
         let futures = (0..NUM_CLIENTS).map(|i| {
             let client_name = format!("WriterClient_{}", i);
             write_without_client(
-                state.server1.clone(),
+                state.message_queue.clone(),
                 &message,
                 &key,
                 iteration,
@@ -164,6 +182,7 @@ async fn main() {
                 &state.simulation_k_msg[0],
                 &state.simulation_k_oblv[0],
                 &state.simulation_k_prf[0],
+                state.pt.clone(),
             )
         });
 
@@ -177,6 +196,10 @@ async fn main() {
         println!("All clients wrote");
 
         // 3. Batch write
+        {
+            let mut server1 = state.server1.write().unwrap();
+            server1.set_message_queue((*state.message_queue).clone());
+        }
         state
             .server1
             .write()
@@ -219,7 +242,7 @@ async fn main() {
 }
 
 async fn write_without_client(
-    server1: Arc<RwLock<Server1>>,
+    message_queue: Arc<DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>>,
     msg: &[u8],
     k: &Key,
     epoch: usize,
@@ -227,17 +250,51 @@ async fn write_without_client(
     k_msg: &[u8],
     k_oblv: &[u8],
     k_prf: &[u8],
+    pt: Arc<SparseBinaryTree<Bucket>>,
 ) -> Result<(), MycoError> {
     let cs = cs.into_bytes();
 
     // Derive the necessary values for the current epoch
-    let f = prf(k_prf, &epoch.to_be_bytes())?; // PRF for this epoch
-    let k_oblv_t = kdf(k_oblv, &epoch.to_string())?; // Oblivious key for this epoch
-    let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?; // Encrypt the message
+    let f = prf(k_prf, &epoch.to_be_bytes())?;
+    let k_oblv_t = kdf(k_oblv, &epoch.to_string())?;
+    let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?;
 
-    // Upload the message to Server1
-    server1
-        .write()
-        .unwrap()
-        .queue_write(ct, f, Key::new(k_oblv_t), cs)
+    // Use the local queue_write function that doesn't need a server1 lock
+    queue_write_local(
+        &message_queue,
+        ct,
+        f,
+        Key::new(k_oblv_t),
+        cs,
+        epoch as u64,
+        &pt,
+    )
+}
+
+fn queue_write_local(
+    message_queue: &DashMap<usize, Vec<(Vec<u8>, Key, u64, Path)>>,
+    ct: Vec<u8>,
+    f: Vec<u8>,
+    k_oblv_t: Key,
+    cs: Vec<u8>,
+    epoch: u64,
+    pt: &SparseBinaryTree<Bucket>,
+) -> Result<(), MycoError> {
+    let t_exp = epoch + DELTA as u64;
+    let mut rng = ChaCha20Rng::from_entropy();
+    let l: Vec<u8> = (0..D).map(|_| rng.gen()).collect();
+    let intended_message_path = Path::from(l);
+    let (lca_idx, _) = pt
+            .lca_idx(&intended_message_path)
+            .ok_or(MycoError::LcaNotFound)?;
+
+    // Queue the write.
+    message_queue.entry(lca_idx).or_default().push((
+        ct,
+        k_oblv_t,
+        t_exp,
+        intended_message_path,
+    ));
+
+    Ok(())
 }
