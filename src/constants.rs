@@ -7,7 +7,7 @@ pub const DELTA: usize = 10;
 
 /// Depth of the binary tree used to store messages.
 /// With D=18, supports a database size of 2^18 = 262,144 messages.
-pub const D: usize = 18;
+pub const D: usize = 21;
 
 /// Security parameter for cryptographic operations in bits.
 /// Standard 128-bit security level for keys and PRFs.
