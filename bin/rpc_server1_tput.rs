@@ -95,12 +95,16 @@ async fn main() {
     println!("Starting to initialize writer clients");
     // Initialize writer clients
     let progress = Arc::new(StdMutex::new(0));
+    
+    // Create a single runtime outside the parallel iterator
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    
     let writer_clients: Vec<Client> = (0..NUM_CLIENTS)
         .into_par_iter()
         .map(|i| {
             let client_name = format!("WriterClient_{}", i);
             let s1_access = Box::new(LocalServer1Access::new(server1.clone()));
-            let runtime = tokio::runtime::Runtime::new().unwrap();
+            // Use the shared runtime to create the Server2 connection
             let s2_access = Box::new(runtime.block_on(RemoteServer2Access::new(&s2_addr)).unwrap());
             let mut client = Client::new(client_name, s1_access, s2_access);
 
