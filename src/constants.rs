@@ -7,7 +7,7 @@ pub const DELTA: usize = 10;
 
 /// Depth of the binary tree used to store messages.
 /// With D=18, supports a database size of 2^18 = 262,144 messages.
-pub const D: usize = 21;
+pub const D: usize = 18;
 
 /// Security parameter for cryptographic operations in bits.
 /// Standard 128-bit security level for keys and PRFs.
@@ -64,7 +64,7 @@ pub const MAX_REQUEST_SIZE_READ_PATHS: usize = 100 * 1024 * 1024;
 
 /// Maximum bytes per request from Server1 to Server2 when writing batches.
 /// Increased to 100MB to reduce number of network requests
-pub const MAX_REQUEST_SIZE_BATCH_WRITE: usize = 1000 * 1024 * 1024;
+pub const MAX_REQUEST_SIZE_BATCH_WRITE: usize = 100 * 1024 * 1024;
 
 /// Number of buckets that can be written in one batch chunk
 pub const NUM_BUCKETS_PER_BATCH_WRITE_CHUNK: usize =
