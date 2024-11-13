@@ -62,6 +62,12 @@ async fn main() {
         .join("certs")
         .join("server-key.pem");
 
+    // Add this line to ensure the certs directory exists
+    std::fs::create_dir_all(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("certs")
+    ).map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+
     if !cert_path.exists() || !key_path.exists() {
         generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
     }

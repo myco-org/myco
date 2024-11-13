@@ -64,18 +64,15 @@ async fn main() {
 
     // configure certificate and private key used by https
     let cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
         .join("certs")
         .join("server-cert.pem");
     let key_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
         .join("certs")
         .join("server-key.pem");
 
-    // Create target/certs directory if it doesn't exist
+    // Create certs directory if it doesn't exist
     std::fs::create_dir_all(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
             .join("certs")
     ).map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
 
