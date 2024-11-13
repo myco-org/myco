@@ -40,7 +40,7 @@ pub const BUCKET_SIZE_BYTES: usize = Z * BLOCK_SIZE;
 pub const LATENCY_BENCH_COUNT: usize = 30;
 
 /// Number of iterations for throughput testing
-pub const THROUGHPUT_ITERATIONS: usize = 10;
+pub const THROUGHPUT_ITERATIONS: usize = 1;
 
 /// Size of the nonce used in authenticated encryption (AES-GCM)
 pub const NONCE_SIZE: usize = 12;
