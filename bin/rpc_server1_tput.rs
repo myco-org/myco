@@ -10,6 +10,7 @@ use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
+use myco_rs::crypto::{encrypt, kdf, prf, EncryptionType};
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
@@ -35,8 +36,10 @@ use rayon::prelude::*;
 #[derive(Clone)]
 struct Server1TputState {
     server1: Arc<RwLock<Server1>>,
-    writer_clients: Arc<StdMutex<Vec<Client>>>,
     simulation_keys: Arc<Vec<Key>>,
+    simulation_k_msg: Arc<Vec<Vec<u8>>>,
+    simulation_k_oblv: Arc<Vec<Vec<u8>>>,
+    simulation_k_prf: Arc<Vec<Vec<u8>>>,
     start_time: Arc<StdMutex<Option<Instant>>>,
     message_count: Arc<StdMutex<usize>>,
 }
@@ -92,42 +95,27 @@ async fn main() {
     }
     let simulation_keys = Arc::new(simulation_keys);
 
-    println!("Starting to initialize writer clients");
-    // Initialize writer clients
-    let progress = Arc::new(StdMutex::new(0));
-    
-    // Create a single runtime outside the parallel iterator
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    
-    let writer_clients: Vec<Client> = (0..NUM_CLIENTS)
-        .into_par_iter()
-        .map(|i| {
-            let client_name = format!("WriterClient_{}", i);
-            let s1_access = Box::new(LocalServer1Access::new(server1.clone()));
-            // Use the shared runtime to create the Server2 connection
-            let s2_access = Box::new(runtime.block_on(RemoteServer2Access::new(&s2_addr)).unwrap());
-            let mut client = Client::new(client_name, s1_access, s2_access);
+    println!("Starting key initialization");
 
-            // Setup keys for this client
-            for key in simulation_keys.iter() {
-                client.setup(key).unwrap();
-            }
+    let mut simulation_k_msg = Vec::with_capacity(BATCH_SIZE);
+    let mut simulation_k_oblv = Vec::with_capacity(BATCH_SIZE);
+    let mut simulation_k_prf = Vec::with_capacity(BATCH_SIZE);
 
-            // Update and print progress
-            let mut count = progress.lock().unwrap();
-            *count += 1;
-            println!("Initialized {}/{} writer clients", *count, NUM_CLIENTS);
+    for k in simulation_keys.iter() {
+        simulation_k_msg.push(kdf(&k.0, "MSG").unwrap());
+        simulation_k_oblv.push(kdf(&k.0, "ORAM").unwrap());
+        simulation_k_prf.push(kdf(&k.0, "PRF").unwrap());
+    }
 
-            client
-        })
-        .collect();
+    println!("Key initialization complete");
 
-    println!("Writer clients initialized");
-
+    // Create the state directly without creating clients
     let state = Server1TputState {
         server1,
-        writer_clients: Arc::new(StdMutex::new(writer_clients)),
-        simulation_keys,
+        simulation_keys: Arc::new(simulation_keys.to_vec()),
+        simulation_k_msg: Arc::new(simulation_k_msg),
+        simulation_k_oblv: Arc::new(simulation_k_oblv),
+        simulation_k_prf: Arc::new(simulation_k_prf),
         start_time: Arc::new(StdMutex::new(None)),
         message_count: Arc::new(StdMutex::new(0)),
     };
@@ -161,13 +149,25 @@ async fn main() {
         println!("Batch init finished");
 
         // 2. All clients write sequentially instead of in parallel
-        let mut clients = state.writer_clients.lock().unwrap();
         let message = vec![1u8; 16];
-
         let key = state.simulation_keys[0].clone();
-        let futures = clients
-            .iter_mut()
-            .map(|client| client.async_write(&message, &key));
+
+        // Create futures for all client writes
+        let futures = (0..NUM_CLIENTS).map(|i| {
+            let client_name = format!("WriterClient_{}", i);
+            write_without_client(
+                state.server1.clone(),
+                &message,
+                &key,
+                iteration,
+                client_name,
+                &state.simulation_k_msg[0],
+                &state.simulation_k_oblv[0],
+                &state.simulation_k_prf[0],
+            )
+        });
+
+        // Execute all writes
         futures::future::join_all(futures)
             .await
             .into_iter()
@@ -216,4 +216,28 @@ async fn main() {
     // Calculate and append averages for latency and bytes
     #[cfg(feature = "perf-logging")]
     myco_rs::logging::calculate_and_append_averages("server1_latency.csv", "server1_bytes.csv");
+}
+
+async fn write_without_client(
+    server1: Arc<RwLock<Server1>>,
+    msg: &[u8],
+    k: &Key,
+    epoch: usize,
+    cs: String,
+    k_msg: &[u8],
+    k_oblv: &[u8],
+    k_prf: &[u8],
+) -> Result<(), MycoError> {
+    let cs = cs.into_bytes();
+
+    // Derive the necessary values for the current epoch
+    let f = prf(k_prf, &epoch.to_be_bytes())?; // PRF for this epoch
+    let k_oblv_t = kdf(k_oblv, &epoch.to_string())?; // Oblivious key for this epoch
+    let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?; // Encrypt the message
+
+    // Upload the message to Server1
+    server1
+        .write()
+        .unwrap()
+        .queue_write(ct, f, Key::new(k_oblv_t), cs)
 }
