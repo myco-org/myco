@@ -94,6 +94,7 @@ async fn main() {
 
     println!("Starting to initialize writer clients");
     // Initialize writer clients
+    let progress = Arc::new(StdMutex::new(0));
     let writer_clients: Vec<Client> = (0..NUM_CLIENTS)
         .into_par_iter()
         .map(|i| {
@@ -107,6 +108,11 @@ async fn main() {
             for key in simulation_keys.iter() {
                 client.setup(key).unwrap();
             }
+
+            // Update and print progress
+            let mut count = progress.lock().unwrap();
+            *count += 1;
+            println!("Initialized {}/{} writer clients", *count, NUM_CLIENTS);
 
             client
         })
