@@ -121,7 +121,7 @@ async fn main() {
         .route("/finalize_epoch", post(handle_finalize_epoch))
         .layer(
             ServiceBuilder::new().layer(axum::extract::DefaultBodyLimit::max(
-                1024 * 1024 * 1024 * 1024,
+                1024 * 1024 * 1024 * 1024 * 1024, // 1024 GB
             )),
         )
         .with_state(state);
