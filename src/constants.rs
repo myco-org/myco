@@ -60,11 +60,11 @@ pub const MESSAGE_SIZE: usize = 228;
 
 /// Maximum bytes per request from Server2 to Server1 when reading paths.
 /// Increased to 100MB to reduce number of network requests
-pub const MAX_REQUEST_SIZE_READ_PATHS: usize = 10 * 1024 * 1024;
+pub const MAX_REQUEST_SIZE_READ_PATHS: usize = 100 * 1024 * 1024;
 
 /// Maximum bytes per request from Server1 to Server2 when writing batches.
 /// Increased to 100MB to reduce number of network requests
-pub const MAX_REQUEST_SIZE_BATCH_WRITE: usize = 10 * 1024 * 1024;
+pub const MAX_REQUEST_SIZE_BATCH_WRITE: usize = 1000 * 1024 * 1024;
 
 /// Number of buckets that can be written in one batch chunk
 pub const NUM_BUCKETS_PER_BATCH_WRITE_CHUNK: usize =
