@@ -30,6 +30,7 @@ use std::{
 };
 use tokio::sync::Mutex as TokioMutex;
 use tower::ServiceBuilder;
+use rayon::prelude::*;
 
 #[derive(Clone)]
 struct Server1TputState {
@@ -91,22 +92,25 @@ async fn main() {
     }
     let simulation_keys = Arc::new(simulation_keys);
 
+    println!("Starting to initialize writer clients");
     // Initialize writer clients
-    let mut writer_clients = Vec::with_capacity(NUM_CLIENTS);
-    for i in 0..NUM_CLIENTS {
-        let client_name = format!("WriterClient_{}", i);
-        let s1_access = Box::new(LocalServer1Access::new(server1.clone()));
-        // We will never use this here, but it's required by the Client constructor.
-        let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
-        let mut client = Client::new(client_name, s1_access, s2_access);
+    let writer_clients: Vec<Client> = (0..NUM_CLIENTS)
+        .into_par_iter()
+        .map(|i| {
+            let client_name = format!("WriterClient_{}", i);
+            let s1_access = Box::new(LocalServer1Access::new(server1.clone()));
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let s2_access = Box::new(runtime.block_on(RemoteServer2Access::new(&s2_addr)).unwrap());
+            let mut client = Client::new(client_name, s1_access, s2_access);
 
-        // Setup keys for this client
-        for key in simulation_keys.iter() {
-            client.setup(key).unwrap();
-        }
+            // Setup keys for this client
+            for key in simulation_keys.iter() {
+                client.setup(key).unwrap();
+            }
 
-        writer_clients.push(client);
-    }
+            client
+        })
+        .collect();
 
     println!("Writer clients initialized");
 
