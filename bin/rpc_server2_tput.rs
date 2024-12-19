@@ -17,7 +17,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
-    utils::{generate_test_certificates, get_path_indices},
+    crypto::{kdf, prf},
     dtypes::{Key, Path},
     error::MycoError,
     rpc_types::{
@@ -27,7 +27,7 @@ use myco_rs::{
     },
     server2::Server2,
     tree::SparseBinaryTree,
-    crypto::{kdf, prf},
+    utils::{generate_test_certificates, get_path_indices},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -52,7 +52,6 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-
     // Get bind address from command line args
     let args: Vec<String> = std::env::args().collect();
     let bind_addr = args
@@ -76,12 +75,16 @@ async fn main() {
     std::fs::create_dir_all(
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target")
-            .join("certs")
-    ).map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+            .join("certs"),
+    )
+    .map_err(|e| MycoError::CertificateError(e.to_string()))
+    .unwrap();
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+        generate_test_certificates()
+            .map_err(|e| MycoError::CertificateError(e.to_string()))
+            .unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)
@@ -101,7 +104,7 @@ async fn main() {
     let mut simulation_k_msg = Vec::with_capacity(BATCH_SIZE);
     let mut simulation_k_oblv = Vec::with_capacity(BATCH_SIZE);
     let mut simulation_k_prf = Vec::with_capacity(BATCH_SIZE);
-    
+
     for k in &simulation_keys {
         simulation_k_msg.push(kdf(&k.0, "MSG").unwrap());
         simulation_k_oblv.push(kdf(&k.0, "ORAM").unwrap());

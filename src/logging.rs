@@ -1,8 +1,8 @@
 //! Logging utilities for tracking latency and bytes metrics.
 
+use lazy_static::lazy_static;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use lazy_static::lazy_static;
 
 lazy_static! {
     /// Global log for storing latency metrics with operation name, duration in ms, and timestamps
@@ -90,10 +90,7 @@ impl LatencyMetric {
 
             log_latency(&format!(
                 "{},{:.5},{},{}\n",
-                self.operation,
-                milliseconds,
-                self.start_timestamp,
-                end_timestamp,
+                self.operation, milliseconds, self.start_timestamp, end_timestamp,
             ));
         }
     }
@@ -113,11 +110,7 @@ impl BytesMetric {
     pub fn log(self) {
         #[cfg(feature = "perf-logging")]
         {
-            log_bytes(&format!(
-                "{},{}\n",
-                self.operation,
-                self.bytes,
-            ));
+            log_bytes(&format!("{},{}\n", self.operation, self.bytes,));
         }
     }
 }
@@ -132,12 +125,10 @@ fn log_latency(message: &str) {
             parts[2].parse::<u64>(),
             parts[3].parse::<u64>(),
         ) {
-            LATENCY_LOG.lock().unwrap().push((
-                parts[0].to_string(),
-                value,
-                start,
-                end,
-            ));
+            LATENCY_LOG
+                .lock()
+                .unwrap()
+                .push((parts[0].to_string(), value, start, end));
         }
     }
 }
@@ -148,13 +139,16 @@ fn log_bytes(message: &str) {
     let parts: Vec<&str> = message.trim().split(',').collect();
     if parts.len() >= 2 {
         if let Ok(value) = parts[1].parse::<usize>() {
-            BYTES_LOG.lock().unwrap().push((parts[0].to_string(), value));
+            BYTES_LOG
+                .lock()
+                .unwrap()
+                .push((parts[0].to_string(), value));
         }
     }
 }
 
 /// Calculates averages from logged metrics and writes them to CSV files.
-/// 
+///
 /// # Arguments
 /// * `latency_filename` - Name of file to write latency metrics to
 /// * `bytes_filename` - Name of file to write bytes metrics to
@@ -163,22 +157,22 @@ fn log_bytes(message: &str) {
 /// Z, D and batch size constants.
 #[cfg(feature = "perf-logging")]
 pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &str) {
+    use std::collections::HashMap;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
-    use std::collections::HashMap;
-
-
 
     {
         // Create logs directory if it doesn't exist
         std::fs::create_dir_all("logs").unwrap();
-        
-        let constants_prefix = format!("B{}_Z{}_D{}_BATCH{}_", 
+
+        let constants_prefix = format!(
+            "B{}_Z{}_D{}_BATCH{}_",
             crate::constants::BLOCK_SIZE,
             crate::constants::Z,
             crate::constants::D,
-            crate::constants::BATCH_SIZE);
-        
+            crate::constants::BATCH_SIZE
+        );
+
         let latency_path = format!("logs/{}{}", constants_prefix, latency_filename);
         let bytes_path = format!("logs/{}{}", constants_prefix, bytes_filename);
 
@@ -186,18 +180,22 @@ pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &st
         let mut latency_sums: HashMap<String, (f64, usize)> = HashMap::new();
         {
             let latency_data = LATENCY_LOG.lock().unwrap();
-            
+
             // Write all latency data to file
             if let Ok(mut file) = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
-                .open(&latency_path) 
+                .open(&latency_path)
             {
-                writeln!(file, "operation,milliseconds,start_timestamp_us,end_timestamp_us").unwrap();
+                writeln!(
+                    file,
+                    "operation,milliseconds,start_timestamp_us,end_timestamp_us"
+                )
+                .unwrap();
                 for (operation, value, start, end) in latency_data.iter() {
                     writeln!(file, "{},{:.5},{},{}", operation, value, start, end).unwrap();
-                    
+
                     let entry = latency_sums.entry(operation.clone()).or_insert((0.0, 0));
                     entry.0 += value;
                     entry.1 += 1;
@@ -209,18 +207,18 @@ pub fn calculate_and_append_averages(latency_filename: &str, bytes_filename: &st
         let mut bytes_sums: HashMap<String, (usize, usize)> = HashMap::new();
         {
             let bytes_data = BYTES_LOG.lock().unwrap();
-            
+
             // Write all bytes data to file
             if let Ok(mut file) = OpenOptions::new()
                 .create(true)
                 .write(true)
                 .truncate(true)
-                .open(&bytes_path) 
+                .open(&bytes_path)
             {
                 writeln!(file, "operation,bytes").unwrap();
                 for (operation, value) in bytes_data.iter() {
                     writeln!(file, "{},{}", operation, value).unwrap();
-                    
+
                     let entry = bytes_sums.entry(operation.clone()).or_insert((0, 0));
                     entry.0 += value;
                     entry.1 += 1;

@@ -7,19 +7,26 @@
 #![allow(private_bounds)]
 
 use myco_rs::{
-    client::Client, constants::{DB_SIZE, DELTA, NUM_CLIENTS}, dtypes::{Key, ServerType}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, utils::calculate_bucket_usage
+    client::Client,
+    constants::{DB_SIZE, DELTA, NUM_CLIENTS},
+    dtypes::{Key, ServerType},
+    error::MycoError,
+    network::{LocalServer1Access, LocalServer2Access},
+    server1::Server1,
+    server2::Server2,
+    utils::calculate_bucket_usage,
 };
 use rand::{Rng, SeedableRng};
 use rayon::iter::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 use std::fs::create_dir_all;
+use std::io::Write;
 use std::sync::RwLock;
 use std::{
     process::Command,
     sync::{Arc, Mutex},
 };
-use std::io::Write;
 
 fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
     use rand_chacha::ChaCha20Rng;
@@ -27,7 +34,10 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+    let s1 = Arc::new(RwLock::new(Server1::new(
+        s2_access.clone(),
+        ServerType::Sync,
+    )));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -41,7 +51,10 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
         let client_name = format!("Client_{}", i);
         let mut client = Client::new(client_name, s1_access.clone(), s2_access.clone());
 
-        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
+        client
+            .setup(&key)
+            .map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e)))
+            .unwrap();
 
         clients.push(client);
     }
@@ -62,9 +75,15 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
         clients.par_iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             #[cfg(feature = "no-enc")]
-            client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+            client
+                .fake_write()
+                .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                .unwrap();
             #[cfg(not(feature = "no-enc"))]
-            client.write(&message, &key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+            client
+                .write(&message, &key)
+                .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                .unwrap();
         });
         let write_duration = write_start_time.elapsed();
 
@@ -80,7 +99,8 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
             let read_start_time = std::time::Instant::now();
             let read_result: Vec<u8> = client
                 .read(&key, client.id.clone(), 0)
-                .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e))).unwrap();
+                .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e)))
+                .unwrap();
             let client_read_duration = read_start_time.elapsed();
             total_read_duration += client_read_duration;
         }
@@ -114,7 +134,10 @@ fn run_simulation(num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+    let s1 = Arc::new(RwLock::new(Server1::new(
+        s2_access.clone(),
+        ServerType::Sync,
+    )));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -124,8 +147,15 @@ fn run_simulation(num_epochs: usize) {
     // Setup multiple clients
     let mut clients = Vec::new();
     for i in 0..NUM_CLIENTS {
-        let mut client = Client::new(format!("Client_{}", i), s1_access.clone(), s2_access.clone());
-        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
+        let mut client = Client::new(
+            format!("Client_{}", i),
+            s1_access.clone(),
+            s2_access.clone(),
+        );
+        client
+            .setup(&key)
+            .map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e)))
+            .unwrap();
         clients.push(client);
     }
 
@@ -148,9 +178,15 @@ fn run_simulation(num_epochs: usize) {
         clients.par_iter_mut().for_each(|client| {
             let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
             #[cfg(feature = "no-enc")]
-            client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+            client
+                .fake_write()
+                .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                .unwrap();
             #[cfg(not(feature = "no-enc"))]
-            client.write(&message, &key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+            client
+                .write(&message, &key)
+                .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                .unwrap();
         });
         let write_duration = write_start_time.elapsed();
 
@@ -163,7 +199,6 @@ fn run_simulation(num_epochs: usize) {
         let epoch_duration = epoch_start_time.elapsed();
         total_duration += epoch_duration;
         successful_epochs += 1;
-
 
         // // Calculate bucket usage at specified intervals
         // if (epoch + 1) % check_interval == 0 {
@@ -231,7 +266,10 @@ fn run_local_latency_benchmark() {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+    let s1 = Arc::new(RwLock::new(Server1::new(
+        s2_access.clone(),
+        ServerType::Sync,
+    )));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -246,7 +284,10 @@ fn run_local_latency_benchmark() {
             s1_access.clone(),
             s2_access.clone(),
         );
-        client.setup(&key).map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e))).unwrap();
+        client
+            .setup(&key)
+            .map_err(|e| MycoError::DatabaseError(format!("Setup failed: {}", e)))
+            .unwrap();
         keys.push(key);
         clients.push(client);
     }
@@ -267,9 +308,15 @@ fn run_local_latency_benchmark() {
             .for_each(|(client_idx, (client, key))| {
                 let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
                 #[cfg(feature = "no-enc")]
-                client.fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+                client
+                    .fake_write()
+                    .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                    .unwrap();
                 #[cfg(not(feature = "no-enc"))]
-                client.write(&message, key).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+                client
+                    .write(&message, key)
+                    .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+                    .unwrap();
 
                 if (epoch * NUM_CLIENTS + client_idx) % 1000 == 0 {
                     println!("Progress: Write {} in epoch {}", client_idx, epoch);
@@ -298,9 +345,15 @@ fn run_local_latency_benchmark() {
         let start = std::time::Instant::now();
         let message: Vec<u8> = (0..16).map(|_| rng.clone().gen()).collect();
         #[cfg(feature = "no-enc")]
-        clients[0].fake_write().map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+        clients[0]
+            .fake_write()
+            .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+            .unwrap();
         #[cfg(not(feature = "no-enc"))]
-        clients[0].write(&message, &keys[0]).map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e))).unwrap();
+        clients[0]
+            .write(&message, &keys[0])
+            .map_err(|e| MycoError::DatabaseError(format!("Write failed: {}", e)))
+            .unwrap();
         write_times.push(start.elapsed());
 
         // Measure batch_write
@@ -312,7 +365,8 @@ fn run_local_latency_benchmark() {
         let start = std::time::Instant::now();
         clients[0]
             .read(&keys[0], clients[0].id.clone(), 0)
-            .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e))).unwrap();
+            .map_err(|e| MycoError::DatabaseError(format!("Read failed: {}", e)))
+            .unwrap();
         read_times.push(start.elapsed());
     }
 
@@ -327,11 +381,14 @@ fn run_local_latency_benchmark() {
     use std::io::Write;
 
     // Create directory if it doesn't exist
-    create_dir_all("test_sims").map_err(|e| MycoError::DatabaseError(format!("Failed to create directory: {}", e))).unwrap();
+    create_dir_all("test_sims")
+        .map_err(|e| MycoError::DatabaseError(format!("Failed to create directory: {}", e)))
+        .unwrap();
 
     // Open file for writing
-    let mut file = File::create("test_sims/latency").map_err(|e| MycoError::DatabaseError(format!("Failed to create latency file: {}", e))).unwrap();
-
+    let mut file = File::create("test_sims/latency")
+        .map_err(|e| MycoError::DatabaseError(format!("Failed to create latency file: {}", e)))
+        .unwrap();
 
     // Write results to file
     writeln!(file, "Average timings over 10 sequences:").unwrap();
@@ -362,7 +419,7 @@ fn main() {
     let simulation_type = &args[1];
 
     match simulation_type.as_str() {
-        "sim" => run_simulation(DELTA*DELTA*DELTA),
+        "sim" => run_simulation(DELTA * DELTA * DELTA),
         "multi" => run_multi_client_simulation(NUM_CLIENTS, DELTA),
         "benchmark" => run_local_latency_benchmark(),
         _ => panic!("Unknown simulation type. Use: single, multi, or benchmark"),

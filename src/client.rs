@@ -1,17 +1,24 @@
 //! Client
-//! 
-//! In Myco, clients in Myco participate in two main activities: sending (writing) and receiving 
-//! (reading) messages. When sending, a client encrypts their message using a shared key, derives a 
-//! pseudorandom location using another shared key, and sends this encrypted message to S1 along with 
-//! a specially derived encryption key for that epoch. When receiving, a client computes where their 
-//! message should be located using shared keys and the epoch information, downloads the corresponding 
-//! path from S2's tree structure, and then decrypts their message using their shared keys. 
-//! Importantly, clients must participate in every epoch by either sending real messages or fake ones 
-//! ("cover traffic"), and must perform a fixed number of reads per epoch (using fake reads to fill 
+//!
+//! In Myco, clients in Myco participate in two main activities: sending (writing) and receiving
+//! (reading) messages. When sending, a client encrypts their message using a shared key, derives a
+//! pseudorandom location using another shared key, and sends this encrypted message to S1 along with
+//! a specially derived encryption key for that epoch. When receiving, a client computes where their
+//! message should be located using shared keys and the epoch information, downloads the corresponding
+//! path from S2's tree structure, and then decrypts their message using their shared keys.
+//! Importantly, clients must participate in every epoch by either sending real messages or fake ones
+//! ("cover traffic"), and must perform a fixed number of reads per epoch (using fake reads to fill
 //! any gaps) to maintain privacy.
 
 use crate::{
-    constants::{BATCH_SIZE, BLOCK_SIZE, D}, utils::{get_path_indices, trim_zeros}, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, network::{Server1Access, Server2Access}, tree::SparseBinaryTree, crypto::{decrypt, encrypt, kdf, prf, EncryptionType}
+    constants::{BATCH_SIZE, BLOCK_SIZE, D},
+    crypto::{decrypt, encrypt, kdf, prf, EncryptionType},
+    dtypes::{Bucket, Key, Path},
+    error::MycoError,
+    logging::LatencyMetric,
+    network::{Server1Access, Server2Access},
+    tree::SparseBinaryTree,
+    utils::{get_path_indices, trim_zeros},
 };
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -85,13 +92,14 @@ impl Client {
         let epoch = self.epoch;
         let cs = self.id.clone().into_bytes();
 
-        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap(); // Get the keys for this key 
+        let (k_msg, k_oblv, k_prf) = self.keys.get(k).unwrap(); // Get the keys for this key
         let f = prf(k_prf, &epoch.to_be_bytes())?; // PRF for this epoch
         let k_oblv_t = kdf(k_oblv, &epoch.to_string())?; // Oblivious key for this epoch
         let ct = encrypt(k_msg, msg, EncryptionType::Encrypt)?; // Encrypt the message
 
         self.epoch += 1;
-        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs)) // Upload the message to Server1
+        futures::executor::block_on(self.s1.queue_write(ct, f, Key::new(k_oblv_t), cs))
+        // Upload the message to Server1
     }
 
     /// Asynchronously read messages from Server2.
@@ -136,7 +144,7 @@ impl Client {
 
         // For each key, derive the necessary cryptographic values for the current epoch
         for k in keys {
-            let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap(); 
+            let (k_msg, k_oblv, k_prf) = self.keys.get(&k).unwrap();
             let k_oblv_t =
                 kdf(k_oblv, &epoch.to_string()).map_err(|_| MycoError::NoMessageFound)?;
             let f = prf(&k_prf, &epoch.to_be_bytes())?;

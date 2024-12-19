@@ -14,7 +14,16 @@ mod e2e_tests {
     };
 
     use myco_rs::{
-        client::Client, constants::{D, DELTA, NUM_CLIENTS, Z}, crypto::{decrypt, encrypt, kdf, prf, EncryptionType}, dtypes::{Bucket, Key, Metadata, Path, ServerType}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams}, utils::trim_zeros
+        client::Client,
+        constants::{D, DELTA, NUM_CLIENTS, Z},
+        crypto::{decrypt, encrypt, kdf, prf, EncryptionType},
+        dtypes::{Bucket, Key, Metadata, Path, ServerType},
+        error::MycoError,
+        network::{LocalServer1Access, LocalServer2Access},
+        server1::Server1,
+        server2::Server2,
+        tree::{self, deserialize_trees, serialize_trees, BinaryTree, DBStateParams},
+        utils::trim_zeros,
     };
     use rand::{Rng, RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
@@ -38,7 +47,10 @@ mod e2e_tests {
     fn test_client_setup() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1 });
 
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access.clone());
@@ -53,7 +65,10 @@ mod e2e_tests {
     fn test_write_and_read() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
@@ -114,7 +129,10 @@ mod e2e_tests {
     fn test_multiple_writes_and_reads() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
@@ -202,7 +220,10 @@ mod e2e_tests {
     fn test_read_old_message_single_client_single_epoch() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
@@ -250,7 +271,10 @@ mod e2e_tests {
     fn test_read_old_message_two_clients() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access.clone(), s2_access.clone());
 
@@ -323,7 +347,10 @@ mod e2e_tests {
     fn test_read_old_message_single_client_multiple_epochs() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut alice = Client::new("Alice".to_string(), s1_access, s2_access);
 
@@ -397,7 +424,10 @@ mod e2e_tests {
     fn test_message_persistence() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
         let num_epochs = DELTA as usize;
@@ -472,7 +502,10 @@ mod e2e_tests {
     async fn test_message_movement() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Async)));
+        let s1 = Arc::new(RwLock::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Async,
+        )));
         let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
         let mut client = Client::new("Client".to_string(), s1_access, s2_access);
 
@@ -506,7 +539,10 @@ mod e2e_tests {
         .expect("PRF failed");
         let intended_path = Path::from(l);
 
-        s1.write().unwrap().batch_write().expect("Initial batch write failed");
+        s1.write()
+            .unwrap()
+            .batch_write()
+            .expect("Initial batch write failed");
 
         let mut pathset: tree::SparseBinaryTree<Bucket> = s1.read().unwrap().pt.clone();
 
@@ -595,7 +631,10 @@ mod e2e_tests {
     fn test_tree_serialization() {
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(Mutex::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
 
         let s1_metadata_serialized = bincode::serialize(&s1.lock().unwrap().metadata).unwrap();
         let s1_metadata_deserialized: BinaryTree<Metadata> =
@@ -713,7 +752,10 @@ mod e2e_tests {
 
         let s2 = Arc::new(Mutex::new(Server2::new()));
         let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-        let s1 = Arc::new(Mutex::new(Server1::new(s2_access.clone(), ServerType::Sync)));
+        let s1 = Arc::new(Mutex::new(Server1::new(
+            s2_access.clone(),
+            ServerType::Sync,
+        )));
 
         // Do a batch init and write to generate metrics
         s1.lock().unwrap().batch_init(1);

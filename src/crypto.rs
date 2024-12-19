@@ -1,12 +1,12 @@
 //! Crypto helper functions
 
-use ring::{digest, hkdf};
-use crate::error::MycoError;
 use crate::constants::{INNER_BLOCK_SIZE, MESSAGE_SIZE};
+use crate::error::MycoError;
 use crate::utils::pad_message;
 use aes_gcm::aead::{AeadInPlace, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
 use rand::Rng;
+use ring::{digest, hkdf};
 
 /// Key Derivation Function (KDF) that derives a 16-byte key from an input key and string.
 ///
@@ -59,10 +59,10 @@ pub fn prf(key: &[u8], input: &[u8]) -> Result<Vec<u8>, MycoError> {
 
     // Allocate output buffer with fixed length of 32 bytes
     let mut result = vec![0u8; output_length];
-    okm.fill(&mut result).map_err(|_| MycoError::HkdfFillFailed)?;
+    okm.fill(&mut result)
+        .map_err(|_| MycoError::HkdfFillFailed)?;
     Ok(result)
 }
-
 
 /// An enum representing the type of encryption to perform
 #[derive(Debug)]
@@ -72,7 +72,6 @@ pub enum EncryptionType {
     /// Double encryption using AES-GCM twice
     DoubleEncrypt,
 }
-
 
 /// Encrypt a padded message using AES-GCM encryption
 ///
@@ -104,16 +103,16 @@ pub fn encrypt(
             {
                 let cipher = Aes128Gcm::new_from_slice(key)
                     .map_err(|_| MycoError::EncryptionFailed)?;
-                
+
                 let nonce_bytes = rand::thread_rng().gen::<[u8; 12]>();
                 let nonce = Nonce::from_slice(&nonce_bytes);
-                
+
                 let mut buffer = pad_message(message, padding_size);
-                
+
                 cipher
                     .encrypt_in_place(nonce, b"", &mut buffer)
                     .map_err(|_| MycoError::EncryptionFailed)?;
-                
+
                 Ok([nonce.as_slice(), buffer.as_slice()].concat())
             }
         }
@@ -134,15 +133,15 @@ pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, MycoError> {
 
                 let cipher = Aes128Gcm::new_from_slice(key)
                     .map_err(|_| MycoError::NoMessageFound)?;
-                
+
                 let (nonce, ciphertext) = ciphertext.split_at(12);
                 let nonce = Nonce::from_slice(nonce);
-                
+
                 let mut buffer = Vec::from(ciphertext);
                 cipher
                     .decrypt_in_place(nonce, b"", &mut buffer)
                     .map_err(|_| MycoError::NoMessageFound)?;
-                
+
                 Ok(buffer)
             }
         }

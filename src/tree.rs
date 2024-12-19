@@ -1,5 +1,5 @@
 //! This module provides binary tree implementations for both dense and sparse trees.
-//! 
+//!
 //! The main types are:
 //! - `BinaryTree<T>`: A dense binary tree implementation that stores values of type T
 //! - `SparseBinaryTree<T>`: A sparse binary tree that only stores non-empty nodes
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::dtypes::{Bucket, Metadata, Path};
 
 /// A binary tree implementation that stores values of type T.
-/// 
+///
 /// The tree is stored as a vector where:
 /// - Index 0 is unused
 /// - Index 1 is the root node
@@ -261,7 +261,7 @@ impl fmt::Display for BinaryTree<Bucket> {
 // Sparse binary tree
 
 /// A sparse binary tree implementation that only stores non-empty nodes.
-/// 
+///
 /// Instead of storing all nodes in a vector like BinaryTree, this implementation
 /// only stores the non-empty nodes in a compressed format using:
 /// - packed_buckets: Vector of actual values
@@ -460,7 +460,7 @@ where
     /// Gets all nodes along a given path
     pub fn get_all_nodes_along_path(&self, path: &Path) -> Vec<&T> {
         let mut nodes = Vec::new();
-        let mut idx = 1;  // Start at root
+        let mut idx = 1; // Start at root
 
         // Check root
         if let Some(value) = self.get_by_index(idx) {
@@ -494,14 +494,17 @@ pub struct ZipMutIterator<'a, T, S> {
 
 impl<'a, T, S> ZipMutIterator<'a, T, S> {
     /// Creates a new ZipMutIterator from two sparse binary trees
-    /// 
+    ///
     /// # Arguments
     /// * `left_tree` - First sparse binary tree to zip
     /// * `right_tree` - Second sparse binary tree to zip
     ///
     /// # Panics
     /// Panics if the trees have different numbers of elements
-    fn new(left_tree: &'a mut SparseBinaryTree<T>, right_tree: &'a mut SparseBinaryTree<S>) -> Self {
+    fn new(
+        left_tree: &'a mut SparseBinaryTree<T>,
+        right_tree: &'a mut SparseBinaryTree<S>,
+    ) -> Self {
         if left_tree.packed_indices.len() != right_tree.packed_indices.len() {
             panic!("Trees must have the same number of elements to zip.");
         }
@@ -529,7 +532,7 @@ impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
     fn next(&mut self) -> Option<Self::Item> {
         // Take ownership of the current slices
         let slices = self.slices.take()?;
-        
+
         // If we have no more elements, return None
         if slices.left_indices.is_empty() {
             return None;
@@ -553,7 +556,7 @@ impl<'a, T, S> Iterator for ZipMutIterator<'a, T, S> {
         if left_idx == right_idx {
             Some((
                 Box::new(Some(left_bucket)),
-                Box::new(Some(right_bucket)), 
+                Box::new(Some(right_bucket)),
                 Path::from(*left_idx),
             ))
         } else {

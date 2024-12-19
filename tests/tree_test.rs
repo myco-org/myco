@@ -1,6 +1,6 @@
 use myco_rs::{
-    tree::{BinaryTree, TreeValue},
     dtypes::{Direction, Path},
+    tree::{BinaryTree, TreeValue},
 };
 use rand_chacha::ChaCha20Rng;
 

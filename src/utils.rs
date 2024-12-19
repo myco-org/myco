@@ -1,18 +1,8 @@
 //! Utility functions for the Myco protocol.
 
-use crate::{
-    dtypes::*,
-    tree::BinaryTree,
-    crypto::decrypt,
-};
+use crate::{crypto::decrypt, dtypes::*, tree::BinaryTree};
 
-use std::{
-    collections::HashSet,
-    fs,
-    path::Path as StdPath,
-    process::Command,
-};
-
+use std::{collections::HashSet, fs, path::Path as StdPath, process::Command};
 
 /// Pads a message to a target length by appending zeros.
 ///
@@ -162,7 +152,9 @@ pub fn generate_test_certificates() -> Result<(), Box<dyn std::error::Error>> {
     if !StdPath::new("certs").exists() {
         fs::create_dir("certs")?;
     }
-    if StdPath::new("certs/server-cert.pem").exists() && StdPath::new("certs/server-key.pem").exists() {
+    if StdPath::new("certs/server-cert.pem").exists()
+        && StdPath::new("certs/server-key.pem").exists()
+    {
         // Clean up old certificates to ensure we have fresh ones
         fs::remove_file("certs/server-cert.pem")?;
         fs::remove_file("certs/server-key.pem")?;

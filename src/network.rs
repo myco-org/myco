@@ -3,18 +3,8 @@
 //! This module contains the network communication code for the Myco library.
 //!
 //! It defines the traits and structures for interacting with the servers over the network.
-use anyhow::Result;
-use axum::async_trait;
-use bincode::{deserialize, serialize};
-use futures::{StreamExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
-use std::sync::{Mutex, RwLock};
-use std::{
-    io::{Read, Write},
-    sync::Arc,
-};
-use tokio::io::AsyncWriteExt;
 use crate::{
+    constants::{NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK},
     dtypes::{Bucket, Key, Path},
     error::MycoError,
     logging::BytesMetric,
@@ -26,8 +16,18 @@ use crate::{
     },
     server1::Server1,
     server2::Server2,
-    constants::{NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK},
 };
+use anyhow::Result;
+use axum::async_trait;
+use bincode::{deserialize, serialize};
+use futures::{StreamExt, TryStreamExt};
+use serde::{Deserialize, Serialize};
+use std::sync::{Mutex, RwLock};
+use std::{
+    io::{Read, Write},
+    sync::Arc,
+};
+use tokio::io::AsyncWriteExt;
 
 #[derive(Serialize, Deserialize, Debug)]
 /// An enum representing the different types of commands that can be sent to the servers
@@ -204,7 +204,7 @@ impl Server2Access for RemoteServer2Access {
 
         // Split indices into chunks for batched reading
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
-        
+
         // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsRequest { chunk_idx };
@@ -249,7 +249,7 @@ impl Server2Access for RemoteServer2Access {
 
         // Split indices into chunks based on configured chunk size
         let chunks: Vec<_> = indices.chunks(NUM_BUCKETS_PER_READ_PATHS_CHUNK).collect();
-        
+
         // Create futures for parallel chunk requests
         let futures = (0..chunks.len()).map(|chunk_idx| {
             let request = ChunkReadPathsClientRequest {
@@ -421,7 +421,6 @@ impl RemoteServer2Access {
     ) -> Result<R, MycoError> {
         let request_bytes =
             bincode::serialize(&payload).map_err(|_| MycoError::DeserializationError)?;
-
 
         let response = self
             .client

@@ -23,7 +23,6 @@ use axum::{
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
     constants::{DELTA, LATENCY_BENCH_COUNT},
-    utils::generate_test_certificates,
     dtypes::{Bucket, Key, Path},
     error::MycoError,
     network::RemoteServer2Access,
@@ -36,6 +35,7 @@ use myco_rs::{
     },
     server1::Server1,
     server2::Server2,
+    utils::generate_test_certificates,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -87,7 +87,9 @@ async fn main() {
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+        generate_test_certificates()
+            .map_err(|e| MycoError::CertificateError(e.to_string()))
+            .unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)
@@ -103,7 +105,10 @@ async fn main() {
     let app = Router::new()
         .route("/read_paths", post(handle_read_paths))
         .route("/read_paths_client", post(handle_read_paths_client))
-        .route("/chunk_read_paths_client", post(handle_chunk_read_paths_client))
+        .route(
+            "/chunk_read_paths_client",
+            post(handle_chunk_read_paths_client),
+        )
         .route("/write", post(handle_write))
         .route("/chunk_write", post(handle_chunk_write))
         .route("/chunk_read_paths", post(handle_chunk_read_paths))
@@ -234,7 +239,6 @@ async fn handle_chunk_read_paths_client(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-
 async fn handle_chunk_write(
     State(state): State<AppState>,
     bytes: Bytes,
@@ -282,7 +286,7 @@ async fn handle_write(State(state): State<AppState>, bytes: Bytes) -> Result<Byt
 
 async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /get_prf_keys");
-    
+
     let keys = state
         .server2
         .read()
@@ -298,9 +302,6 @@ async fn handle_get_prf_keys(State(state): State<AppState>) -> Result<Bytes, Sta
 async fn handle_finalize_benchmark(State(state): State<AppState>) -> Result<Bytes, StatusCode> {
     println!("Received request: /finalize_benchmark");
     #[cfg(feature = "perf-logging")]
-    myco_rs::logging::calculate_and_append_averages(
-        "server2_latency.csv",
-        "server2_bytes.csv",
-    );
+    myco_rs::logging::calculate_and_append_averages("server2_latency.csv", "server2_bytes.csv");
     Ok(Bytes::from("Benchmark finalized"))
 }

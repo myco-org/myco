@@ -1,16 +1,20 @@
 //! Server2
-//! 
-//! S2 (Server 2) functions as a storage server, maintaining a tree-based data structure for message 
-//! storage and handling client read operations. It receives batched updates from S1 with re-encrypted 
-//! and reorganized messages, but cannot discern their intended locations. Clients read messages by 
-//! downloading paths from S2's tree, but S2 cannot link these reads to previous writes due to the 
-//! random path selection. S2 also stores and provides PRF keys for clients to compute message paths, 
+//!
+//! S2 (Server 2) functions as a storage server, maintaining a tree-based data structure for message
+//! storage and handling client read operations. It receives batched updates from S1 with re-encrypted
+//! and reorganized messages, but cannot discern their intended locations. Clients read messages by
+//! downloading paths from S2's tree, but S2 cannot link these reads to previous writes due to the
+//! random path selection. S2 also stores and provides PRF keys for clients to compute message paths,
 //! ensuring privacy by preventing correlation between writes and reads.
 
 use std::cmp::min;
 
 use crate::{
-    constants::{D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK}, dtypes::{Bucket, Key, Path}, error::MycoError, logging::LatencyMetric, tree::BinaryTree
+    constants::{D, DELTA, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_READ_PATHS_CHUNK},
+    dtypes::{Bucket, Key, Path},
+    error::MycoError,
+    logging::LatencyMetric,
+    tree::BinaryTree,
 };
 
 cfg_if::cfg_if! {

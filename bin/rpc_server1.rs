@@ -23,10 +23,16 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
-    constants::{DELTA, LATENCY_BENCH_COUNT}, dtypes::{Key, ServerType}, error::MycoError, network::RemoteServer2Access, rpc_types::{
+    constants::{DELTA, LATENCY_BENCH_COUNT},
+    dtypes::{Key, ServerType},
+    error::MycoError,
+    network::RemoteServer2Access,
+    rpc_types::{
         BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
         QueueWriteResponse,
-    }, server1::Server1, utils::generate_test_certificates
+    },
+    server1::Server1,
+    utils::generate_test_certificates,
 };
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
@@ -80,7 +86,9 @@ async fn main() {
 
     // Generate certificates if they don't exist
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+        generate_test_certificates()
+            .map_err(|e| MycoError::CertificateError(e.to_string()))
+            .unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)

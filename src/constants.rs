@@ -1,7 +1,7 @@
 //! Constants used in the Myco protocol.
 
 /// Number of epochs a message persists before expiring and being deleted.
-/// Set to 1000 to ensure messages remain available long enough for clients 
+/// Set to 1000 to ensure messages remain available long enough for clients
 /// who may temporarily go offline.
 pub const DELTA: usize = 1000;
 
@@ -71,8 +71,7 @@ pub const NUM_BUCKETS_PER_BATCH_WRITE_CHUNK: usize =
     MAX_REQUEST_SIZE_BATCH_WRITE / BUCKET_SIZE_BYTES;
 
 /// Number of buckets that can be read in one path chunk
-pub const NUM_BUCKETS_PER_READ_PATHS_CHUNK: usize = 
-    MAX_REQUEST_SIZE_READ_PATHS / BUCKET_SIZE_BYTES;
+pub const NUM_BUCKETS_PER_READ_PATHS_CHUNK: usize = MAX_REQUEST_SIZE_READ_PATHS / BUCKET_SIZE_BYTES;
 
 /// Fixed seed for throughput benchmark RNG to ensure reproducible results
 pub const FIXED_SEED_TPUT_RNG: [u8; 32] = [1u8; 32];

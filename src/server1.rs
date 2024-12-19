@@ -85,16 +85,16 @@ impl Server1 {
     }
 
     /// Initialize the server for a new batch.
-    /// 
+    ///
     /// When server_type is Async, this performs asynchronous initialization with latency tracking.
     /// When server_type is Sync, this performs synchronous initialization by blocking on async calls.
     pub fn batch_init(&mut self, num_clients: usize) -> Result<(), MycoError> {
         let (end_to_end_latency, mut local_latency) = match self.server_type {
             ServerType::Async => (
                 Some(LatencyMetric::new("server1_batch_init_end_to_end")),
-                Some(LatencyMetric::new("server1_batch_init_local"))
+                Some(LatencyMetric::new("server1_batch_init_local")),
             ),
-            ServerType::Sync => (None, None)
+            ServerType::Sync => (None, None),
         };
 
         // Create cryptographically secure random number generator
@@ -112,18 +112,17 @@ impl Server1 {
                 if let Some(latency) = local_latency.as_mut() {
                     latency.pause();
                 }
-                let buckets = futures::executor::block_on(
-                    self.s2.read_paths(self.pathset_indices.clone())
-                ).unwrap();
+                let buckets =
+                    futures::executor::block_on(self.s2.read_paths(self.pathset_indices.clone()))
+                        .unwrap();
                 if let Some(latency) = local_latency.as_mut() {
                     latency.resume();
                 }
                 buckets
-            },
+            }
             ServerType::Sync => {
-                futures::executor::block_on(
-                    self.s2.read_paths(self.pathset_indices.clone())
-                ).unwrap()
+                futures::executor::block_on(self.s2.read_paths(self.pathset_indices.clone()))
+                    .unwrap()
             }
         };
 
@@ -153,7 +152,7 @@ impl Server1 {
                 if let Some(latency) = local_latency {
                     latency.finish();
                 }
-            },
+            }
             ServerType::Sync => {}
         }
 
@@ -190,20 +189,26 @@ impl Server1 {
     }
 
     /// Finalize a batch write.
-    /// 
+    ///
     /// When server_type is Async, this performs asynchronous writes with latency tracking.
     /// When server_type is Sync, this performs synchronous writes by blocking on async calls.
     pub fn batch_write(&mut self) -> Result<(), MycoError> {
         // Initialize latency metrics if in async mode
-        let (mut end_to_end_latency, mut local_latency, mut queue_old_buckets_latency, mut process_queued_buckets_latency) = 
-        match self.server_type {
+        let (
+            end_to_end_latency,
+            local_latency,
+            queue_old_buckets_latency,
+            process_queued_buckets_latency,
+        ) = match self.server_type {
             ServerType::Async => (
                 Some(LatencyMetric::new("server1_batch_write_end_to_end")),
                 Some(LatencyMetric::new("server1_batch_write_local")),
                 Some(LatencyMetric::new("server1_batch_write_queue_old_buckets")),
-                Some(LatencyMetric::new("server1_batch_write_process_queued_buckets"))
+                Some(LatencyMetric::new(
+                    "server1_batch_write_process_queued_buckets",
+                )),
             ),
-            ServerType::Sync => (None, None, None, None)
+            ServerType::Sync => (None, None, None, None),
         };
 
         let mut rng = ChaCha20Rng::from_entropy();
@@ -286,8 +291,12 @@ impl Server1 {
                 let fake_encrypt_count = Z - real_encrypt_count;
                 for _ in 0..fake_encrypt_count {
                     // Fake encryption
-                    let _ = encrypt(&[0u8; 32], &[0u8; BLOCK_SIZE], EncryptionType::DoubleEncrypt)
-                        .unwrap_or_default();
+                    let _ = encrypt(
+                        &[0u8; 32],
+                        &[0u8; BLOCK_SIZE],
+                        EncryptionType::DoubleEncrypt,
+                    )
+                    .unwrap_or_default();
                 }
 
                 // Insert blocks into the pt bucket and metadata_pt bucket.
@@ -355,14 +364,14 @@ impl Server1 {
                     latency.finish();
                 }
                 futures::executor::block_on(
-                    self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone())
-                )
-            },
-            ServerType::Sync => {
-                futures::executor::block_on(
-                    self.s2.write(self.pt.packed_buckets.clone(), self.k_s1_t.clone())
+                    self.s2
+                        .write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()),
                 )
             }
+            ServerType::Sync => futures::executor::block_on(
+                self.s2
+                    .write(self.pt.packed_buckets.clone(), self.k_s1_t.clone()),
+            ),
         };
 
         match write_result {
@@ -373,7 +382,7 @@ impl Server1 {
                         if let Some(latency) = end_to_end_latency {
                             latency.finish();
                         }
-                    },
+                    }
                     ServerType::Sync => {}
                 }
                 self.epoch += 1;

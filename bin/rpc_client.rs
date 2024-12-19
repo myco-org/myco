@@ -6,18 +6,19 @@
 #![allow(unused_parens)]
 #![allow(private_bounds)]
 
-use myco_rs::{
-    client::Client, constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS}, dtypes::Key, network::{RemoteServer1Access, RemoteServer2Access}
-};
+use futures::future::join_all;
 #[cfg(feature = "perf-logging")]
 use myco_rs::logging::calculate_and_append_averages;
+use myco_rs::{
+    client::Client,
+    constants::{BATCH_SIZE, DELTA, LATENCY_BENCH_COUNT, MESSAGE_SIZE, NUM_CLIENTS},
+    dtypes::Key,
+    network::{RemoteServer1Access, RemoteServer2Access},
+};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use std::error::Error;
 use tokio::{self};
-use futures::future::join_all;
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -47,20 +48,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run the measurement iterations directly
     println!("\nStarting measurement phase...");
     for iteration in 0..LATENCY_BENCH_COUNT {
-        println!("\nMeasurement iteration {}/{}", iteration + 1, LATENCY_BENCH_COUNT);
-        
-        {        
+        println!(
+            "\nMeasurement iteration {}/{}",
+            iteration + 1,
+            LATENCY_BENCH_COUNT
+        );
+
+        {
             let client = reqwest::Client::builder()
-                .danger_accept_invalid_certs(true)  // Only for development
+                .danger_accept_invalid_certs(true) // Only for development
                 .pool_idle_timeout(Some(std::time::Duration::from_secs(300))) // Keep connections alive
-                .tcp_keepalive(Some(std::time::Duration::from_secs(60)))      // Enable TCP keepalive
+                .tcp_keepalive(Some(std::time::Duration::from_secs(60))) // Enable TCP keepalive
                 .build()?;
 
             let request = myco_rs::rpc_types::BatchInitRequest {
                 num_writes: NUM_CLIENTS,
             };
             let request_bytes = bincode::serialize(&request).unwrap();
-            
+
             let response = client
                 .post(format!("{}/batch_init", s1_addr))
                 .header("Content-Type", "application/octet-stream")
@@ -69,7 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await?;
 
             let response_bytes = response.bytes().await?;
-            
+
             let response: myco_rs::rpc_types::BatchInitResponse =
                 bincode::deserialize(&response_bytes).unwrap();
             assert!(response.success);
@@ -77,7 +82,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Process the single client
             let message = vec![1u8; 16];
             let random_index = rng.gen_range(0..128);
-            if let Err(e) = simulation_client.async_write(&message, &simulation_keys[random_index]).await {
+            if let Err(e) = simulation_client
+                .async_write(&message, &simulation_keys[random_index])
+                .await
+            {
                 eprintln!("Error in client write: {:?}", e);
             }
 
@@ -86,20 +94,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .send()
                 .await?;
             let response_bytes = response.bytes().await?;
-            
+
             let response: myco_rs::rpc_types::BatchWriteResponse =
                 bincode::deserialize(&response_bytes).unwrap();
             assert!(response.success);
 
             // Process the single client for reading
             let batch_sizes = vec![1, 16, 64, 128];
-            
+
             for batch_size in batch_sizes {
                 let simulation_keys_subset = simulation_keys[0..batch_size].to_vec();
-                
-                println!("Server1: Reading from client 0 with batch_size {}", batch_size);
+
+                println!(
+                    "Server1: Reading from client 0 with batch_size {}",
+                    batch_size
+                );
                 let res = simulation_client
-                    .async_read(simulation_keys_subset, simulation_client.id.clone(), 0, batch_size)
+                    .async_read(
+                        simulation_keys_subset,
+                        simulation_client.id.clone(),
+                        0,
+                        batch_size,
+                    )
                     .await;
                 println!("Read messages: {:?}", res.unwrap());
             }

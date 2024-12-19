@@ -14,11 +14,11 @@ use myco_rs::dtypes::ServerType;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
-    utils::generate_test_certificates,
     dtypes::Key,
     error::MycoError,
     network::{LocalServer1Access, RemoteServer2Access},
     server1::Server1,
+    utils::generate_test_certificates,
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
@@ -64,7 +64,9 @@ async fn main() {
         .join("server-key.pem");
 
     if !cert_path.exists() || !key_path.exists() {
-        generate_test_certificates().map_err(|e| MycoError::CertificateError(e.to_string())).unwrap();
+        generate_test_certificates()
+            .map_err(|e| MycoError::CertificateError(e.to_string()))
+            .unwrap();
     }
 
     let config = RustlsConfig::from_pem_file(cert_path, key_path)
@@ -163,7 +165,8 @@ async fn main() {
             .write()
             .unwrap()
             .batch_write()
-            .map_err(|e| MycoError::DatabaseError(format!("Failed to batch write: {}", e))).unwrap();
+            .map_err(|e| MycoError::DatabaseError(format!("Failed to batch write: {}", e)))
+            .unwrap();
 
         println!("Batch write finished");
 
