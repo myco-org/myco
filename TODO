@@ -1,0 +1,15 @@
+# Code Organization
+- [ ] Consolidate duplicate read/write implementations from throughput experiment files
+- [ ] Unify async and sync versions of functions in network.rs, server1.rs, etc.
+
+# Chunk Size Configuration
+- [ ] Implement automatic chunk size configuration
+  - [ ] Add fixed network bandwidth setting
+  - [ ] Remove hardcoded chunk size from constants.rs
+  - [ ] Add tests for chunk size configuration
+  - [ ] Fix HTTPS not working locally
+
+# Code Cleanup
+- [ ] Remove warning suppression flags and fix underlying warnings
+- [ ] Always initialize S2 with random data regardless of perf-logging flag
+- [ ] Remove deprecated code
