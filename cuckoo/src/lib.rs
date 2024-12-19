@@ -1,10 +1,7 @@
-use hmac::{Hmac, Mac};
 use rand::prelude::*;
-use sha2::Sha256;
 use thiserror::Error;
 
 const MAX_EVICTIONS: usize = 500;
-type HmacSha256 = Hmac<Sha256>;
 const RANDOM_SEED: u64 = 12345;
 
 #[derive(Debug, Clone)]
@@ -75,13 +72,12 @@ impl Table {
         })
     }
 
-    fn compute_prf(&self, key: &[u8], seq_no: u64) -> Result<usize, Error> {
-        let mut mac = HmacSha256::new_from_slice(key)
+    fn prf(&self, key: &[u8], seq_no: u64) -> Result<usize, Error> {
+        let input = seq_no.to_be_bytes();
+        let result = myco_rs::crypto::prf(key, &input)
             .map_err(|e| Error::HmacError(e.to_string()))?;
-        mac.update(&seq_no.to_be_bytes());
-        let result = mac.finalize();
-        let hash = result.into_bytes();
-        Ok(usize::from_be_bytes(hash[0..8].try_into().unwrap()) % self.num_buckets)
+        
+        Ok(usize::from_be_bytes(result[0..8].try_into().unwrap()) % self.num_buckets)
     }
 
     pub fn insert(&mut self, item: &Item) -> Result<Option<Item>, Error> {
@@ -89,8 +85,8 @@ impl Table {
             return Err(Error::InvalidInput);
         }
 
-        let bucket1 = self.compute_prf(&self.key1, item.seq_no)?;
-        let bucket2 = self.compute_prf(&self.key2, item.seq_no)?;
+        let bucket1 = self.prf(&self.key1, item.seq_no)?;
+        let bucket2 = self.prf(&self.key2, item.seq_no)?;
 
         if bucket1 != item.bucket1 || bucket2 != item.bucket2 {
             return Err(Error::InvalidInput);
@@ -234,8 +230,8 @@ mod tests {
     }
 
     fn create_test_item(table: &Table, id: u64, data: Vec<u8>, seq_no: u64) -> Item {
-        let bucket1 = table.compute_prf(TEST_KEY1, seq_no).unwrap();
-        let bucket2 = table.compute_prf(TEST_KEY2, seq_no).unwrap();
+        let bucket1 = table.prf(TEST_KEY1, seq_no).unwrap();
+        let bucket2 = table.prf(TEST_KEY2, seq_no).unwrap();
         Item::new(id, data, seq_no, bucket1, bucket2)
     }
 
@@ -405,16 +401,16 @@ mod tests {
         let table = create_test_table(10, 2);
         
         // Same seq_no should produce same buckets
-        let bucket1_a = table.compute_prf(TEST_KEY1, 0).unwrap();
-        let bucket1_b = table.compute_prf(TEST_KEY1, 0).unwrap();
+        let bucket1_a = table.prf(TEST_KEY1, 0).unwrap();
+        let bucket1_b = table.prf(TEST_KEY1, 0).unwrap();
         assert_eq!(bucket1_a, bucket1_b);
 
-        let bucket2_a = table.compute_prf(TEST_KEY2, 0).unwrap();
-        let bucket2_b = table.compute_prf(TEST_KEY2, 0).unwrap();
+        let bucket2_a = table.prf(TEST_KEY2, 0).unwrap();
+        let bucket2_b = table.prf(TEST_KEY2, 0).unwrap();
         assert_eq!(bucket2_a, bucket2_b);
 
         // Different seq_no should produce different buckets
-        let bucket1_c = table.compute_prf(TEST_KEY1, 1).unwrap();
+        let bucket1_c = table.prf(TEST_KEY1, 1).unwrap();
         assert_ne!(bucket1_a, bucket1_c);
     }
 }

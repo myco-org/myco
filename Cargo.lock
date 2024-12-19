@@ -443,6 +443,7 @@ name = "cuckoo"
 version = "0.1.0"
 dependencies = [
  "hmac",
+ "myco-rs",
  "rand",
  "sha2",
  "thiserror 2.0.8",
