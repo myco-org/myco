@@ -1,13 +1,13 @@
 //! # Myco Data Types
-//! 
+//!
 //! This module contains the core data types used throughout the Myco library.
-//! 
+//!
 //! The main types defined here are:
 //! - `Key`: Cryptographic keys used for encryption and PRF operations
 //! - `Path`: Binary paths used in the tree data structure
 //! - `Bucket`: Storage units containing encrypted message blocks
 //! - `Metadata`: Associated metadata for message blocks including paths and timestamps
-//! 
+//!
 //! These types form the foundation for Myco's metadata-hiding encrypted messaging system,
 //! enabling secure communication while obscuring patterns of interaction between users.
 //! The types are designed to work together to implement the ORAM-inspired data structure
@@ -19,7 +19,10 @@ use rand::{seq::SliceRandom, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{tree::TreeValue, constants::{BLOCK_SIZE, D, LAMBDA, Z}};
+use crate::{
+    constants::{BLOCK_SIZE, D, LAMBDA, Z},
+    tree::TreeValue,
+};
 
 pub(crate) type Timestamp = u64;
 
@@ -290,3 +293,11 @@ impl Key {
     }
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+/// An enum representing the different types of servers
+pub enum ServerType {
+    /// Sync server
+    Sync,
+    /// Async server
+    Async,
+}

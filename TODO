@@ -1,0 +1,13 @@
+[] In the throughput experiment files, notice that I had to copy and create my own versions of reads and writes
+[] All the functions in the network.rs, server1.rs, etc. there is an async version and a sync version 
+
+[] Need to automatically configure chunk size
+    [] Fixed network bandwidth
+    [] Currently in constants.rs there is a hardcoded chunk size
+    [] Tests
+    [] https not working on local?
+
+[] Warnings need to have suppression flags removed and warnings Fixed
+[] Currently we only set S2 to random data if perf-logging flag is on but this should always happen. Otherwise perf-logging can be the same
+[] Delete deprecated code
+

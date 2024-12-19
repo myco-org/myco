@@ -10,6 +10,7 @@ use axum::body::Bytes;
 use axum::{extract::State, http::StatusCode, routing::post, Router};
 use axum_server::tls_rustls::RustlsConfig;
 use futures::future::join_all;
+use myco_rs::dtypes::ServerType;
 use myco_rs::{
     client::Client,
     constants::{BATCH_SIZE, FIXED_SEED_TPUT_RNG, NUM_CLIENTS, THROUGHPUT_ITERATIONS},
@@ -74,7 +75,7 @@ async fn main() {
     let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
 
     // Initialize Server1 and state
-    let server1 = Server1::new(s2_access);
+    let server1 = Server1::new(s2_access, ServerType::Async);
     let server1 = Arc::new(RwLock::new(server1));
 
     // Generate simulation keys
@@ -135,8 +136,8 @@ async fn main() {
             .server1
             .write()
             .unwrap()
-            .async_batch_init(NUM_CLIENTS)
-            .await;
+            .batch_init(NUM_CLIENTS)
+            .unwrap();
 
         println!("Batch init finished");
 
@@ -161,8 +162,7 @@ async fn main() {
             .server1
             .write()
             .unwrap()
-            .async_batch_write()
-            .await
+            .batch_write()
             .map_err(|e| MycoError::DatabaseError(format!("Failed to batch write: {}", e))).unwrap();
 
         println!("Batch write finished");

@@ -23,16 +23,10 @@ use axum::{
 };
 use axum_server::tls_rustls::RustlsConfig;
 use myco_rs::{
-    constants::{DELTA, LATENCY_BENCH_COUNT},
-    utils::generate_test_certificates,
-    dtypes::Key,
-    error::MycoError,
-    network::RemoteServer2Access,
-    rpc_types::{
+    constants::{DELTA, LATENCY_BENCH_COUNT}, dtypes::{Key, ServerType}, error::MycoError, network::RemoteServer2Access, rpc_types::{
         BatchInitRequest, BatchInitResponse, BatchWriteResponse, QueueWriteRequest,
         QueueWriteResponse,
-    },
-    server1::Server1,
+    }, server1::Server1, utils::generate_test_certificates
 };
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path, process::Command};
@@ -95,7 +89,7 @@ async fn main() {
 
     // Initialize Server1 with Server2 access using the provided or default address
     let s2_access = Box::new(RemoteServer2Access::new(&s2_addr).await.unwrap());
-    let server1 = Server1::new(s2_access);
+    let server1 = Server1::new(s2_access, ServerType::Async);
     let state = AppState {
         server1: Arc::new(RwLock::new(server1)),
         batch_write_count: Arc::new(Mutex::new(0)),
@@ -150,8 +144,7 @@ async fn batch_write(State(state): State<AppState>) -> Result<Bytes, StatusCode>
         .server1
         .write()
         .await
-        .async_batch_write()
-        .await
+        .batch_write()
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     bincode::serialize(&BatchWriteResponse { success: true })
@@ -170,8 +163,8 @@ async fn batch_init(State(state): State<AppState>, bytes: Bytes) -> Result<Bytes
         .server1
         .write()
         .await
-        .async_batch_init(request.num_writes)
-        .await;
+        .batch_init(request.num_writes)
+        .unwrap();
 
     bincode::serialize(&BatchInitResponse { success: true })
         .map(Bytes::from)
