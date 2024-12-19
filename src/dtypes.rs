@@ -290,3 +290,12 @@ impl Key {
     }
 }
 
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+/// An enum representing the different types of servers
+pub enum ServerType {
+    /// Sync server
+    Sync,
+    /// Async server
+    Async,
+}

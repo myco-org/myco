@@ -7,14 +7,7 @@
 #![allow(private_bounds)]
 
 use myco_rs::{
-    client::Client,
-    constants::{DB_SIZE, DELTA, NUM_CLIENTS},
-    utils::calculate_bucket_usage,
-    dtypes::Key,
-    error::MycoError,
-    network::{LocalServer1Access, LocalServer2Access},
-    server1::Server1,
-    server2::Server2,
+    client::Client, constants::{DB_SIZE, DELTA, NUM_CLIENTS}, dtypes::{Key, ServerType}, error::MycoError, network::{LocalServer1Access, LocalServer2Access}, server1::Server1, server2::Server2, utils::calculate_bucket_usage
 };
 use rand::{Rng, SeedableRng};
 use rayon::iter::{
@@ -34,7 +27,7 @@ fn run_multi_client_simulation(num_clients: usize, num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -121,7 +114,7 @@ fn run_simulation(num_epochs: usize) {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
@@ -238,7 +231,7 @@ fn run_local_latency_benchmark() {
 
     let s2 = Arc::new(Mutex::new(Server2::new()));
     let s2_access = Box::new(LocalServer2Access { server: s2.clone() });
-    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone())));
+    let s1 = Arc::new(RwLock::new(Server1::new(s2_access.clone(), ServerType::Sync)));
     let s1_access = Box::new(LocalServer1Access { server: s1.clone() });
 
     let mut rng = ChaCha20Rng::from_entropy();
