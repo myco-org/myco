@@ -1,3 +1,9 @@
+[workspace]
+members = [
+    ".", # myco-rs
+    "cuckoo"
+]
+
 [package]
 name = "myco-rs"
 version = "0.1.0"
