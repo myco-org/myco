@@ -9,8 +9,11 @@
 
 use std::collections::HashMap;
 
-use crate::{constants::{D, DELTA, Q}, dtypes::{Bucket, Key}, error::MycoError, logging::LatencyMetric};
+use crate::{constants::{BLOCK_SIZE, D, DELTA, LAMBDA_BYTES, NOTIFICATION_BUCKET_SIZE_BYTES, Q, Z}, dtypes::{Block, Bucket, Key}, error::MycoError, logging::LatencyMetric};
 use crate::{dtypes::{Path, TreeMycoKey}, tree::{BinaryTree, SparseBinaryTree}, utils::{l_to_u64, Index}};
+use ed25519_dalek::SIGNATURE_LENGTH;
+use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha20Rng;
 use rayon::prelude::*;
 use dashmap;
 use sys_info::mem_info;
@@ -24,8 +27,9 @@ pub struct Server2 {
     pub prf_keys: Vec<Key<TreeMycoKey>>,
     /// The current epoch.
     pub epoch: u64,
-    /// The t-tables.
-    pub notification_tables: Vec<Vec<Bucket>>,
+    /// The t-tables. Each table is one flat byte buffer in which notification bucket `i`
+    /// occupies bytes `[i * NOTIFICATION_BUCKET_SIZE_BYTES, (i + 1) * NOTIFICATION_BUCKET_SIZE_BYTES)`.
+    pub notification_tables: Vec<Vec<u8>>,
     /// The number of clients.
     pub num_clients: usize,
     /// The index of the latest notification table.
@@ -58,6 +62,21 @@ impl Server2 {
             num_clients,
             latest_notif_table_idx: 0,
         }
+    }
+
+    /// Create a new Server2 instance whose tree is already full: every bucket holds a
+    /// full-size placeholder, as it does once each bucket has been written at least once.
+    /// Benchmarks use this so that memory use and read sizes are at their steady-state
+    /// values from the first epoch instead of growing as paths are written for the first time.
+    pub fn new_prefilled(num_clients: usize) -> Self {
+        let mut server2 = Self::new(num_clients);
+
+        println!("Filling up the tree...");
+        let mut data = vec![0u8; Z * BLOCK_SIZE];
+        ChaCha20Rng::from_entropy().fill_bytes(&mut data);
+        server2.tree.fill(Bucket::contiguous(data, Some(vec![0u8; SIGNATURE_LENGTH])));
+
+        server2
     }
 
     /// Read a path from the tree.
@@ -119,18 +138,7 @@ impl Server2 {
             total_tree_size += total_size_of_bucket;
         }
 
-        let mut total_ntf_size = 0;
-        for table in self.notification_tables.iter() {
-            let table_size = table.iter().map(|bucket| {
-                let mut bucket_size = 0;
-                for block in bucket.iter() {
-                    bucket_size += block.0.len();
-                }
-                bucket_size += bucket.1.as_ref().map_or(0, |x| x.len());
-                bucket_size
-            }).sum::<usize>();
-            total_ntf_size += table_size;
-        }
+        let total_ntf_size: usize = self.notification_tables.iter().map(|table| table.len()).sum();
 
         let server_2_data_structure_mem_usage = total_tree_size + total_ntf_size;
 
@@ -174,9 +182,8 @@ impl Server2 {
                 for l in indices {
                     let idx = l_to_u64(l, self.num_clients) as usize;
                     // Use unchecked access if we're confident indices are valid, otherwise keep the get()
-                    if let Some(bucket) = t_table_ntf.get(idx) {
-                        // Use a reference or shallow clone if possible
-                        buckets.push(bucket.clone());
+                    if let Some(bucket) = notif_bucket(t_table_ntf, idx) {
+                        buckets.push(unpack_notif_bucket(bucket));
                     }
                 }
             } else {
@@ -185,7 +192,7 @@ impl Server2 {
                     .par_iter()
                     .map(|l| {
                         let idx = l_to_u64(l, self.num_clients) as usize;
-                        t_table_ntf.get(idx).cloned().unwrap()
+                        unpack_notif_bucket(notif_bucket(t_table_ntf, idx).unwrap())
                     })
                     .collect();
             }
@@ -195,8 +202,8 @@ impl Server2 {
         Ok(epoch_buckets)
     }
 
-    /// Get the notification tables without cloning, returning references.
-    pub fn read_notifs_refs<'a>(&'a self, ls: HashMap<u64, Vec<Index>>) -> Result<HashMap<u64, Vec<&'a Bucket>>, MycoError> {
+    /// Get the notification tables without cloning, returning each bucket's bytes.
+    pub fn read_notifs_refs<'a>(&'a self, ls: HashMap<u64, Vec<Index>>) -> Result<HashMap<u64, Vec<&'a [u8]>>, MycoError> {
         let local_latency = LatencyMetric::new("server2_read_notifs_refs");
         
         if self.notification_tables.is_empty() {
@@ -213,15 +220,12 @@ impl Server2 {
             let t_table_ntf = &self.notification_tables[table_idx];
             
             // Collect buckets based on indices
-            let buckets: Vec<&Bucket> = if indices.len() > 10000 {
+            let buckets: Vec<&[u8]> = if indices.len() > 10000 {
                 indices.par_chunks(1000)
                     .flat_map_iter(|chunk| {
                         chunk.iter().map(|l| {
                             let idx = l_to_u64(l, self.num_clients) as usize;
-                            if idx >= t_table_ntf.len() {
-                                return None;
-                            }
-                            Some(&t_table_ntf[idx])
+                            notif_bucket(t_table_ntf, idx)
                         }).filter_map(|x| x)
                     })
                     .collect()
@@ -229,10 +233,7 @@ impl Server2 {
                 indices.iter()
                     .filter_map(|l| {
                         let idx = l_to_u64(l, self.num_clients) as usize;
-                        if idx >= t_table_ntf.len() {
-                            return None;
-                        }
-                        Some(&t_table_ntf[idx])
+                        notif_bucket(t_table_ntf, idx)
                     })
                     .collect()
             };
@@ -257,69 +258,34 @@ impl Server2 {
         
         // Write to the current notification table using latest_notif_table_idx
         let current_idx = self.latest_notif_table_idx;
-        self.notification_tables[current_idx] = notif_buckets;
+        let mut table = vec![0u8; notif_buckets.len() * NOTIFICATION_BUCKET_SIZE_BYTES];
+        for (bucket, slot) in notif_buckets.iter().zip(table.chunks_mut(NOTIFICATION_BUCKET_SIZE_BYTES)) {
+            pack_notif_bucket(bucket, slot);
+        }
+        self.notification_tables[current_idx] = table;
         
         local_latency.finish();
     }
 
-    /// Write notification buckets at specific indices
-    pub fn write_notifs_with_indices(&mut self, notif_buckets: Vec<Bucket>, indices: Vec<usize>) {
+    /// Write a contiguous run of notification buckets, given as their concatenated bytes,
+    /// starting at bucket `start_index` of the current table.
+    pub fn write_notifs_chunk(&mut self, start_index: usize, raw: &[u8]) {
         let local_latency = LatencyMetric::new("server2_write_notifs_with_indices");
-        
-        let max_index = indices.last().unwrap();
 
         // Get the current table using modular arithmetic
         let current_idx = self.latest_notif_table_idx;
         let current_table_ntf = &mut self.notification_tables[current_idx];
-        
+
         // Make sure the table has enough capacity
-        let required_capacity = std::cmp::max(max_index + 1, self.num_clients * Q);
-        if current_table_ntf.len() < required_capacity {
-            current_table_ntf.resize(required_capacity, Bucket::default());
+        let start = start_index * NOTIFICATION_BUCKET_SIZE_BYTES;
+        let end_bucket = start_index + (raw.len() + NOTIFICATION_BUCKET_SIZE_BYTES - 1) / NOTIFICATION_BUCKET_SIZE_BYTES;
+        let required_len = std::cmp::max(end_bucket, self.num_clients * Q) * NOTIFICATION_BUCKET_SIZE_BYTES;
+        if current_table_ntf.len() < required_len {
+            current_table_ntf.resize(required_len, 0);
         }
-        
-        // Check if indices are contiguous - this is an optimization for the common case
-        let is_contiguous = indices.len() > 1 && 
-            indices.windows(2).all(|w| w[1] == w[0] + 1) &&
-            indices.first().map_or(false, |&first| first + indices.len() - 1 == *max_index);
-        
-        if is_contiguous && notif_buckets.len() == indices.len() {
-            // Contiguous indices case - use efficient bulk copy
-            let start_idx = indices[0];
-            for (i, bucket) in notif_buckets.into_iter().enumerate() {
-                let idx = start_idx + i;
-                if idx >= current_table_ntf.len() {
-                    continue;
-                }
-                current_table_ntf[idx] = bucket;
-            }
-        } else if notif_buckets.len() > 1000 {
-            // For large, non-contiguous datasets, prepare in parallel but write sequentially
-            // Zip bucket and index into pairs
-            let mut pairs: Vec<_> = notif_buckets.into_iter()
-                .zip(indices.into_iter())
-                .collect();
-            
-            // Sort by index for better cache locality
-            pairs.sort_unstable_by_key(|(_, idx)| *idx);
-            
-            // Write in sorted order
-            for (bucket, idx) in pairs {
-                if idx >= current_table_ntf.len() {
-                    continue;
-                }
-                current_table_ntf[idx] = bucket;
-            }
-        } else {
-            // For smaller sets, direct approach is more efficient
-            for (bucket, idx) in notif_buckets.into_iter().zip(indices.into_iter()) {
-                if idx >= current_table_ntf.len() {
-                    continue;
-                }
-                current_table_ntf[idx] = bucket;
-            }
-        }
-        
+
+        current_table_ntf[start..start + raw.len()].copy_from_slice(raw);
+
         local_latency.finish();
     }
 
@@ -334,6 +300,26 @@ impl Server2 {
             .collect();
             
         Ok(results)
+    }
+}
+
+/// Returns the bytes of notification bucket `idx` in `table`, if the table holds it.
+fn notif_bucket(table: &[u8], idx: usize) -> Option<&[u8]> {
+    table.get(idx * NOTIFICATION_BUCKET_SIZE_BYTES..(idx + 1) * NOTIFICATION_BUCKET_SIZE_BYTES)
+}
+
+/// Rebuilds a notification bucket (one block per notification) from its stored bytes.
+fn unpack_notif_bucket(bytes: &[u8]) -> Bucket {
+    Bucket(bytes.chunks(LAMBDA_BYTES).map(|block| Block::new(block.to_vec())).collect(), None)
+}
+
+/// Copies a notification bucket's blocks into its fixed-size slot of a table.
+fn pack_notif_bucket(bucket: &Bucket, slot: &mut [u8]) {
+    let mut at = 0;
+    for block in bucket.iter() {
+        let n = block.0.len().min(slot.len() - at);
+        slot[at..at + n].copy_from_slice(&block.0[..n]);
+        at += n;
     }
 }
 

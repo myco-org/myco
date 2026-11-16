@@ -47,6 +47,18 @@ impl From<myco::Bucket> for Bucket {
     }
 }
 
+impl myco::Bucket {
+    /// Converts a wire bucket into the form Server2 stores (see [`Bucket::contiguous`]).
+    pub fn into_stored(self) -> Bucket {
+        let signature = if self.signature.is_empty() {
+            None
+        } else {
+            Some(self.signature)
+        };
+        Bucket::contiguous(self.data, signature)
+    }
+}
+
 impl From<Key<TreeMycoKey>> for myco::Key {
     fn from(k: Key<TreeMycoKey>) -> Self {
         Self {
