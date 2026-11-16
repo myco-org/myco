@@ -73,6 +73,16 @@ just server2-tput
 just server2-tput 192.168.1.100:8080
 ```
 
+### Measuring at steady state
+Server2's tree only reaches its full size once every bucket has been written at least once, which
+takes many more than Δ epochs. To start Server2 with a fully populated tree instead, so that its
+memory use and read sizes are at steady state as soon as the Δ warm-up epochs have filled the
+notification tables, build it with the `prefill` feature:
+```bash
+cargo run --release --features prefill --bin rpc_server2_tput 0.0.0.0:3004   # throughput
+cargo run --release --features prefill --bin rpc_server2 0.0.0.0:3004        # latency
+```
+
 ### Start Server1 Throughput Test
 ```bash
 # Default Server2 address (https://127.0.0.1:3004)

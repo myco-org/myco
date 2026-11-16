@@ -1,5 +1,5 @@
 use myco::{
-    constants::{LAMBDA_BYTES, LATENCY_BENCH_COUNT, NUM_BUCKETS_PER_NOTIFICATION_CHUNK, NUM_CLIENTS, S1_S2_CONNECTION_COUNT, WARMUP_COUNT, Z_M}, dtypes::{Bucket, Path}, proto::myco::{
+    constants::{LATENCY_BENCH_COUNT, NUM_BUCKETS_PER_NOTIFICATION_CHUNK, NUM_CLIENTS, S1_S2_CONNECTION_COUNT, WARMUP_COUNT}, dtypes::Path, proto::myco::{
         read_notifs_response::Buckets, server2_service_server::{Server2Service, Server2ServiceServer}, ChunkProcessNotifIndicesResponse, ChunkProcessReadIndicesResponse, ChunkWriteRequest, ChunkWriteResponse, GetPrfKeysRequest, GetPrfKeysResponse, ReadNotifsRequest, ReadNotifsResponse, ReadRequest, ReadResponse, WriteRequest, WriteResponse
     }, server2::Server2, tree::SparseBinaryTree
 };
@@ -26,7 +26,7 @@ pub struct MyServer2Service {
 impl Default for MyServer2Service {
     fn default() -> Self {
         Self {
-            server2: Arc::new(RwLock::new(Server2::new(NUM_CLIENTS))),
+            server2: Arc::new(RwLock::new(if cfg!(feature = "prefill") { Server2::new_prefilled(NUM_CLIENTS) } else { Server2::new(NUM_CLIENTS) })),
             read_count: Arc::new(AtomicUsize::new(0)),
             warm_up_complete: Arc::new(AtomicBool::new(false)),
         }
@@ -80,7 +80,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let buckets = chunk.buckets.into_iter().map(|b| b.into()).collect::<Vec<_>>();
+            let buckets = chunk.buckets.into_iter().map(|b| b.into_stored()).collect::<Vec<_>>();
             let indices = chunk.pathset_indices.into_iter().map(|x| x as usize).collect::<Vec<_>>();
             
             self.server2.write().await.chunk_write(buckets, indices);
@@ -157,21 +157,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let block_size = LAMBDA_BYTES;
-            let blocks_per_bucket = Z_M;
-            let bucket_size = block_size * blocks_per_bucket;
-
-            let mut buckets = Vec::new();
-            for bucket_data in chunk.raw_notification_data.chunks(bucket_size) {
-                let mut blocks = Vec::with_capacity(blocks_per_bucket);
-                for block_data in bucket_data.chunks(block_size) {
-                    blocks.push(myco::dtypes::Block::new(block_data.to_vec()));
-                }
-                buckets.push(Bucket(blocks, None));
-            }
-
-            let indices = (chunk.start_index as usize..(chunk.start_index as usize + chunk.num_buckets as usize)).collect();
-            self.server2.write().await.write_notifs_with_indices(buckets, indices);
+            self.server2.write().await.write_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
         }
 
         Ok(Response::new(myco::proto::myco::NotifChunkResponse { success: true }))

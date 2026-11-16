@@ -302,6 +302,18 @@ impl Default for Bucket {
 }
 
 impl Bucket {
+    /// Creates a bucket that keeps all of its bytes in one contiguous block.
+    ///
+    /// Server2 never looks inside a bucket, and converting a bucket to its wire form
+    /// concatenates its blocks, so this is byte-for-byte the same bucket as one that is
+    /// split into per-block allocations, without the per-block heap overhead.
+    pub fn contiguous(data: Vec<u8>, signature: Option<Vec<u8>>) -> Self {
+        if data.is_empty() {
+            return Bucket(Vec::new(), signature);
+        }
+        Bucket(vec![Block::new(data)], signature)
+    }
+
     pub fn new_empty() -> Self {
         Self::default()
     }

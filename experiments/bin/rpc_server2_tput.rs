@@ -1,5 +1,5 @@
-use myco::constants::{LAMBDA_BYTES, MAX_READ_INDICES_PER_CHUNK, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_GRPC_MESSAGE, NUM_BUCKETS_PER_NOTIFICATION_CHUNK, NUM_CLIENTS, NUM_CLIENT_WRITES_PER_CHUNK, S1_S2_CONNECTION_COUNT, THROUGHPUT_ITERATIONS, Z_M};
-use myco::dtypes::{self, Bucket, Key};
+use myco::constants::{MAX_READ_INDICES_PER_CHUNK, NUM_BUCKETS_PER_BATCH_WRITE_CHUNK, NUM_BUCKETS_PER_GRPC_MESSAGE, NUM_BUCKETS_PER_NOTIFICATION_CHUNK, NUM_CLIENTS, NUM_CLIENT_WRITES_PER_CHUNK, S1_S2_CONNECTION_COUNT, THROUGHPUT_ITERATIONS};
+use myco::dtypes::{self, Key};
 use myco::dtypes::TreeMycoKey;
 use myco::logging;
 use myco::megaclient::MegaClient;
@@ -47,7 +47,7 @@ impl MyServer2Service {
         println!("Initializing Server2 Tput Service with {} warmup + {} measurement iterations",
                  WARMUP_COUNT, THROUGHPUT_ITERATIONS);
         
-        let server2 = Server2::new(NUM_CLIENTS);
+        let server2 = if cfg!(feature = "prefill") { Server2::new_prefilled(NUM_CLIENTS) } else { Server2::new(NUM_CLIENTS) };
         let server2 = Arc::new(RwLock::new(server2));
         
         let mega_client = MegaClient::new();
@@ -105,7 +105,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let buckets = chunk.buckets.into_iter().map(|b| b.into()).collect::<Vec<_>>();
+            let buckets = chunk.buckets.into_iter().map(|b| b.into_stored()).collect::<Vec<_>>();
             let indices = chunk.pathset_indices.into_iter().map(|x| x as usize).collect::<Vec<_>>();
             self.server2.write().await.chunk_write(buckets, indices);
         }
@@ -316,21 +316,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let block_size = LAMBDA_BYTES;
-            let blocks_per_bucket = Z_M;
-            let bucket_size = block_size * blocks_per_bucket;
-
-            let mut buckets = Vec::new();
-            for bucket_data in chunk.raw_notification_data.chunks(bucket_size) {
-                let mut blocks = Vec::with_capacity(blocks_per_bucket);
-                for block_data in bucket_data.chunks(block_size) {
-                    blocks.push(myco::dtypes::Block::new(block_data.to_vec()));
-                }
-                buckets.push(Bucket(blocks, None));
-            }
-
-            let indices = (chunk.start_index as usize..(chunk.start_index as usize + chunk.num_buckets as usize)).collect();
-            self.server2.write().await.write_notifs_with_indices(buckets, indices);
+            self.server2.write().await.write_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
         }
 
         Ok(Response::new(myco::proto::myco::NotifChunkResponse { success: true }))
@@ -645,9 +631,7 @@ impl Server2Service for MyServer2Service {
                                         raw_bucket_data.clear();
                                         
                                         for &bucket in bucket_chunk {
-                                            for block in &bucket.0 {
-                                                raw_bucket_data.extend_from_slice(&block.0);
-                                            }
+                                            raw_bucket_data.extend_from_slice(bucket);
                                         }
                                                                                 
                                         let response = ChunkProcessNotifIndicesResponse {
@@ -695,9 +679,7 @@ impl Server2Service for MyServer2Service {
                                         raw_bucket_data.clear();
                                         
                                         for &bucket in bucket_chunk {
-                                            for block in &bucket.0 {
-                                                raw_bucket_data.extend_from_slice(&block.0);
-                                            }
+                                            raw_bucket_data.extend_from_slice(bucket);
                                         }
                                         
                                         let response = ChunkProcessNotifIndicesResponse {
