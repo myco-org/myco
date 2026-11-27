@@ -157,6 +157,31 @@ impl<T: TreeValue> BinaryTree<T> {
         nodes
     }
 
+    /// Gets the nodes along a given path from depth `first_depth` down (the root is at depth 0)
+    pub fn get_nodes_along_path_from(&self, path: &Path, first_depth: usize) -> Vec<T> {
+        let mut nodes = vec![];
+        let mut idx = 1;
+
+        if first_depth == 0 {
+            if let Some(value) = &self.value[1] {
+                nodes.push(value.clone());
+            }
+        }
+
+        for (step, &direction) in path.into_iter().enumerate() {
+            idx = 2 * idx + u8::from(direction) as usize;
+
+            if idx >= self.value.len() || self.value[idx].is_none() {
+                return nodes;
+            }
+            if step + 1 >= first_depth {
+                nodes.push(self.value[idx].clone().unwrap());
+            }
+        }
+
+        nodes
+    }
+
     /// Finds the lowest common ancestor for a given path
     pub fn lca(&mut self, path: &Path) -> Option<(&mut T, Path)> {
         let mut current_path = Path::new(Vec::new());

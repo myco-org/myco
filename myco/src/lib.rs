@@ -18,5 +18,6 @@ pub mod client;
 pub mod logging;
 pub mod proto;
 pub mod crypto;
+pub mod multisign;
 pub mod error;
 pub mod megaclient;

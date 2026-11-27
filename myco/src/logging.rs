@@ -148,6 +148,12 @@ fn log_latency(message: &str) {
     }
 }
 
+/// Records under `operation` a duration that was measured elsewhere.
+pub fn log_duration_ms(operation: &str, milliseconds: f64) {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64;
+    LATENCY_LOG.lock().unwrap().push((operation.to_string(), milliseconds, now, now));
+}
+
 /// Internal helper to parse and log a bytes metric
 fn log_bytes(message: &str) {
     let parts: Vec<&str> = message.trim().split(',').collect();

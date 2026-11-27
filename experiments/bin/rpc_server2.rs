@@ -80,10 +80,9 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let buckets = chunk.buckets.into_iter().map(|b| b.into_stored()).collect::<Vec<_>>();
             let indices = chunk.pathset_indices.into_iter().map(|x| x as usize).collect::<Vec<_>>();
-            
-            self.server2.write().await.chunk_write(buckets, indices);
+            // Kept apart from the tree, under the shared lock, until the epoch is finalized.
+            self.server2.read().await.stage_wire_chunk(chunk.buckets, indices);
         }
 
         Ok(Response::new(ChunkWriteResponse { success: true }))
@@ -101,6 +100,7 @@ impl Server2Service for MyServer2Service {
 
         Ok(Response::new(GetPrfKeysResponse {
             keys: keys.into_iter().map(|k| k.into()).collect(),
+            packed_keys: Vec::new(),
         }))
     }
 
@@ -157,7 +157,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            self.server2.write().await.write_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
+            self.server2.read().await.stage_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
         }
 
         Ok(Response::new(myco::proto::myco::NotifChunkResponse { success: true }))
@@ -169,7 +169,14 @@ impl Server2Service for MyServer2Service {
     ) -> Result<Response<myco::proto::myco::AddPrfKeyResponse>, Status> {
         let req = request.into_inner();
         let prf_key = req.prf_key.ok_or_else(|| Status::invalid_argument("Missing prf_key"))?;
-        self.server2.write().await.finalize_epoch(&prf_key.into());
+        let mut server = self.server2.write().await;
+        if req.expected_buckets > 0 {
+            server
+                .finalize_epoch_checked(&prf_key.into(), req.expected_buckets as usize)
+                .map_err(|e| Status::failed_precondition(format!("{:?}", e)))?;
+        } else {
+            server.finalize_epoch(&prf_key.into());
+        }
         Ok(Response::new(myco::proto::myco::AddPrfKeyResponse { success: true }))
     }
 
@@ -348,6 +355,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .tls_config(ServerTlsConfig::new().identity(identity))?
+        .initial_stream_window_size(Some(myco::network::server2::HTTP2_STREAM_WINDOW))
+        .initial_connection_window_size(Some(myco::network::server2::HTTP2_CONNECTION_WINDOW))
+        .max_frame_size(Some(myco::network::server2::HTTP2_MAX_FRAME_SIZE))
         .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
         .tcp_nodelay(true)
         .concurrency_limit_per_connection(S1_S2_CONNECTION_COUNT * 4)

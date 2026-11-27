@@ -1,4 +1,4 @@
-use crate::constants::{D_BYTES, INNER_BLOCK_SIZE, LAMBDA_BYTES, NOTIF_LOC_BYTES, NUM_CLIENTS, Q, NUM_CLIENT_WRITES_PER_CHUNK};
+use crate::constants::{INNER_BLOCK_SIZE, LAMBDA_BYTES, NUM_CLIENTS, Q, NUM_CLIENT_WRITES_PER_CHUNK};
 use crate::dtypes::{Key, TreeMycoKey};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -52,8 +52,8 @@ impl MegaClient {
             // Generate fake write data
             let ct = Self::generate_fake_data(&mut self.rng, INNER_BLOCK_SIZE);
             let ct_ntf = Self::generate_fake_data(&mut self.rng, LAMBDA_BYTES);
-            let f = Self::generate_fake_data(&mut self.rng, D_BYTES);
-            let f_ntf = Self::generate_fake_data(&mut self.rng, NOTIF_LOC_BYTES);
+            let f = Self::generate_fake_data(&mut self.rng, LAMBDA_BYTES);
+            let f_ntf = Self::generate_fake_data(&mut self.rng, LAMBDA_BYTES);
             let k_renc_t = Key::random(&mut self.rng);
             let c_s = i.to_string().into_bytes();
             

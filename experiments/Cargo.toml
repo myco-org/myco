@@ -63,8 +63,15 @@ tokio-stream = "0.1"
 sys-info = "0.9"
 num_cpus = "1.15"
 ctrlc = "3.2"
+async-trait = "0.1"
 tikv-jemallocator = "0.6.0"
+# Without jemalloc's cache-oblivious padding, an allocation above 14 KiB (a tree bucket once Z > 50) takes its
+# size class only, instead of an extra 4 KiB page: 16.6 KB instead of 20.7 KB per bucket at Z = 53.
+tikv-jemalloc-sys = { version = "0.6.0", features = ["disable_cache_oblivious"] }
 
 [features]
 bandwidth = []
 prefill = []
+short-reads = ["myco/short-reads"]
+# Throughput benchmark: Server1 prepares and sends epoch t+1 while the clients read epoch t.
+overlap = []

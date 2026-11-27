@@ -105,9 +105,10 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            let buckets = chunk.buckets.into_iter().map(|b| b.into_stored()).collect::<Vec<_>>();
             let indices = chunk.pathset_indices.into_iter().map(|x| x as usize).collect::<Vec<_>>();
-            self.server2.write().await.chunk_write(buckets, indices);
+            // Kept apart from the tree, under the shared lock, until the epoch is finalized:
+            // clients can keep reading the previous epoch, and no writer waits for another.
+            self.server2.read().await.stage_wire_chunk(chunk.buckets, indices);
         }
 
         Ok(Response::new(ChunkWriteResponse { success: true }))
@@ -119,33 +120,30 @@ impl Server2Service for MyServer2Service {
     ) -> Result<Response<GetPrfKeysResponse>, Status> {
         let req = request.into_inner();
         let num_clients = if req.num_clients > 0 { req.num_clients as usize } else { 1 };
-        
-        let mut all_keys = Vec::new();
-        
+
         let base_keys = self.server2
             .read()
             .await
             .get_prf_keys()
             .map_err(|e| Status::internal(e.to_string()))?;
-        
-        for _ in 0..num_clients {
-            all_keys.extend(base_keys.clone());
+
+        if num_clients == 1 {
+            // One client's request, as a client sends it.
+            return Ok(Response::new(GetPrfKeysResponse {
+                keys: base_keys.into_iter().map(|k| k.into()).collect(),
+                packed_keys: Vec::new(),
+            }));
         }
-        
-        let proto_keys: Vec<myco::proto::myco::Key> = all_keys.into_iter()
-            .map(|k| k.into())
-            .collect();
-        
-        let total_bytes = proto_keys.iter()
-            .map(|k| k.data.len())
-            .sum::<usize>();
-        
-        debug!("Serving {} PRF keys ({} bytes) for {} clients", 
-                 proto_keys.len(), total_bytes, num_clients);
-        
-        Ok(Response::new(GetPrfKeysResponse {
-            keys: proto_keys,
-        }))
+
+        // The benchmark's batched clients: every client's keys, one after the other, as bytes.
+        let one_client: Vec<u8> = base_keys.iter().flat_map(|k| k.bytes.iter().copied()).collect();
+        let mut packed_keys = Vec::with_capacity(one_client.len() * num_clients);
+        for _ in 0..num_clients {
+            packed_keys.extend_from_slice(&one_client);
+        }
+        debug!("Serving the PRF keys of {} clients ({} bytes)", num_clients, packed_keys.len());
+
+        Ok(Response::new(GetPrfKeysResponse { keys: Vec::new(), packed_keys }))
     }
 
     async fn get_mega_client_writes(
@@ -316,7 +314,7 @@ impl Server2Service for MyServer2Service {
         let mut stream = request.into_inner();
         
         while let Some(chunk) = stream.message().await? {
-            self.server2.write().await.write_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
+            self.server2.read().await.stage_notifs_chunk(chunk.start_index as usize, &chunk.raw_notification_data);
         }
 
         Ok(Response::new(myco::proto::myco::NotifChunkResponse { success: true }))
@@ -330,7 +328,13 @@ impl Server2Service for MyServer2Service {
         let prf_key = req.prf_key.ok_or_else(|| Status::invalid_argument("Missing prf_key"))?;
         
         let mut server = self.server2.write().await;
-        server.finalize_epoch(&prf_key.into());
+        if req.expected_buckets > 0 {
+            server
+                .finalize_epoch_checked(&prf_key.into(), req.expected_buckets as usize)
+                .map_err(|e| Status::failed_precondition(format!("{:?}", e)))?;
+        } else {
+            server.finalize_epoch(&prf_key.into());
+        }
 
         Ok(Response::new(myco::proto::myco::AddPrfKeyResponse { success: true }))
     }
@@ -745,11 +749,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let identity = Identity::from_pem(cert, key);
     
     println!("Starting Server2 with support for multiple connections and increased message size limits");
-    Server::builder()
+    let mut builder = Server::builder()
         .tls_config(ServerTlsConfig::new().identity(identity))?
         .http2_keepalive_interval(Some(std::time::Duration::from_secs(30)))
-        .http2_keepalive_timeout(Some(std::time::Duration::from_secs(10)))
-        .http2_adaptive_window(Some(true))
+        .http2_keepalive_timeout(Some(std::time::Duration::from_secs(10)));
+    builder = builder
+        .initial_stream_window_size(Some(myco::network::server2::HTTP2_STREAM_WINDOW))
+        .initial_connection_window_size(Some(myco::network::server2::HTTP2_CONNECTION_WINDOW))
+        .max_frame_size(Some(myco::network::server2::HTTP2_MAX_FRAME_SIZE));
+    builder
         .tcp_keepalive(Some(std::time::Duration::from_secs(60)))
         .tcp_nodelay(true)
         .concurrency_limit_per_connection(S1_S2_CONNECTION_COUNT * 4)

@@ -4,11 +4,22 @@ use crate::dtypes::{Path, TreeMycoKey};
 use crate::tree::SparseBinaryTree;
 use crate::dtypes::{Block, Bucket, Key};
 
+/// The bytes of a bucket's blocks, one after the other.
+fn concatenated_blocks(b: &Bucket) -> Vec<u8> {
+    let mut data = Vec::with_capacity(b.iter().map(|block| block.0.len()).sum());
+    for block in b.iter() {
+        data.extend_from_slice(&block.0);
+    }
+    data
+}
+
 impl From<Bucket> for myco::Bucket {
-    fn from(b: Bucket) -> Self {
+    fn from(mut b: Bucket) -> Self {
+        // A bucket stored as one contiguous block already is its wire form.
+        let data = if b.0.len() == 1 { std::mem::take(&mut b.0[0].0) } else { concatenated_blocks(&b) };
         Self {
-            data: b.iter().flat_map(|block| block.0.clone()).collect(),
-            signature: b.1.clone().unwrap_or_default(),
+            data,
+            signature: b.1.unwrap_or_default(),
         }
     }
 }
@@ -16,7 +27,7 @@ impl From<Bucket> for myco::Bucket {
 impl From<&Bucket> for myco::Bucket {
     fn from(b: &Bucket) -> Self {
         Self {
-            data: b.iter().flat_map(|block| block.0.clone()).collect(),
+            data: concatenated_blocks(b),
             signature: b.1.clone().unwrap_or_default(),
         }
     }

@@ -108,6 +108,10 @@ pub struct GetPrfKeysRequest {
 pub struct GetPrfKeysResponse {
     #[prost(message, repeated, tag = "1")]
     pub keys: ::prost::alloc::vec::Vec<Key>,
+    /// When the request asks for the keys of more than one client (the throughput benchmark's
+    /// batched clients), the keys of all of them, one after the other, instead of `keys`.
+    #[prost(bytes = "vec", tag = "2")]
+    pub packed_keys: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -162,6 +166,10 @@ pub struct NotifChunkResponse {
 pub struct AddPrfKeyRequest {
     #[prost(message, optional, tag = "1")]
     pub prf_key: ::core::option::Option<Key>,
+    /// Number of tree buckets sent for the epoch; 0 = unchecked. Server2 applies the epoch only if
+    /// it received exactly this many buckets and the whole notification table.
+    #[prost(uint64, tag = "2")]
+    pub expected_buckets: u64,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

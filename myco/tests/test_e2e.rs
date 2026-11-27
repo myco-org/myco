@@ -1,9 +1,9 @@
 mod myco_tests {
     use std::{collections::HashMap, sync::Arc};
     use tokio::sync::RwLock;
-    use myco::{client::Keys, constants::{DELTA, MESSAGE_SIZE}, crypto::{decrypt, encrypt, kdf, prf, prf_fixed_length}, dtypes::{Bucket, Key}, error::MycoError, utils::trim_zeros};
+    use myco::{client::Keys, constants::{DELTA, MESSAGE_SIZE}, crypto::{decrypt, decrypt_with_aad, encrypt_with_aad, kdf, prf, prf_fixed_length}, dtypes::{Bucket, Key}, utils::trim_zeros};
     use myco::{
-        client::Client, constants::LAMBDA_BYTES, dtypes::Path, network::{server1::LocalServer1Access, server2::LocalServer2Access}, server1::Server1, server2::Server2, tree::{self},
+        client::Client, constants::LAMBDA_BYTES, dtypes::Path, network::{server1::LocalServer1Access, server2::LocalServer2Access}, server1::Server1, server2::Server2,
     };
     use rand::{RngCore, SeedableRng};
     use rand_chacha::ChaCha20Rng;
@@ -272,19 +272,19 @@ mod myco_tests {
         let mut decrypted_messages = Vec::new();
         let s2_guard = s2.read().await;
         let s1_guard = s1.read().await;
-        for (bucket_opt, metadata_bucket_opt, _path) in s2_guard.tree.zip(&s1_guard.metadata) {
+        // Server1 keeps, for every bucket, the messages it holds with their keys. Each of those
+        // blocks must be in the same bucket of Server2's tree and decrypt to a written message.
+        for (index, bucket_opt) in s2_guard.tree.value.iter().enumerate().skip(1) {
             let bucket = bucket_opt.clone().unwrap();
-            for b in 0..bucket.len() {
-                let metadata_bucket = metadata_bucket_opt
-                    .as_ref()
-                    .unwrap();
-                let metadata_block = metadata_bucket
-                    .get(b)
-                    .unwrap();
-                let k_renc_t = &metadata_block.key;
-                let c_msg = bucket.get(b).unwrap();
-                if let Ok(ct) = decrypt(&k_renc_t.bytes, &c_msg.0) {
-                    if let Ok(decrypted) = decrypt(&k_enc, &ct) {
+            for held in s1_guard.held_in_bucket(index) {
+                assert!(
+                    bucket.iter().any(|block| block.0 == held.block),
+                    "Server2's bucket {} does not contain a block that Server1 holds for it",
+                    index
+                );
+                if let Ok(ct) = decrypt(&held.key.bytes, &held.block) {
+                    // The inner layer is bound to the epoch the message was written in.
+                    if let Some(decrypted) = (0..num_epochs).find_map(|t| decrypt_with_aad(&k_enc, &ct, &(t as u64).to_be_bytes()).ok()) {
                         decrypted_messages.push(trim_zeros(&decrypted));
                     }
                 }
@@ -334,7 +334,7 @@ mod myco_tests {
         let f = prf(keys.k_rk.bytes.as_slice(), &epoch.to_be_bytes()).expect("PRF failed");
         let f_ntf = prf(keys.k_rk_ntf.bytes.as_slice(), &epoch.to_be_bytes()).expect("PRF failed");
         let k_renc_t = kdf(keys.k_renc.bytes.as_slice(), &epoch.to_string()).expect("KDF failed");
-        let ct = encrypt(keys.k_enc.bytes.as_slice(), &message, MESSAGE_SIZE).expect("Encryption failed");
+        let ct = encrypt_with_aad(keys.k_enc.bytes.as_slice(), &message, MESSAGE_SIZE, &(epoch as u64).to_be_bytes()).expect("Encryption failed");
         let ct_ntf = prf_fixed_length(keys.k_ntf.bytes.as_slice(), epoch.to_be_bytes().as_slice(), LAMBDA_BYTES).expect("PRF failed");
         client.epoch += 1;
         client
@@ -343,25 +343,22 @@ mod myco_tests {
             .await
             .expect("Initial write failed");
         let k_s1_t = s1.read().await.k_s1_t.bytes.clone();
-        let l = prf(
-            k_s1_t.as_slice(),
-            &[&f[..], &c_s[..]].concat(),
-        ).expect("PRF failed");
+        let l = myco::utils::tree_location(k_s1_t.as_slice(), &f, &c_s).expect("PRF failed");
         let intended_path = Path::from(l);
 
         let _ = s1.write().await.batch_write();
 
-        let mut pathset: tree::SparseBinaryTree<Bucket> = s1.read().await.pt.clone();
-        let (lca_bucket, lca_path) = pathset.lca(&intended_path).expect("LCA not found");
+        // The message must be in the deepest bucket of the epoch's path set on its intended path.
+        let lca_index = s1.read().await.pathset().deepest_on(&intended_path);
 
         // Verify message at LCA using the free async function
         assert!(
-            verify_message_at_lca(s1.clone(), client.receiving_keys.clone(), lca_bucket.clone(), lca_path.clone(), message.clone()).await,
+            verify_message_at_lca(s1.clone(), s2.clone(), client.receiving_keys.clone(), lca_index, message.clone()).await,
             "Message not found at LCA in epoch {}",
             epoch
         );
 
-        let mut latest_index = s2.read().await.tree.get_index(&lca_path);
+        let mut latest_index = lca_index;
         let mut times_relocated = 0;
         let mut lca_path_lengths = Vec::new();
 
@@ -373,19 +370,29 @@ mod myco_tests {
                 s1_guard.batch_write().expect("Batch write failed");
             }
 
-            let mut new_pathset: tree::SparseBinaryTree<Bucket> = s1.read().await.pt.clone();
-            if new_pathset.packed_indices.contains(&latest_index) {
-                let (lca_bucket, lca_path) = new_pathset.lca(&intended_path).expect("LCA not found");
-                let lca_path_length = lca_path.len();
+            let (in_pathset, lca_index) = {
+                let s1_guard = s1.read().await;
+                (s1_guard.pathset().contains(latest_index), s1_guard.pathset().deepest_on(&intended_path))
+            };
+            if in_pathset {
+                // The path from the root to a bucket has as many steps as the bucket's depth.
+                let lca_path_length = lca_index.ilog2() as usize;
                 lca_path_lengths.push(lca_path_length);
                 // Verify message at LCA using the free async function
                 assert!(
-                    verify_message_at_lca(s1.clone(), client.receiving_keys.clone(), lca_bucket.clone(), lca_path.clone(), message.clone()).await,
+                    verify_message_at_lca(s1.clone(), s2.clone(), client.receiving_keys.clone(), lca_index, message.clone()).await,
                     "Message not found at LCA in epoch {}",
                     epoch
                 );
-                latest_index = new_pathset.get_index(&lca_path);
+                latest_index = lca_index;
                 times_relocated += 1;
+            } else {
+                // A bucket outside the path set is not rewritten: the message stays where it is.
+                assert!(
+                    verify_message_at_lca(s1.clone(), s2.clone(), client.receiving_keys.clone(), latest_index, message.clone()).await,
+                    "Message not found in its bucket in epoch {}",
+                    epoch
+                );
             }
         }
 
@@ -461,37 +468,26 @@ mod myco_tests {
         println!("Successfully completed write-read operations across {} epochs", DELTA+10);
     }
 
+    /// Whether the bucket with tree index `lca_index` holds `message`: Server1 must hold a key
+    /// for it there, and the block it holds must be one of the blocks in Server2's bucket.
     async fn verify_message_at_lca(
         s1: Arc<RwLock<Server1>>,
+        s2: Arc<RwLock<Server2>>,
         receiving_keys: HashMap<String, Keys>,
-        lca_bucket: Bucket,
-        lca_path: Path,
+        lca_index: usize,
         message: Vec<u8>,
     ) -> bool {
-        let _ = receiving_keys;
-        let metadata_bucket = {
-            let guard = s1.read().await;
-            guard
-                .metadata
-                .get(&lca_path)
-                .expect("Metadata not found at LCA")
-                .clone()
-        };
+        let held_messages = s1.read().await.held_in_bucket(lca_index);
+        let lca_bucket: Bucket = s2.read().await.tree.value[lca_index].clone().expect("Bucket not found at LCA");
         let mut found = false;
-        for b in 0..lca_bucket.len() {
-            let metadata_block = metadata_bucket
-                .get(b)
-                .ok_or(MycoError::CryptoError(format!("Failed to get metadata at index {}", b)))
-                .expect("Failed to get metadata");
-            let k_renc_t = &metadata_block.key;
-            let c_msg = lca_bucket
-                .get(b)
-                .ok_or(MycoError::CryptoError(format!("Failed to get bucket item at index {}", b)))
-                .expect("Failed to get bucket item")
-                .clone();
-            if let Ok(ct) = decrypt(&k_renc_t.bytes, &c_msg.0) {
+        for held in held_messages {
+            if !lca_bucket.iter().any(|block| block.0 == held.block) {
+                continue;
+            }
+            if let Ok(ct) = decrypt(&held.key.bytes, &held.block) {
                 if let Some(keys) = receiving_keys.get("Client") {
-                    if let Ok(decrypted) = decrypt(keys.k_enc.bytes.as_slice(), &ct) {
+                    // The message was written in epoch 0.
+                    if let Ok(decrypted) = decrypt_with_aad(keys.k_enc.bytes.as_slice(), &ct, &0u64.to_be_bytes()) {
                         if trim_zeros(&decrypted) == message.as_slice() {
                             found = true;
                         }
