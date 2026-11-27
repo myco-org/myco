@@ -4,13 +4,17 @@
 pub const NU: usize = 1;
 
 /// Size of each bucket in the binary tree.
-/// Set to 50 based on empirical analysis showing this prevents overflow
-/// while allowing efficient message percolation.
-pub const Z: usize = 50;
+/// Set to 53 from simulation at 2^26 messages (2,684,354 clients): the chance that some bucket
+/// exceeds Z in an epoch is about NUM_CLIENTS / 2^(Z+1), about 2^-32.6 here.
+pub const Z: usize = 53;
 
 
-/// Size of each bucket for Matrix-Myco.
-pub const Z_M: usize = 25;
+/// Size of each bucket for Matrix-Myco (notification buckets). Each write adds one notification,
+/// so an epoch puts NUM_CLIENTS notifications into Q * NUM_CLIENTS buckets. The capacity analysis
+/// (and matrix_simulation.rs) conservatively assumes Q * NUM_CLIENTS notifications, under which
+/// the chance that some bucket exceeds Z_M in an epoch is about Q * NUM_CLIENTS * e^-1 / (Z_M + 1)!,
+/// about 2^-39.5 at 2,684,354 clients; with the actual load it is far smaller.
+pub const Z_M: usize = 20;
 
 /// Size of each bucket in bytes, calculated as bucket capacity * block size + size of digital signature.
 pub const BUCKET_SIZE_BYTES: usize = Z * BLOCK_SIZE + 32;
@@ -109,8 +113,15 @@ pub const MAX_CLIENTS_PER_PRF_KEY_CHUNK: usize =
 /// Number of bits in the PRF
 pub const D_BYTES: usize = (D + 7) / 8;
 
-/// Number of bytes in the notification location
-pub const NOTIF_LOC_BYTES: usize = ((Q * NUM_CLIENTS).ilog2() as usize + 7) / 8;
+/// Number of bytes in the notification location. Eight bytes, reduced mod Q * N by
+/// `utils::l_to_u64`, so that every notification bucket is reachable and the bias of the
+/// reduction is below 2^-35 at every supported size.
+pub const NOTIF_LOC_BYTES: usize = 8;
+
+/// With the `short-reads` feature, readers skip the top levels of the tree for as long as each
+/// bucket of the first level they do read is expected to lie on at least this many of the
+/// paths Server1 samples per epoch (see `utils::read_skipped_levels`).
+pub const MIN_PATHS_PER_BUCKET: usize = 64;
 
 /// Number of vCPUs on Server1
 pub const SERVER1_VCPU_COUNT: usize = 64;
@@ -132,7 +143,8 @@ pub const MAX_NOTIFICATION_INDICES_PER_REQUEST: usize =
 // Calculate log2 of NUM_CLIENTS using integer operations
 pub const LOG_2_NUM_CLIENTS: usize = (NUM_CLIENTS as usize).ilog2() as usize;
 
-pub const WRITE_DATA_CHUNK_SIZE: usize = INNER_BLOCK_SIZE + LAMBDA_BYTES + D_BYTES + NOTIF_LOC_BYTES + LAMBDA_BYTES + LOG_2_NUM_CLIENTS;
+// ct, ct_ntf, f, f_ntf (LAMBDA_BYTES each: the client's values are full-length PRF outputs), k_renc_t, c_s
+pub const WRITE_DATA_CHUNK_SIZE: usize = INNER_BLOCK_SIZE + 4 * LAMBDA_BYTES + LOG_2_NUM_CLIENTS;
 
 pub const NUM_CLIENT_WRITES_PER_CHUNK: usize = MAX_REQUEST_SIZE / WRITE_DATA_CHUNK_SIZE;
 

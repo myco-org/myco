@@ -41,9 +41,13 @@ sys-info = "0.9"
 num_cpus = "1.15"
 async-trait = "0.1"
 ed25519-dalek = "1.0"
+curve25519-dalek = "3"
+libc = "0.2"
 
 [features]
 bandwidth = []
+# Readers skip the top levels of the tree, which hold no messages (see utils::read_skipped_levels).
+short-reads = []
 
 [build-dependencies]
 tonic-build = "0.10"

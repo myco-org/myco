@@ -110,6 +110,9 @@ message GetPrfKeysRequest {
 
 message GetPrfKeysResponse {
   repeated Key keys = 1;
+  // When the request asks for the keys of more than one client (the throughput benchmark's
+  // batched clients), the keys of all of them, one after the other, instead of `keys`.
+  bytes packed_keys = 2;
 }
 
 message ReadNotifsRequest {
@@ -139,6 +142,9 @@ message NotifChunkResponse {
 
 message AddPrfKeyRequest {
   Key prf_key = 1;
+  // Number of tree buckets sent for the epoch; 0 = unchecked. Server2 applies the epoch only if
+  // it received exactly this many buckets and the whole notification table.
+  uint64 expected_buckets = 2;
 }
 
 message AddPrfKeyResponse {

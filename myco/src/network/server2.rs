@@ -13,6 +13,7 @@ use crate::proto::myco::{
 };
 use crate::tree::SparseBinaryTree;
 use crate::utils::Index;
+use crate::server1::EpochWrite;
 use crate::server2::Server2;
 use crate::error::MycoError;
 use crate::network::common::Result;
@@ -27,7 +28,7 @@ use tonic::{transport::Channel, Request};
 use std::fs;
 use tonic::transport::{Certificate, ClientTlsConfig};
 use async_trait::async_trait;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(feature = "bandwidth")]
 use crate::logging::BytesMetric;
 #[cfg(feature = "bandwidth")]
@@ -60,6 +61,23 @@ pub trait Server2Access: Send + Sync {
         notif_table: &Vec<crate::dtypes::Bucket>,
         prf_key: &crate::dtypes::Key<TreeMycoKey>,
     ) -> Result<()>;
+    /// Write one epoch to Server2, building its chunks as they are sent
+    async fn write_epoch(
+        &self,
+        epoch_write: Arc<EpochWrite>,
+        prf_key: &crate::dtypes::Key<TreeMycoKey>,
+    ) -> Result<()>;
+    /// Send one epoch's buckets and notification table to Server2 without ending the epoch:
+    /// Server2 keeps serving the previous epoch until [`Server2Access::finalize_epoch`].
+    async fn stream_epoch(&self, _epoch_write: Arc<EpochWrite>) -> Result<()> {
+        Err(MycoError::NetworkError("stream_epoch is not supported by this kind of access".to_string()))
+    }
+    /// End the epoch sent with [`Server2Access::stream_epoch`] and publish its PRF key. Server2
+    /// applies the epoch only if it received exactly `expected_buckets` tree buckets and the whole
+    /// notification table.
+    async fn finalize_epoch(&self, _prf_key: &crate::dtypes::Key<TreeMycoKey>, _expected_buckets: usize) -> Result<()> {
+        Err(MycoError::NetworkError("finalize_epoch is not supported by this kind of access".to_string()))
+    }
     /// Get PRF keys from Server2
     async fn get_prf_keys(&self) -> Result<Vec<crate::dtypes::Key<TreeMycoKey>>>;
     /// Read notifications from Server2
@@ -117,6 +135,35 @@ impl Server2Access for LocalServer2Access {
         Ok(())
     }
 
+    async fn write_epoch(
+        &self,
+        epoch_write: Arc<EpochWrite>,
+        prf_key: &crate::dtypes::Key<TreeMycoKey>,
+    ) -> Result<()> {
+        let mut server = self.server.write().await;
+        // Build a few chunks at a time in parallel, then store them.
+        let batch = rayon::current_num_threads().max(1);
+        let notif_chunks: Vec<usize> = (0..epoch_write.notif_chunks()).collect();
+        for chunks in notif_chunks.chunks(batch) {
+            let requests: Vec<NotifChunkRequest> = chunks.par_iter().map(|&chunk| epoch_write.notif_chunk(chunk)).collect();
+            for request in requests {
+                server.write_notifs_chunk(request.start_index as usize, &request.raw_notification_data);
+            }
+        }
+        let bucket_chunks: Vec<usize> = (0..epoch_write.bucket_chunks()).collect();
+        for chunks in bucket_chunks.chunks(batch) {
+            let requests: Vec<ChunkWriteRequest> = chunks.par_iter().map(|&chunk| epoch_write.bucket_chunk(chunk)).collect();
+            for request in requests {
+                // Local clients read buckets straight from the tree, so store them split into blocks.
+                let buckets = request.buckets.into_iter().map(Bucket::from).collect();
+                let indices = request.pathset_indices.into_iter().map(|index| index as usize).collect();
+                server.chunk_write(buckets, indices);
+            }
+        }
+        server.finalize_epoch(prf_key);
+        Ok(())
+    }
+
     async fn get_prf_keys(&self) -> Result<Vec<crate::dtypes::Key<TreeMycoKey>>> {
         let server = self.server.read().await;
         server.get_prf_keys()
@@ -171,6 +218,173 @@ impl Server2Access for LocalServer2Access {
 }
 
 
+/// Number of built chunks that may wait to be sent, per connection. Producers pause when the
+/// queue is full, so chunks are built only as fast as they can be sent.
+const CHUNKS_QUEUED_PER_CONNECTION: usize = 2;
+
+/// HTTP/2 flow-control windows for connections that carry bulk data. The library defaults
+/// (64 KB growing adaptively on the server, 2 MB per stream on the client) make a 4 MB message
+/// wait for many window updates.
+pub const HTTP2_STREAM_WINDOW: u32 = 32 * 1024 * 1024;
+/// See [`HTTP2_STREAM_WINDOW`].
+pub const HTTP2_CONNECTION_WINDOW: u32 = 128 * 1024 * 1024;
+/// Largest HTTP/2 frame Server2 accepts. The default of 16 KB splits a 4 MB chunk into 256 frames.
+pub const HTTP2_MAX_FRAME_SIZE: u32 = 1024 * 1024;
+
+/// Lowers the calling thread's scheduling priority a little. The producers that build chunks
+/// can keep every core busy; the threads that encrypt and send what they built must not wait
+/// behind them for a core.
+fn yield_to_network_threads() {
+    #[cfg(target_os = "linux")]
+    // SAFETY: a plain system call. On Linux, "process 0" here means the calling thread only.
+    unsafe {
+        libc::setpriority(libc::PRIO_PROCESS, 0, 5);
+    }
+}
+
+/// Returns a stream of requests for one connection, fed from a queue that all connections
+/// share: each connection gets the next request as soon as it has taken its previous one, so
+/// a connection that is momentarily slow does not hold back the others.
+///
+/// A task of its own moves requests from the shared queue to the connection. The connection's
+/// stream must not take them from the shared queue itself: the transport polls a request
+/// stream only while the connection can send, so a stalled connection that had been handed the
+/// queue's lock would keep every other connection waiting.
+fn shared_requests<T: Send + 'static>(
+    receiver: Arc<tokio::sync::Mutex<tokio::sync::mpsc::Receiver<T>>>,
+) -> tokio_stream::wrappers::ReceiverStream<T> {
+    let (to_connection, for_connection) = tokio::sync::mpsc::channel::<T>(1);
+    tokio::spawn(async move {
+        // Wait until the connection has taken its previous request, then fetch the next one.
+        while let Ok(permit) = to_connection.reserve().await {
+            let request = receiver.lock().await.recv().await;
+            match request {
+                Some(request) => permit.send(request),
+                None => break,
+            }
+        }
+    });
+    tokio_stream::wrappers::ReceiverStream::new(for_connection)
+}
+
+/// Sends one epoch's buckets and notification table to Server2 over `clients`.
+///
+/// Chunks are built on producer threads while earlier chunks are in flight, so the per-bucket
+/// cryptography overlaps with the transfer. Each connection carries one stream of bucket chunks
+/// and one stream of notification chunks, in the same wire format as [`Server2Access::write`].
+async fn stream_epoch(
+    clients: &[Server2ServiceClient<Channel>],
+    epoch_write: Arc<EpochWrite>,
+    bucket_metric: &'static str,
+    notif_metric: &'static str,
+) -> Result<()> {
+    let connections = clients.len();
+    if connections == 0 {
+        return Err(MycoError::NetworkError("No available connections".to_string()));
+    }
+
+    let (bucket_sender, bucket_receiver) = tokio::sync::mpsc::channel::<ChunkWriteRequest>(CHUNKS_QUEUED_PER_CONNECTION * connections);
+    let (notif_sender, notif_receiver) = tokio::sync::mpsc::channel::<NotifChunkRequest>(8 * CHUNKS_QUEUED_PER_CONNECTION * connections);
+    let bucket_receiver = Arc::new(tokio::sync::Mutex::new(bucket_receiver));
+    let notif_receiver = Arc::new(tokio::sync::Mutex::new(notif_receiver));
+    let mut streams = Vec::with_capacity(2 * connections);
+    for client in clients {
+        let mut bucket_client = client.clone();
+        let mut notif_client = client.clone();
+        let bucket_requests = shared_requests(bucket_receiver.clone());
+        let notif_requests = shared_requests(notif_receiver.clone());
+        streams.push(tokio::spawn(async move {
+            bucket_client.chunk_write(Request::new(bucket_requests)).await.map(|_| ())
+        }));
+        streams.push(tokio::spawn(async move {
+            notif_client.notif_chunk_stream(Request::new(notif_requests)).await.map(|_| ())
+        }));
+    }
+    drop(bucket_receiver);
+    drop(notif_receiver);
+
+    let next_bucket_chunk = Arc::new(AtomicUsize::new(0));
+    let next_notif_chunk = Arc::new(AtomicUsize::new(0));
+    let bucket_bytes = Arc::new(AtomicUsize::new(0));
+    let notif_bytes = Arc::new(AtomicUsize::new(0));
+    // One producer per CPU.
+    let producers = std::thread::available_parallelism().map_or(1, |n| n.get());
+    // Notification chunks are cheap to build. A few producers start with them so that the link
+    // is busy from the first moment; every producer then builds bucket chunks.
+    let notif_first = (producers / 16).max(1);
+
+    let handles: Vec<std::thread::JoinHandle<()>> = (0..producers)
+        .map(|producer| {
+            let epoch_write = epoch_write.clone();
+            let bucket_sender = bucket_sender.clone();
+            let notif_sender = notif_sender.clone();
+            let next_bucket_chunk = next_bucket_chunk.clone();
+            let next_notif_chunk = next_notif_chunk.clone();
+            let bucket_bytes = bucket_bytes.clone();
+            let notif_bytes = notif_bytes.clone();
+            std::thread::spawn(move || {
+                yield_to_network_threads();
+                let send_notif_chunks = || loop {
+                    let chunk = next_notif_chunk.fetch_add(1, Ordering::Relaxed);
+                    if chunk >= epoch_write.notif_chunks() {
+                        return true;
+                    }
+                    let request = epoch_write.notif_chunk(chunk);
+                    if cfg!(feature = "bandwidth") {
+                        notif_bytes.fetch_add(request.raw_notification_data.len(), Ordering::Relaxed);
+                    }
+                    if notif_sender.blocking_send(request).is_err() {
+                        return false;
+                    }
+                };
+                if producer < notif_first && !send_notif_chunks() {
+                    return;
+                }
+                loop {
+                    let chunk = next_bucket_chunk.fetch_add(1, Ordering::Relaxed);
+                    if chunk >= epoch_write.bucket_chunks() {
+                        break;
+                    }
+                    let request = epoch_write.bucket_chunk(chunk);
+                    if cfg!(feature = "bandwidth") {
+                        bucket_bytes.fetch_add(prost::Message::encoded_len(&request), Ordering::Relaxed);
+                    }
+                    if bucket_sender.blocking_send(request).is_err() {
+                        return;
+                    }
+                }
+                send_notif_chunks();
+            })
+        })
+        .collect();
+    // The producers hold the only senders now: the streams end when the last producer is done.
+    drop(bucket_sender);
+    drop(notif_sender);
+
+    // A producer only panics when Server1 must abort the epoch: a bucket holds more than its
+    // capacity, or a message would be stored above the first level readers download. Raise
+    // that panic here, so that the batch write stops before Server2 is told to switch epochs.
+    let aborted = tokio::task::spawn_blocking(move || handles.into_iter().filter_map(|handle| handle.join().err()).next())
+        .await
+        .map_err(|e| MycoError::NetworkError(format!("Chunk producer error: {:?}", e)))?;
+    if let Some(panic) = aborted {
+        std::panic::resume_unwind(panic);
+    }
+
+    for (i, stream) in streams.into_iter().enumerate() {
+        stream
+            .await
+            .map_err(|e| MycoError::NetworkError(format!("Task join error for stream {}: {:?}", i, e)))?
+            .map_err(|e| MycoError::NetworkError(format!("Stream {} error: {}", i, e)))?;
+    }
+
+    if cfg!(feature = "bandwidth") {
+        crate::logging::BytesMetric::new(bucket_metric, bucket_bytes.load(Ordering::Relaxed)).log();
+        crate::logging::BytesMetric::new(notif_metric, notif_bytes.load(Ordering::Relaxed)).log();
+    }
+    Ok(())
+}
+
 /// Remote access with multiple connections for improved throughput
 pub struct MultiConnectionServer2Access {
     clients: Vec<Server2ServiceClient<Channel>>,
@@ -186,16 +400,20 @@ impl MultiConnectionServer2Access {
             .ca_certificate(ca_cert)
             .domain_name("localhost");
             
-        let mut clients = Vec::with_capacity(S1_S2_CONNECTION_COUNT);
+        let connection_count = S1_S2_CONNECTION_COUNT;
+        let mut clients = Vec::with_capacity(connection_count);
         
-        println!("Establishing {} connections to Server2...", S1_S2_CONNECTION_COUNT);
+        println!("Establishing {} connections to Server2...", connection_count);
         
-        for i in 0..S1_S2_CONNECTION_COUNT {
-            let channel = Channel::from_shared(server2_addr.to_string())
+        for i in 0..connection_count {
+            let endpoint = Channel::from_shared(server2_addr.to_string())
                 .map_err(|e| MycoError::NetworkError(e.to_string()))?
                 .tls_config(tls_config.clone())
                 .map_err(|e| MycoError::NetworkError(e.to_string()))?
                 .http2_keep_alive_interval(Duration::from_secs(60))
+                .initial_stream_window_size(HTTP2_STREAM_WINDOW)
+                .initial_connection_window_size(HTTP2_CONNECTION_WINDOW);
+            let channel = endpoint
                 .connect()
                 .await
                 .map_err(|e| MycoError::NetworkError(e.to_string()))?;
@@ -209,7 +427,7 @@ impl MultiConnectionServer2Access {
             );
         }
         
-        println!("All {} connections to Server2 established successfully", S1_S2_CONNECTION_COUNT);
+        println!("All {} connections to Server2 established successfully", connection_count);
         
         Ok(Self {
             clients,
@@ -410,6 +628,7 @@ impl Server2Access for MultiConnectionServer2Access {
         let mut client = self.get_next_client();
         let add_prf_req = AddPrfKeyRequest {
             prf_key: Some(prf_key.clone().into()),
+            expected_buckets: 0,
         };
         let _ = client
             .add_prf_key(Request::new(add_prf_req))
@@ -428,6 +647,50 @@ impl Server2Access for MultiConnectionServer2Access {
         println!("- PRF key sending: {:?}", prf_time);
         println!("- Total operation time: {:?}", total_time);
         
+        Ok(())
+    }
+
+    async fn write_epoch(
+        &self,
+        epoch_write: Arc<EpochWrite>,
+        prf_key: &Key<TreeMycoKey>,
+    ) -> Result<()> {
+        let overall_start = std::time::Instant::now();
+        let expected_buckets = epoch_write.buckets();
+        self.stream_epoch(epoch_write).await?;
+        self.finalize_epoch(prf_key, expected_buckets).await?;
+        println!("TIMING: Complete write operation (streamed) finished in {:?}", overall_start.elapsed());
+        Ok(())
+    }
+
+    async fn stream_epoch(&self, epoch_write: Arc<EpochWrite>) -> Result<()> {
+        let overall_start = std::time::Instant::now();
+        println!(
+            "Server2: streaming {} buckets in {} chunks and {} notification chunks over {} connections...",
+            epoch_write.buckets(),
+            epoch_write.bucket_chunks(),
+            epoch_write.notif_chunks(),
+            self.clients.len()
+        );
+        stream_epoch(&self.clients, epoch_write.clone(), ChunkWriteRequest::metric_name(), NotifChunkRequest::metric_name()).await?;
+        let overall_write_time = overall_start.elapsed();
+        println!("TIMING: Overall write operation finished in {:?}", overall_write_time);
+        println!("TIMING: Building the chunks took {:.3} thread-seconds, overlapped with sending", epoch_write.build_seconds());
+        Ok(())
+    }
+
+    async fn finalize_epoch(&self, prf_key: &Key<TreeMycoKey>, expected_buckets: usize) -> Result<()> {
+        let prf_start = std::time::Instant::now();
+        let mut client = self.get_next_client();
+        let add_prf_req = AddPrfKeyRequest {
+            prf_key: Some(prf_key.clone().into()),
+            expected_buckets: expected_buckets as u64,
+        };
+        let _ = client
+            .add_prf_key(Request::new(add_prf_req))
+            .await
+            .map_err(|e| MycoError::NetworkError(e.to_string()))?;
+        println!("TIMING: Sending PRF key took {:?}", prf_start.elapsed());
         Ok(())
     }
 
@@ -462,6 +725,7 @@ impl Server2Access for MultiConnectionServer2Access {
             
             futures.push(async move {
                 let mut conn_keys = Vec::new();
+                let mut packed_key_count = 0usize;
                 
                 for chunk_start in (0..conn_clients).step_by(max_clients_per_request) {
                     let chunk_size = std::cmp::min(max_clients_per_request, conn_clients - chunk_start);
@@ -472,9 +736,10 @@ impl Server2Access for MultiConnectionServer2Access {
                     
                     match client.get_prf_keys(request).await {
                         Ok(response) => {
-                            let keys = response.into_inner().keys;
-                            
-                            conn_keys.extend(keys.into_iter().map(|k| k.into()));
+                            let response = response.into_inner();
+                            // Several clients' keys arrive packed; they are counted, not unpacked.
+                            packed_key_count += response.packed_keys.len() / LAMBDA_BYTES;
+                            conn_keys.extend(response.keys.into_iter().map(|k| k.into()));
                         },
                         Err(e) => {
                             println!("Error getting PRF keys for clients {}-{}: {}",
@@ -485,17 +750,19 @@ impl Server2Access for MultiConnectionServer2Access {
                     }
                 }
                 
-                (conn_keys, /* conn_bytes */ 0) // Return 0 instead of bytes count
+                (conn_keys, packed_key_count)
             });
         }
         
         let results = futures::future::join_all(futures).await;
         
-        for (conn_keys, _conn_bytes) in results {
+        let mut packed_keys = 0;
+        for (conn_keys, conn_packed_keys) in results {
             all_keys.extend(conn_keys);
+            packed_keys += conn_packed_keys;
         }
         
-        let total_keys = all_keys.len();
+        let total_keys = all_keys.len() + packed_keys;
         
         println!("Total PRF keys collected: {}", total_keys);
         
@@ -631,21 +898,14 @@ impl Server2Access for MultiConnectionServer2Access {
             }
         }
         
-        let all_cts = all_cts.lock().await;
-        let all_ct_ntfs = all_ct_ntfs.lock().await;
-        let all_fs = all_fs.lock().await;
-        let all_f_ntfs = all_f_ntfs.lock().await;
-        let all_k_renc_ts = all_k_renc_ts.lock().await;
-        let all_c_ss = all_c_ss.lock().await;
-        
-        Ok((
-            all_cts.clone(),
-            all_ct_ntfs.clone(),
-            all_fs.clone(),
-            all_f_ntfs.clone(),
-            all_k_renc_ts.clone(),
-            all_c_ss.clone(),
-        ))
+        // Every task that filled these has finished: hand the vectors over without copying them.
+        let cts = std::mem::take(&mut *all_cts.lock().await);
+        let ct_ntfs = std::mem::take(&mut *all_ct_ntfs.lock().await);
+        let fs = std::mem::take(&mut *all_fs.lock().await);
+        let f_ntfs = std::mem::take(&mut *all_f_ntfs.lock().await);
+        let k_renc_ts = std::mem::take(&mut *all_k_renc_ts.lock().await);
+        let c_ss = std::mem::take(&mut *all_c_ss.lock().await);
+        Ok((cts, ct_ntfs, fs, f_ntfs, k_renc_ts, c_ss))
     }
 
     async fn read(&self, l: Vec<u8>) -> Result<Vec<Bucket>> {
@@ -685,7 +945,8 @@ impl Server2Access for MultiConnectionServer2Access {
         
         let connection_count = self.clients.len();
         
-        let estimated_buckets_per_index = D + 1; // Each index typically returns D buckets
+        // Each index returns the buckets of one path, less the levels readers skip
+        let estimated_buckets_per_index = D + 1 - crate::utils::read_skipped_levels(NUM_CLIENTS);
         
         let estimated_response_size_per_index = estimated_buckets_per_index 
             * BUCKET_SIZE_BYTES;
@@ -694,35 +955,30 @@ impl Server2Access for MultiConnectionServer2Access {
         
         let indices_per_request = std::cmp::max(1, indices_per_request);
         
-        let indices_per_connection = (read_indices.len() + connection_count - 1) / connection_count;
-        
-        let connection_batches: Vec<Vec<Vec<u8>>> = read_indices
-            .par_chunks(indices_per_connection)
+        // All requests wait in one queue that every connection takes from, so that a connection
+        // that is momentarily slow does not leave its share of the reads for last.
+        let requests: Vec<Vec<Vec<u8>>> = read_indices
+            .par_chunks(indices_per_request)
             .map(|chunk| chunk.to_vec())
             .collect();
+        let requests = Arc::new(std::sync::Mutex::new(requests.into_iter().enumerate()));
         
         let total_buckets_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         
         let mut handles = Vec::new();
         
-        for (conn_idx, conn_batch) in connection_batches.into_iter().enumerate() {
-            if conn_batch.is_empty() {
-                continue;
-            }
-            
-            let mut client = self.get_next_client();
-            
-            let request_chunks: Vec<Vec<Vec<u8>>> = conn_batch
-                .par_chunks(indices_per_request)
-                .map(|chunk| chunk.to_vec())
-                .collect();
-            
+        for worker in 0..connection_count {
+            let conn_idx = worker % connection_count;
+            let mut client = self.clients[conn_idx].clone();
+            let requests = requests.clone();
             let buckets_counter = total_buckets_count.clone();
             
             let handle = tokio::spawn(async move {
                 let mut conn_buckets = 0;
                 
-                for (req_idx, indices) in request_chunks.into_iter().enumerate() {
+                loop {
+                    let next = requests.lock().unwrap().next();
+                    let Some((req_idx, indices)) = next else { break };
                     let request = tonic::Request::new(ChunkProcessReadIndicesRequest {
                         read_indices: indices.clone(),
                     });
@@ -1141,6 +1397,7 @@ impl RemoteServer2Access {
         // Send the PRF key as a separate request.
         let add_prf_req = AddPrfKeyRequest {
             prf_key: Some(prf_key.clone().into()),
+            expected_buckets: 0,
         };
         let _ = client
             .add_prf_key(Request::new(add_prf_req))
@@ -1236,6 +1493,25 @@ impl Server2Access for RemoteServer2Access {
         prf_key: &crate::dtypes::Key<TreeMycoKey>,
     ) -> Result<()> {
         self.remote_write(pathset.clone(), notif_table.clone(), prf_key.clone()).await
+    }
+
+    async fn write_epoch(
+        &self,
+        epoch_write: Arc<EpochWrite>,
+        prf_key: &crate::dtypes::Key<TreeMycoKey>,
+    ) -> Result<()> {
+        stream_epoch(std::slice::from_ref(&self.client), epoch_write, "s1_write_bandwidth", "s1_notif_write_bandwidth").await?;
+
+        let mut client = self.client.clone();
+        let add_prf_req = AddPrfKeyRequest {
+            prf_key: Some(prf_key.clone().into()),
+            expected_buckets: 0,
+        };
+        let _ = client
+            .add_prf_key(Request::new(add_prf_req))
+            .await
+            .map_err(|e| MycoError::NetworkError(e.to_string()))?;
+        Ok(())
     }
 
     async fn get_prf_keys(&self) -> Result<Vec<crate::dtypes::Key<TreeMycoKey>>> {

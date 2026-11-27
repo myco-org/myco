@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client_name = "SimClient_0".to_string();
 
-    let mut simulation_client = Client::new(client_name.clone(), s1_access, s2_access, 1);
+    let mut simulation_client = Client::new(client_name.clone(), s1_access, s2_access, myco::constants::NUM_CLIENTS);
 
     let contact_list = (0..Q).map(|i| format!("SimClient_{}", i)).collect::<Vec<_>>();
     let key_list = (0..Q).map(|_| Key::random(&mut rng)).collect::<Vec<_>>();
